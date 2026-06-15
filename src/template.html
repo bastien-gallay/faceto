@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #fbfbfd; color: #222; }
+  header { position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center;
+           padding: 8px 16px; background: #fff; border-bottom: 1px solid #e6e6ee; }
+  header b { font-size: 14px; }
+  header .spacer { flex: 1; }
+  button { font: inherit; padding: 5px 11px; border: 1px solid #cfcfda; border-radius: 7px;
+           background: #fff; cursor: pointer; }
+  button:hover { background: #f2f2f7; }
+  #status { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: #eef; color: #557; }
+  #status.live { background: #e6f7ec; color: #1b7a3d; }
+  #note { font-size: 12px; color: #1b7a3d; }
+  #board { overflow: auto; padding: 12px; }
+  .edge, .sticky { transition: opacity .15s ease-out; }
+  .edge.hl { stroke: #2f3c45; opacity: 1 !important; stroke-width: 2.4; }
+  .sticky:hover .card { stroke: #1a1a1a; stroke-width: 2; }
+  .sticky.has-note .card { stroke: #1A6FAE; stroke-width: 2.5; }
+  /* On box hover: spotlight its connectors + neighbours, recede the rest. */
+  #board.dim .edge:not(.hl) { opacity: .07; }
+  #board.dim .sticky:not(.adj) { opacity: .32; }
+  .sticky.resolved { filter: grayscale(.85); opacity: .6; }  /* live resolve-comment feedback */
+  @media (prefers-reduced-motion: reduce) { .edge, .sticky { transition: none; } }
+  dialog { border: none; border-radius: 12px; padding: 0; width: min(440px, 92vw);
+           box-shadow: 0 18px 50px #0003; }
+  dialog::backdrop { background: #0006; }
+  .modal-h { padding: 14px 16px; border-bottom: 1px solid #eee; }
+  .modal-h .id { font-size: 11px; font-weight: 700; color: #888; }
+  .modal-h .label { font-size: 15px; font-weight: 600; margin-top: 2px; }
+  .modal-h .detail { font-size: 12.5px; color: #5a5a5a; margin-top: 3px; }
+  .modal-h .detail:empty { display: none; }
+  .modal-b { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .modal-b select, .modal-b textarea { font: inherit; padding: 8px; border: 1px solid #cfcfda; border-radius: 8px; }
+  .modal-b textarea { min-height: 90px; resize: vertical; }
+  .modal-f { padding: 12px 16px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid #eee; }
+  .rel { font-size: 12px; color: #666; display: flex; flex-wrap: wrap; gap: 5px; align-items: baseline; }
+  .rel:empty { display: none; }
+  .rel .chip { background: #eef1f4; border-radius: 6px; padding: 1px 7px; color: #334; }
+  .rel .chip b { color: #1A6FAE; font-weight: 700; }
+  .prior { font-size: 12px; color: #777; }
+  .prior div { padding: 3px 0; border-top: 1px dashed #eee; }
+</style>
+</head>
+<body>
+<header>
+  <b>__TITLE__</b>
+  <span id="status">checking…</span>
+  <span id="note"></span>
+  <span class="spacer"></span>
+  <span id="count" class="prior"></span>
+  <button id="plain" style="display:none" title="clear the diff overlay and show the current board">Plain</button>
+  <button id="export">Export comments</button>
+  <button id="refresh" title="re-pull comments and show what changed in the board since you last looked">Reload</button>
+</header>
+<div id="board">__SVG__</div>
+
+<dialog id="modal">
+  <form method="dialog">
+    <div class="modal-h">
+      <div class="id" id="m-id"></div>
+      <div class="label" id="m-label"></div>
+      <div class="detail" id="m-detail"></div>
+    </div>
+    <div class="modal-b">
+      <div class="rel" id="m-rel"></div>
+      <div class="prior" id="m-prior"></div>
+      <select id="m-kind">
+        <option value="comment">comment</option>
+        <option value="add">add — a new element, described below, from this one</option>
+        <option value="split">split — this is more than one element</option>
+        <option value="rename">rename / reword</option>
+        <option value="drop">drop — never happened</option>
+        <option value="move">move — wrong lane / position</option>
+        <option value="question">open question</option>
+        <option value="resolve">resolve a hotspot</option>
+      </select>
+      <textarea id="m-text" placeholder="short note — the next session reads this and adjusts the model"></textarea>
+    </div>
+    <div class="modal-f">
+      <button value="cancel">Cancel</button>
+      <button id="m-save" value="save" style="background:#1A6FAE;color:#fff;border-color:#1A6FAE">Save comment</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const LS_KEY = "facetoComments";
+let serverLive = false;
+let comments = [];        // {elemId, kind, text, ts}
+let shownVersion = null;  // model hash the board currently displays — the diff baseline
+let diffing = false;
+
+const $ = (s) => document.querySelector(s);
+const lsGet = () => { try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); } catch { return []; } };
+const lsSet = (a) => localStorage.setItem(LS_KEY, JSON.stringify(a));
+const note = (msg) => { $("#note").textContent = msg || ""; };
+const liveVersion = async () => {
+  try { const v = await fetch("/model-version", { cache: "no-store" }); if (v.ok) return (await v.json()).version; } catch {}
+  return null;
+};
+
+// Reload: re-pull comments, and when the model changed under us, redraw the board with the
+// changes-since-you-last-looked overlay (diffed against the version currently on screen).
+async function load() {
+  serverLive = false;
+  try {
+    const r = await fetch("/comments", { cache: "no-store" });
+    if (r.ok) { comments = await r.json(); serverLive = true; }
+  } catch {}
+  if (!serverLive) { comments = lsGet(); paint(); return; }
+  const live = await liveVersion();
+  if (live && shownVersion && live !== shownVersion) await showDiff(shownVersion, live);
+  else if (shownVersion === null) shownVersion = live;  // baseline the initial server-rendered board
+  paint();
+}
+
+// Replace the board with one diffed against `base`; advance the baseline to `live`.
+async function showDiff(base, live) {
+  try {
+    const r = await fetch("/board.svg?base=" + encodeURIComponent(base), { cache: "no-store" });
+    if (!r.ok) return;
+    $("#board").innerHTML = await r.text();
+    bindStickies();
+    if (r.headers.get("X-Diff-Base")) {
+      diffing = true;
+      $("#plain").style.display = "";
+      note("showing what changed since you last looked — Plain to clear");
+    } else {
+      note("model changed (baseline gone) — showing current");
+    }
+    shownVersion = live;
+  } catch {}
+}
+
+// Clear the diff overlay: redraw the plain current board and re-baseline to it.
+async function showPlain() {
+  try {
+    const r = await fetch("/board.svg", { cache: "no-store" });
+    if (r.ok) { $("#board").innerHTML = await r.text(); bindStickies(); }
+  } catch {}
+  diffing = false;
+  $("#plain").style.display = "none";
+  note("");
+  shownVersion = await liveVersion();
+}
+
+let adj = {};          // id -> Set(neighbour id), built from the rendered edges
+let edgesByNode = {};  // id -> [<path class="edge">], for hover highlighting
+function buildGraph() {
+  adj = {}; edgesByNode = {};
+  document.querySelectorAll(".edge").forEach((p) => {
+    const s = p.dataset.src, d = p.dataset.dst;
+    (edgesByNode[s] ||= []).push(p); (edgesByNode[d] ||= []).push(p);
+    (adj[s] ||= new Set()).add(d); (adj[d] ||= new Set()).add(s);
+  });
+}
+function hoverOn(id) {
+  $("#board").classList.add("dim");
+  (edgesByNode[id] || []).forEach((p) => p.classList.add("hl"));
+  document.getElementById(id)?.classList.add("adj");
+  (adj[id] || []).forEach((n) => document.getElementById(n)?.classList.add("adj"));
+}
+function hoverOff() {
+  $("#board").classList.remove("dim");
+  document.querySelectorAll(".edge.hl").forEach((p) => p.classList.remove("hl"));
+  document.querySelectorAll(".sticky.adj").forEach((g) => g.classList.remove("adj"));
+}
+function bindStickies() {
+  buildGraph();
+  document.querySelectorAll(".sticky").forEach((g) => {
+    g.onclick = () => openModal(g);
+    g.onmouseenter = () => hoverOn(g.id);
+    g.onmouseleave = hoverOff;
+  });
+}
+
+function paint() {
+  $("#status").textContent = serverLive ? "● live (server)" : "○ offline (localStorage)";
+  $("#status").className = serverLive ? "live" : "";
+  document.querySelectorAll(".sticky").forEach((g) => g.classList.remove("has-note"));
+  const byEl = {};
+  for (const c of comments) (byEl[c.elemId] ||= []).push(c);
+  for (const id in byEl) document.getElementById(id)?.classList.add("has-note");
+  // A resolve comment quiets its hotspot right away (model `resolved:true` does it durably).
+  for (const c of comments) if (c.kind === "resolve") document.getElementById(c.elemId)?.classList.add("resolved");
+  const open = comments.filter((c) => c.status !== "resolved").length;
+  $("#count").textContent = comments.length ? `${comments.length} comment(s), ${open} open` : "";
+  window._byEl = byEl;
+}
+
+const PLACEHOLDERS = {
+  add: "describe the new element: type (event/command/aggregate/policy/readmodel/external/hotspot) + label + where, relative to this one — e.g. event 'ItemDeleted' right after this",
+};
+const setPlaceholder = () =>
+  ($("#m-text").placeholder = PLACEHOLDERS[$("#m-kind").value] || "short note — the next session reads this and adjusts the model");
+
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+function openModal(g) {
+  const id = g.id;
+  $("#m-id").textContent = id;
+  $("#m-label").textContent = g.dataset.hero || "";
+  $("#m-detail").textContent = g.dataset.detail || "";
+  // Relationships, the keyboard/non-hover way to read a box's connectors.
+  const rel = [...(adj[id] || [])].map((n) => {
+    const h = document.getElementById(n)?.dataset.hero || n;
+    return `<span class="chip"><b>${esc(n)}</b> ${esc(h)}</span>`;
+  }).join("");
+  $("#m-rel").innerHTML = rel ? "connected to: " + rel : "";
+  $("#m-text").value = "";
+  $("#m-kind").value = "comment";
+  setPlaceholder();
+  const prior = (window._byEl?.[id] || []).map((c) => `<div>[${esc(c.kind)}] ${esc(c.text)}</div>`).join("");
+  $("#m-prior").innerHTML = prior ? "<b>prior:</b>" + prior : "";
+  $("#modal").returnValue = "cancel";
+  $("#modal").showModal();
+  window._activeId = id;
+}
+
+$("#m-kind").addEventListener("change", setPlaceholder);
+bindStickies();
+
+$("#modal").addEventListener("close", async () => {
+  if ($("#modal").returnValue !== "save") return;
+  const text = $("#m-text").value.trim();
+  if (!text) return;
+  const c = { elemId: window._activeId, kind: $("#m-kind").value, text, ts: new Date().toISOString(), status: "open" };
+  let posted = false;
+  try {
+    const r = await fetch("/comment", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(c) });
+    posted = r.ok;
+  } catch {}
+  if (posted) { await load(); }
+  else { const a = lsGet(); a.push(c); lsSet(a); comments = a; paint(); }
+});
+
+$("#refresh").addEventListener("click", load);
+$("#plain").addEventListener("click", showPlain);
+$("#export").addEventListener("click", async () => {
+  const data = JSON.stringify(comments, null, 2);
+  try { await navigator.clipboard.writeText(data); } catch {}
+  const blob = new Blob([data], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "faceto-comments.json";
+  a.click();
+});
+
+load();
+</script>
+</body>
+</html>
