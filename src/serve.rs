@@ -128,9 +128,21 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
         ("GET", "/") | ("GET", "/index.html") => match ctx.current() {
             Ok((_v, model)) => {
                 let html = render::render_html(&render::render_svg(&model), &model.title);
-                send(&mut out, 200, "text/html; charset=utf-8", html.as_bytes(), &[])
+                send(
+                    &mut out,
+                    200,
+                    "text/html; charset=utf-8",
+                    html.as_bytes(),
+                    &[],
+                )
             }
-            Err(e) => send(&mut out, 500, "text/plain; charset=utf-8", e.as_bytes(), &[]),
+            Err(e) => send(
+                &mut out,
+                500,
+                "text/plain; charset=utf-8",
+                e.as_bytes(),
+                &[],
+            ),
         },
         ("GET", "/board.svg") => match ctx.current() {
             Ok((version, model)) => {
@@ -155,14 +167,26 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                     send(&mut out, 200, "image/svg+xml", svg.as_bytes(), &[])
                 }
             }
-            Err(e) => send(&mut out, 500, "text/plain; charset=utf-8", e.as_bytes(), &[]),
+            Err(e) => send(
+                &mut out,
+                500,
+                "text/plain; charset=utf-8",
+                e.as_bytes(),
+                &[],
+            ),
         },
         ("GET", "/model-version") => match ctx.current() {
             Ok((version, _)) => {
                 let body = format!("{{\"version\":\"{}\"}}", version);
                 send(&mut out, 200, "application/json", body.as_bytes(), &[])
             }
-            Err(e) => send(&mut out, 500, "text/plain; charset=utf-8", e.as_bytes(), &[]),
+            Err(e) => send(
+                &mut out,
+                500,
+                "text/plain; charset=utf-8",
+                e.as_bytes(),
+                &[],
+            ),
         },
         ("GET", "/comments") => {
             let body = read_comments_json(&ctx.comments_path);
@@ -195,7 +219,13 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                 _ => send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]),
             }
         }
-        _ => send(&mut out, 404, "text/plain; charset=utf-8", b"not found", &[]),
+        _ => send(
+            &mut out,
+            404,
+            "text/plain; charset=utf-8",
+            b"not found",
+            &[],
+        ),
     }
 }
 
@@ -302,4 +332,36 @@ fn civil_from_days(z0: i64) -> (i64, i64, i64) {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fnv12_is_deterministic_and_twelve_hex_chars() {
+        // FNV-1a offset basis, for empty input.
+        assert_eq!(fnv12(b""), "cbf29ce48422");
+        let h = fnv12(b"faceto");
+        assert_eq!(h.len(), 12);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(fnv12(b"faceto"), h);
+        assert_ne!(fnv12(b"faceto"), fnv12(b"faceto "));
+    }
+
+    #[test]
+    fn civil_from_days_maps_known_epochs() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(10957), (2000, 1, 1));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
+
+    #[test]
+    fn now_iso_has_iso8601_utc_shape() {
+        let s = now_iso();
+        assert_eq!(s.len(), "1970-01-01T00:00:00+00:00".len());
+        assert!(s.ends_with("+00:00"));
+        assert_eq!(s.as_bytes()[4], b'-');
+        assert_eq!(s.as_bytes()[10], b'T');
+    }
 }

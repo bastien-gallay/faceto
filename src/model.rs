@@ -210,3 +210,91 @@ pub fn diff_models(a: &Model, b: &Model, meta: (String, String)) -> Model {
         diff_meta: Some(meta),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::json;
+
+    fn model_of(src: &str) -> Model {
+        from_json(&json::parse(src).unwrap())
+    }
+
+    fn tag<'a>(m: &'a Model, id: &str) -> Option<&'a str> {
+        m.elements
+            .iter()
+            .find(|e| e.id == id)
+            .and_then(|e| e.diff.as_deref())
+    }
+
+    // The whole comment/diff contract hinges on `id` being identity, never text
+    // or position. This pins each diff verdict to the right join.
+    #[test]
+    fn diff_tags_elements_by_stable_id() {
+        let a = model_of(
+            r#"{"elements":[
+                {"id":"E1","type":"event","label":"Created","col":1},
+                {"id":"E2","type":"event","label":"GoneSoon","col":2},
+                {"id":"E3","type":"event","label":"Same","col":3},
+                {"id":"E4","type":"event","label":"MoveMe","col":4}
+            ]}"#,
+        );
+        let b = model_of(
+            r#"{"elements":[
+                {"id":"E1","type":"event","label":"Created v2","col":1},
+                {"id":"E3","type":"event","label":"Same","col":3},
+                {"id":"E4","type":"event","label":"MoveMe","col":5},
+                {"id":"E5","type":"event","label":"BrandNew","col":6}
+            ]}"#,
+        );
+        let d = diff_models(&a, &b, ("old".into(), "new".into()));
+        assert_eq!(tag(&d, "E1"), Some("changed"));
+        assert_eq!(tag(&d, "E2"), Some("removed"));
+        assert_eq!(tag(&d, "E3"), Some("unchanged"));
+        assert_eq!(tag(&d, "E4"), Some("moved"));
+        assert_eq!(tag(&d, "E5"), Some("added"));
+    }
+
+    #[test]
+    fn changed_element_remembers_its_former_label() {
+        let a = model_of(r#"{"elements":[{"id":"E1","type":"event","label":"Old","col":1}]}"#);
+        let b = model_of(r#"{"elements":[{"id":"E1","type":"event","label":"New","col":1}]}"#);
+        let d = diff_models(&a, &b, ("old".into(), "new".into()));
+        let e1 = d.elements.iter().find(|e| e.id == "E1").unwrap();
+        assert_eq!(e1.was.as_ref().map(|w| w.label.as_str()), Some("Old"));
+    }
+
+    // Same label, different lane: a relocation, not an edit.
+    #[test]
+    fn changing_type_alone_reads_as_moved() {
+        let a = model_of(r#"{"elements":[{"id":"E1","type":"event","label":"X","col":1}]}"#);
+        let b = model_of(r#"{"elements":[{"id":"E1","type":"command","label":"X","col":1}]}"#);
+        let d = diff_models(&a, &b, ("old".into(), "new".into()));
+        assert_eq!(tag(&d, "E1"), Some("moved"));
+    }
+
+    #[test]
+    fn edges_diff_on_their_endpoints() {
+        let a = model_of(r#"{"elements":[],"edges":[["E1","E3"]]}"#);
+        let b = model_of(r#"{"elements":[],"edges":[["E1","E3"],["E1","E5"]]}"#);
+        let d = diff_models(&a, &b, ("old".into(), "new".into()));
+        let status = |s: &str, t: &str| {
+            d.edges
+                .iter()
+                .find(|e| e.src == s && e.dst == t)
+                .and_then(|e| e.status.clone())
+        };
+        assert_eq!(status("E1", "E3"), Some("unchanged".into()));
+        assert_eq!(status("E1", "E5"), Some("added".into()));
+    }
+
+    #[test]
+    fn optional_fields_fall_back_to_defaults() {
+        let m = model_of(r#"{"title":"t","elements":[{"id":"E1","type":"event","label":"L"}]}"#);
+        assert_eq!(m.title, "t");
+        let e = &m.elements[0];
+        assert_eq!(e.col, None);
+        assert!(!e.resolved);
+        assert!(e.detail.is_none());
+    }
+}

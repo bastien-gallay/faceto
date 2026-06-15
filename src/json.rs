@@ -149,8 +149,7 @@ fn string(c: &[char], i: &mut usize) -> Result<String, String> {
                             if c.get(*i) == Some(&'\\') && c.get(*i + 1) == Some(&'u') {
                                 *i += 2;
                                 let lo = hex4(c, i)?;
-                                let combined =
-                                    0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                                let combined = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
                                 if let Some(ch) = char::from_u32(combined) {
                                     out.push(ch);
                                 }
@@ -297,4 +296,67 @@ fn write_str(s: &str, out: &mut String) {
         }
     }
     out.push('"');
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SURROGATE_SRC: &str = r#""\uD83D\uDE00""#;
+
+    #[test]
+    fn parses_scalars_and_accessors() {
+        let j = parse(r#"{"n":42,"s":"hi","b":true,"a":[1,2],"z":null}"#).unwrap();
+        assert_eq!(j.get("n").and_then(Json::as_f64), Some(42.0));
+        assert_eq!(j.get("s").and_then(Json::as_str), Some("hi"));
+        assert_eq!(j.get("b").and_then(Json::as_bool), Some(true));
+        assert_eq!(j.get("a").and_then(Json::as_array).map(Vec::len), Some(2));
+        assert!(matches!(j.get("z"), Some(Json::Null)));
+        assert!(j.get("missing").is_none());
+    }
+
+    #[test]
+    fn objects_keep_author_order_on_roundtrip() {
+        // Order-preserving objects are a contract: serialized comments must read
+        // the way they were written.
+        let src = r#"{"z":1,"a":2,"m":"x"}"#;
+        assert_eq!(to_string(&parse(src).unwrap()), src);
+    }
+
+    #[test]
+    fn integers_serialize_without_a_decimal_point() {
+        assert_eq!(to_string(&Json::Num(3.0)), "3");
+        assert_eq!(to_string(&Json::Num(-7.0)), "-7");
+    }
+
+    #[test]
+    fn strings_escape_control_and_quote_chars() {
+        assert_eq!(
+            to_string(&Json::Str("a\"b\nc\\d".into())),
+            r#""a\"b\nc\\d""#
+        );
+    }
+
+    #[test]
+    fn parses_strings_with_escapes_and_multibyte_chars() {
+        assert_eq!(
+            parse(r#""line\nbreak""#).unwrap().as_str(),
+            Some("line\nbreak")
+        );
+        // Literal multi-byte UTF-8 passes through unchanged.
+        assert_eq!(parse(r#""café 😀""#).unwrap().as_str(), Some("café 😀"));
+    }
+
+    #[test]
+    fn parses_u_escape_surrogate_pair() {
+        // The \u..\u.. surrogate-combining branch: GRINNING FACE U+1F600.
+        let src = SURROGATE_SRC;
+        assert_eq!(parse(src).unwrap().as_str(), Some("😀"));
+    }
+
+    #[test]
+    fn rejects_trailing_garbage_and_truncation() {
+        assert!(parse("{").is_err());
+        assert!(parse(r#"{"a":}"#).is_err());
+    }
 }
