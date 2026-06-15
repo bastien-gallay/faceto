@@ -1,0 +1,5 @@
+/target
+# generated boards live next to the model file
+board.svg
+index.html
+comments.jsonl

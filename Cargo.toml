@@ -1,0 +1,21 @@
+[package]
+name = "faceto"
+version = "0.1.0"
+edition = "2021"
+description = "A typed file → a visual workshop board you think through with an LLM. Event storming first; more formats to come."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bastien-gallay/faceto"
+readme = "README.md"
+keywords = ["event-storming", "diagram", "workshop", "svg", "modeling"]
+categories = ["command-line-utilities", "visualization"]
+
+[[bin]]
+name = "faceto"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2
+
+# faceto is deliberately zero-dependency: pure std, offline, fast to install.
+# The model is parsed by a small hand-written JSON module (src/json.rs) — the whole
+# point of the tool is "a simple typed file", so we type it ourselves.
