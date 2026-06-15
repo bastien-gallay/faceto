@@ -28,15 +28,24 @@ If a task seems to need a crate, implement it in std or push back.
 cargo build                 # debug build
 cargo build --release       # release (opt-level 2, see Cargo.toml)
 cargo install --path .      # install `faceto` to ~/.cargo/bin
-cargo fmt && cargo clippy   # format + lint before committing
+
+# Local quality gate (mirrors CI; run before pushing):
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all-targets
 
 faceto render examples/sample.model.json    # → board.svg + index.html next to the model
 faceto serve  examples/sample.model.json     # → live board at http://127.0.0.1:8753
 faceto serve  path/to/model.json -p 9000     # custom port
 ```
 
-There are currently **no tests**. To exercise changes, render `examples/sample.model.json` and open
-the output, or run `serve` and interact with the board.
+Tests are in-file under `#[cfg(test)] mod tests` (json parsing/roundtrip, the id-keyed
+`diff_models`, SVG label layout, and the server's hash/date helpers). CI (`.github/workflows/
+ci.yml`) runs fmt, the clippy + test matrix on macOS/Windows/Linux, markdownlint, actionlint, and a
+`zero dependencies` job that fails if a crate enters `Cargo.lock`. The toolchain is pinned in
+`rust-toolchain.toml`; keep it, `Cargo.toml`'s `rust-version`, and the CI `toolchain:` inputs in
+lockstep. For board behaviour not covered by tests, render `examples/sample.model.json` or run
+`serve` and interact.
 
 ## Architecture
 

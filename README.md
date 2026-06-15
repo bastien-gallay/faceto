@@ -2,6 +2,8 @@
 
 # faceto
 
+[![CI](https://github.com/bastien-gallay/faceto/actions/workflows/ci.yml/badge.svg)](https://github.com/bastien-gallay/faceto/actions/workflows/ci.yml)
+
 **A simple typed file → a visual workshop board you think through with an LLM.**
 
 Point it at a JSON model; get an interactive HTML+SVG board you can read at a glance and
@@ -71,7 +73,20 @@ by content hash; if a baseline has aged out it falls back to the plain current b
 
 `faceto` is a working instrument you reach for mid-thought, so install has to be trivial and
 offline. The model is parsed by a small hand-written JSON module (`src/json.rs`) — fitting, since
-the whole premise is *a simple typed file*. The server is `std::net` only.
+the whole premise is *a simple typed file*. The server is `std::net` only. A CI job (`zero
+dependencies`) fails the build if a crate ever sneaks into the dependency tree.
+
+## Development
+
+```bash
+cargo test --all-targets                          # unit tests
+cargo fmt --all --check                           # formatting
+cargo clippy --all-targets -- -D warnings         # lints
+```
+
+These mirror CI, which also runs the test + clippy matrix on macOS, Windows, and Linux. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the (one) hard rule and [CLAUDE.md](CLAUDE.md) for the
+architecture and domain invariants.
 
 ## Status
 
