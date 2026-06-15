@@ -1,0 +1,11 @@
+{
+  // Prose wraps generously; don't fight tables or fenced code blocks.
+  "config": {
+    "MD013": { "line_length": 100, "tables": false, "code_blocks": false },
+    // The README leans on inline HTML (the markdownlint-disable comment, <br>).
+    "MD033": false,
+    // CHANGELOG.md repeats "Added" under each release; only sibling clashes matter.
+    "MD024": { "siblings_only": true }
+  },
+  "ignores": ["target/**", "node_modules/**"]
+}

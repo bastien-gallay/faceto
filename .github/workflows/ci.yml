@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded PR runs so a fresh push doesn't queue behind its own stale
+# jobs. Pushes to main are never cancelled: those runs gate the default branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: CI only reads the repo.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: "-D warnings"
+
+# Third-party actions are pinned to commit SHAs (version in the trailing
+# comment). Bump the SHA and the comment together; never use a mutable tag.
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      # `toolchain` is kept in lockstep with rust-toolchain.toml and
+      # Cargo.toml's rust-version. Bump all three together.
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # The std-only HTTP server and threading are platform-sensitive, so the
+    # matrix earns its keep even though most logic is pure.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+      - run: cargo test --all-targets
+
+  zero-deps:
+    name: zero dependencies
+    runs-on: ubuntu-latest
+    # faceto's headline promise is "no crates, ever". This is the firewall:
+    # the resolved dependency tree must contain exactly one package (faceto
+    # itself). Any added crate shows up as a second `name =` in Cargo.lock and
+    # fails the build here, loudly, before it can land.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Assert the dependency tree stays empty
+        shell: bash
+        run: |
+          count=$(grep -c '^name = ' Cargo.lock)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::faceto must stay zero-dependency, but Cargo.lock lists $count packages:"
+            grep '^name = ' Cargo.lock
+            exit 1
+          fi
+          echo "Cargo.lock contains exactly one package (faceto). Zero dependencies preserved."
+
+  markdown:
+    name: markdownlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: DavidAnson/markdownlint-cli2-action@ded1f9488f68a970bc66ea5619e13e9b52e601cd # v23
+        with:
+          globs: '**/*.md'
+          config: '.markdownlint-cli2.jsonc'
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install actionlint
+        # taiki-e/install-action does not ship actionlint and the crate has no
+        # prebuilt binaries, so we use the upstream downloader — pinned to
+        # actionlint's v1.7.7 commit and verified by sha256 before running, so
+        # this is never an unverified `curl | bash`.
+        id: install
+        env:
+          ACTIONLINT_SHA: 03d0035246f3e81f36aed592ffb4bebf33a03106 # v1.7.7
+          DOWNLOADER_SHA256: 221d1d16c03e4e4fcd867de34104e8d479bdce20ccdfa553b9a5c0dc29bf6af2
+        run: |
+          curl -fsSL -o download-actionlint.bash \
+            "https://raw.githubusercontent.com/rhysd/actionlint/${ACTIONLINT_SHA}/scripts/download-actionlint.bash"
+          echo "${DOWNLOADER_SHA256}  download-actionlint.bash" | sha256sum --check --status
+          bash download-actionlint.bash 1.7.7
+          echo "path=$(pwd)/actionlint" >> "$GITHUB_OUTPUT"
+      - name: Run actionlint
+        run: ${{ steps.install.outputs.path }} -color
