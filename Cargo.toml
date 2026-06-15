@@ -8,6 +8,8 @@ repository = "https://github.com/bastien-gallay/faceto"
 readme = "README.md"
 keywords = ["event-storming", "diagram", "workshop", "svg", "modeling"]
 categories = ["command-line-utilities", "visualization"]
+# Pinned in lockstep with rust-toolchain.toml and the CI matrix.
+rust-version = "1.95"
 
 [[bin]]
 name = "faceto"
@@ -15,6 +17,16 @@ path = "src/main.rs"
 
 [profile.release]
 opt-level = 2
+
+# A std-only tool never needs `unsafe`, and should never reach for `panic!`/`todo!`
+# in shipped paths. These are enforced in CI via `clippy -- -D warnings`.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
 
 # faceto is deliberately zero-dependency: pure std, offline, fast to install.
 # The model is parsed by a small hand-written JSON module (src/json.rs) — the whole

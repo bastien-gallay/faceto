@@ -1,0 +1,2 @@
+# Keep Clippy's suggestions within the toolchain we pin (rust-toolchain.toml).
+msrv = "1.95.0"

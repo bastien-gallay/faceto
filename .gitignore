@@ -1,5 +1,20 @@
 /target
+**/*.rs.bk
+
 # generated boards live next to the model file
 board.svg
 index.html
 comments.jsonl
+
+# editor / OS
+.DS_Store
+/.idea
+/.vscode
+*.swp
+*.swo
+
+# personal notes (not part of the project)
+/.personal/
+
+# Claude Code local (per-machine) settings — never shared
+.claude/settings.local.json

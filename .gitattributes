@@ -1,0 +1,4 @@
+# Normalise all text files to LF in the repository and on checkout, on every
+# platform. This keeps the tree byte-identical across macOS, Linux and Windows
+# (the three CI targets) and stops Git warning about CRLF conversion.
+* text=auto eol=lf
