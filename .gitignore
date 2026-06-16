@@ -18,3 +18,9 @@ comments.jsonl
 
 # Claude Code local (per-machine) settings — never shared
 .claude/settings.local.json
+
+# impeccable design-skill per-machine cache (design.json is shared, this is not)
+.impeccable/hook.cache.json
+
+# local serve log
+/serve.log

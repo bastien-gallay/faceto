@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-16T00:00:00Z",
+  "title": "Design System: faceto",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Live Pen Ink-Blue",
+        "canonical": "#1A6FAE",
+        "tonalRamp": ["#0a2a44", "#0f3c60", "#14507f", "#1A6FAE", "#3f88c2", "#6ba6d3", "#a3c7e4", "#d6e6f4"]
+      },
+      "lane-event": {
+        "role": "secondary",
+        "displayName": "Event Orange",
+        "canonical": "#FF9F1C",
+        "tonalRamp": ["#4d2e00", "#7a4a00", "#a86600", "#d68300", "#FF9F1C", "#ffb854", "#ffd194", "#ffe9cf"]
+      },
+      "lane-hotspot": {
+        "role": "secondary",
+        "displayName": "Hotspot Deep-Red",
+        "canonical": "#C0392B",
+        "tonalRamp": ["#3a110d", "#5c1b15", "#7e251d", "#9f2f24", "#C0392B", "#d4675b", "#e39b93", "#f1cdc9"]
+      },
+      "bench-bg": {
+        "role": "neutral",
+        "displayName": "Bench White",
+        "canonical": "#fbfbfd",
+        "tonalRamp": ["#222226", "#3d3d44", "#5a5a63", "#7a7a84", "#9b9ba4", "#c2c2c9", "#e0e0e6", "#fbfbfd"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#222222",
+        "tonalRamp": ["#0d0d0d", "#222222", "#3d3d3d", "#555555", "#777777", "#90a4ae", "#cfcfda", "#e6e6ee"]
+      }
+    },
+    "typographyMeta": {
+      "title": { "displayName": "Title", "purpose": "Board name. The single emphatic type element; 20px in-SVG, 14px in the header bar." },
+      "headline": { "displayName": "Headline", "purpose": "Focused element label in the comment modal (15px/600)." },
+      "body": { "displayName": "Body", "purpose": "Controls, modal prose, comment text, detail and subtitle lines (~13px)." },
+      "label": { "displayName": "Label", "purpose": "Lane and phase captions in lane-label grey; modal element label (12px/600)." },
+      "micro": { "displayName": "Micro", "purpose": "Sticky id watermark (9px/700, .6 opacity) and the 9.5px detail second line." }
+    },
+    "shadows": [
+      { "name": "modal-lift", "value": "0 18px 50px rgba(0,0,0,0.2)", "purpose": "The system's only shadow. Lifts the transient comment <dialog> above the flat bench; paired with a rgba(0,0,0,0.4) backdrop." }
+    ],
+    "motion": [
+      { "name": "state-fade", "value": "opacity 0.15s ease-out", "purpose": "Hover-to-focus dimming of edges and stickies, and note-state crossfades. Disabled under prefers-reduced-motion." }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Sticky — Event",
+      "kind": "card",
+      "refersTo": "sticky-card",
+      "description": "A board element. Fill is the lane colour (domain grammar); 176x74, 8px corners, id watermark + wrapped label + optional detail.",
+      "html": "<div class=\"ds-sticky\" role=\"button\" tabindex=\"0\"><span class=\"ds-sticky-id\">E1</span><span class=\"ds-sticky-label\">ItemAdded to cart</span><span class=\"ds-sticky-detail\">after checkout starts</span></div>",
+      "css": ".ds-sticky { position: relative; width: 176px; height: 74px; box-sizing: border-box; padding: 8px; border-radius: 8px; background: #FF9F1C; border: 1px solid rgba(0,0,0,0.2); color: #222; font-family: -apple-system, Segoe UI, Roboto, sans-serif; cursor: pointer; display: flex; flex-direction: column; justify-content: center; transition: filter 0.15s ease-out; } .ds-sticky:hover { filter: brightness(0.97); } .ds-sticky:hover, .ds-sticky:focus-visible { outline: none; box-shadow: inset 0 0 0 2px #1a1a1a; } .ds-sticky-id { position: absolute; top: 7px; left: 8px; font-size: 9px; font-weight: 700; opacity: 0.6; } .ds-sticky-label { font-size: 12px; font-weight: 600; line-height: 1.2; } .ds-sticky-detail { font-size: 9.5px; opacity: 0.85; margin-top: 2px; }"
+    },
+    {
+      "name": "Sticky — Hotspot",
+      "kind": "card",
+      "refersTo": "sticky-hotspot",
+      "description": "An open question / pain point. Deep-red, white text, and the only SQUARED sticky (2px) — a non-colour type tell.",
+      "html": "<div class=\"ds-sticky ds-sticky--hotspot\" role=\"button\" tabindex=\"0\"><span class=\"ds-sticky-id\">H1</span><span class=\"ds-sticky-label\">who owns refunds?</span></div>",
+      "css": ".ds-sticky--hotspot { background: #C0392B; color: #fff; border-radius: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Everyday control (Reload / Export / Plain). Quiet surface-white on a control border.",
+      "html": "<button class=\"ds-btn\">Reload</button>",
+      "css": ".ds-btn { font: inherit; padding: 5px 11px; border: 1px solid #cfcfda; border-radius: 7px; background: #fff; color: #222; cursor: pointer; transition: background 0.15s ease-out; } .ds-btn:hover { background: #f2f2f7; } .ds-btn:focus-visible { outline: 2px solid #1A6FAE; outline-offset: 1px; }"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single committing action — Save comment. The live pen.",
+      "html": "<button class=\"ds-btn-primary\">Save comment</button>",
+      "css": ".ds-btn-primary { font: inherit; padding: 5px 11px; border: 1px solid #1A6FAE; border-radius: 7px; background: #1A6FAE; color: #fff; cursor: pointer; transition: background 0.15s ease-out; } .ds-btn-primary:hover { background: #155d92; } .ds-btn-primary:focus-visible { outline: 2px solid #1A6FAE; outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Pill",
+      "kind": "chip",
+      "refersTo": "status-pill-live",
+      "description": "Connection state. Idle = lavender-grey; Live = quiet green. A signal, not a CTA.",
+      "html": "<span class=\"ds-status ds-status--live\">● live (server)</span>",
+      "css": ".ds-status { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: #eef; color: #557; font-family: -apple-system, Segoe UI, Roboto, sans-serif; } .ds-status--live { background: #e6f7ec; color: #1b7a3d; }"
+    },
+    {
+      "name": "Comment Field",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Note textarea in the comment modal. Shares its vocabulary with the kind <select>.",
+      "html": "<textarea class=\"ds-field\" placeholder=\"short note — the next session reads this and adjusts the model\"></textarea>",
+      "css": ".ds-field { font: inherit; padding: 8px; border: 1px solid #cfcfda; border-radius: 8px; background: #fff; color: #222; min-height: 90px; resize: vertical; width: 100%; box-sizing: border-box; } .ds-field:focus-visible { outline: none; border-color: #1A6FAE; box-shadow: 0 0 0 3px rgba(26,111,174,0.18); }"
+    },
+    {
+      "name": "Relationship Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Lists a focused element's connectors — the keyboard-readable way to see edges. The id reads in accent.",
+      "html": "<span class=\"ds-chip\"><b>E1</b> ItemAdded</span>",
+      "css": ".ds-chip { display: inline-flex; gap: 4px; align-items: baseline; background: #eef1f4; border-radius: 6px; padding: 1px 7px; color: #334; font-size: 12px; font-family: -apple-system, Segoe UI, Roboto, sans-serif; } .ds-chip b { color: #1A6FAE; font-weight: 700; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Optical Bench",
+    "overview": "faceto is an instrument, and an instrument lights the specimen and gets out of the way. The specimen is the model — the stickies, the lanes, the edges. Everything else (header, status pill, comment modal, diff overlay) is the bench: the stage, the lamp, and the focusing knob. The bench is machined grey and near-white so the only saturated colour on screen belongs to the domain itself. Hovering an element recedes the rest of the board — connectors to 7%, unrelated stickies to 32% — the way a microscope dims the field. You never decorate; you focus.",
+    "keyCharacteristics": [
+      "Instrument-grey, near-white bench (#fbfbfd / #ffffff); colour is reserved for the model.",
+      "A single accent — ink-blue #1A6FAE, the live pen — used only where you are acting.",
+      "One sans family at fixed (not fluid) sizes; density without noise.",
+      "Hover-to-focus as the primary interaction metaphor; motion conveys state, never spectacle.",
+      "Colour is never the only signal: lane position, label, and corner shape carry meaning too."
+    ],
+    "rules": [
+      { "name": "The Bench-Is-Grey Rule", "body": "No saturated colour in the chrome — ever. Every saturated pixel must belong to the domain grammar (a lane) or the live pen (#1A6FAE). If a control or panel wants colour, the answer is a grey or a tint of the ink.", "section": "colors" },
+      { "name": "The Three-Signal Rule", "body": "A lane is identified by colour AND vertical position AND label — never colour alone. The hotspot reinforces this with a squared corner. Any new state must carry a redundant non-colour cue so a colour-blind user loses nothing.", "section": "colors" },
+      { "name": "The Fixed-Scale Rule", "body": "No clamp(), no fluid headings. The board is an instrument read at 1:1; type sizes are pixel-exact and stable across viewports. Responsiveness is structural, never typographic.", "section": "typography" },
+      { "name": "The Flat-Bench Rule", "body": "Surfaces are flat at rest. The only lift in the system is the modal, and only because it is transient. A resting drop shadow on any other surface is wrong — convey grouping with hairline rules and tonal bands.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep every saturated pixel in the domain grammar or the single accent #1A6FAE; the bench stays grey.",
+      "Do give every lane/state a redundant non-colour signal — position, label, corner shape, or badge (the Three-Signal Rule).",
+      "Do use fixed px type sizes and a single system sans across HTML and SVG.",
+      "Do convey depth with hairline rules (#e0e0e6) and 2% tonal bands; reserve the lone shadow (0 18px 50px #0003) for the modal.",
+      "Do keep exactly one primary action (the ink-blue Save) per context; everything else is a quiet secondary control.",
+      "Do ship a prefers-reduced-motion alternative for every transition, and a visible :focus-visible ring on every control."
+    ],
+    "donts": [
+      "Don't build a generic SaaS dashboard: no card grids, hero-metric tiles, gradient accents, or tracked-uppercase section eyebrows.",
+      "Don't add heavy or branded chrome: no logos competing with the board, marketing gradients, decorative illustration, or glassmorphism.",
+      "Don't drift toward Miro/FigJam maximalism: no floating toolbars, no panels everywhere, no ambient motion or collaboration overload.",
+      "Don't make it toy or childish: no bubbly oversized radii, comic fonts, or candy oversaturation; the sticky palette is a fixed domain grammar, not license to decorate the chrome.",
+      "Don't put colour in the chrome or a resting shadow on any surface but the modal.",
+      "Don't use clamp()/fluid type or let colour be a lane's only signal."
+    ]
+  }
+}
