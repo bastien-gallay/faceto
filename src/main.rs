@@ -1,10 +1,13 @@
 //! faceto — a typed file → a visual workshop board you think through with an LLM.
 //!
-//!   faceto render [MODEL]            write board.svg + index.html next to MODEL
-//!   faceto serve  [MODEL] [-p PORT]  serve the live board + comment sidecar
+//!   faceto render  [SOURCE]           write board.svg + index.html next to SOURCE
+//!   faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar
+//!   faceto genesis [MODEL]            migrate a model.json into an event-log.jsonl
 //!
-//! MODEL defaults to ./model.json. Zero dependencies, offline.
+//! SOURCE is a `model.json` or an event log (`*.jsonl` / `*.log`); it defaults to
+//! ./model.json. Zero dependencies, offline.
 
+mod events;
 mod json;
 mod model;
 mod render;
@@ -28,6 +31,10 @@ fn main() {
                 exit(1);
             }
         }
+        "genesis" => {
+            let model = args.get(2).map(String::as_str).unwrap_or("model.json");
+            cmd_genesis(model);
+        }
         "help" | "-h" | "--help" => print_help(),
         "version" | "-V" | "--version" => println!("faceto {}", env!("CARGO_PKG_VERSION")),
         other => {
@@ -38,9 +45,25 @@ fn main() {
     }
 }
 
+/// Load a board from either a legacy `model.json` or an event log, chosen by extension.
+fn load_source(path: &Path) -> Result<model::Model, String> {
+    if events::is_log_path(path) {
+        events::load(path)
+    } else {
+        model::load(path)
+    }
+}
+
+fn dir_of(path: &Path) -> std::path::PathBuf {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
 fn cmd_render(model_path: &str) {
     let path = Path::new(model_path);
-    let model = match model::load(path) {
+    let model = match load_source(path) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("error: {e}");
@@ -49,11 +72,7 @@ fn cmd_render(model_path: &str) {
     };
     let svg = render::render_svg(&model);
     let html = render::render_html(&svg, &model.title);
-    let dir = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let dir = dir_of(path);
     if let Err(e) = std::fs::write(dir.join("board.svg"), format!("{svg}\n")) {
         eprintln!("error writing board.svg: {e}");
         exit(1);
@@ -67,6 +86,39 @@ fn cmd_render(model_path: &str) {
         model.elements.len(),
         dir.join("board.svg").display(),
         dir.join("index.html").display()
+    );
+}
+
+/// Migrate a legacy `model.json` into the genesis batch of an `event-log.jsonl` written
+/// alongside it — the bootstrap path into the event-sourced world. Refuses to clobber an
+/// existing log.
+fn cmd_genesis(model_path: &str) {
+    let path = Path::new(model_path);
+    let model = match model::load(path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            exit(1);
+        }
+    };
+    let out = dir_of(path).join("event-log.jsonl");
+    if out.exists() {
+        eprintln!(
+            "error: {} already exists — refusing to overwrite",
+            out.display()
+        );
+        exit(1);
+    }
+    let log = events::to_jsonl(&events::from_model(&model));
+    if let Err(e) = std::fs::write(&out, log) {
+        eprintln!("error writing {}: {e}", out.display());
+        exit(1);
+    }
+    println!(
+        "seeded {} events from {} → {}",
+        events::from_model(&model).len(),
+        path.display(),
+        out.display()
     );
 }
 
@@ -96,11 +148,12 @@ fn print_help() {
         "faceto {} — a typed file → a visual workshop board you think through with an LLM\n\
          \n\
          USAGE:\n\
-         \x20 faceto render [MODEL]             write board.svg + index.html next to MODEL\n\
-         \x20 faceto serve  [MODEL] [-p PORT]   serve the live board + comment sidecar (default :8753)\n\
+         \x20 faceto render  [SOURCE]            write board.svg + index.html next to SOURCE\n\
+         \x20 faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar (default :8753)\n\
+         \x20 faceto genesis [MODEL]             migrate a model.json into an event-log.jsonl\n\
          \x20 faceto help | version\n\
          \n\
-         MODEL defaults to ./model.json.",
+         SOURCE is a model.json or an event log (*.jsonl / *.log); it defaults to ./model.json.",
         env!("CARGO_PKG_VERSION")
     );
 }

@@ -2,7 +2,7 @@
 //! demand (so an edited model shows without a restart), an in-page diff against a cached
 //! baseline, and a click→comment channel appended to `comments.jsonl`.
 
-use crate::{json, model, model::Model, render};
+use crate::{events, json, model, model::Model, render};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -21,17 +21,26 @@ struct Cache {
 struct Ctx {
     model_path: PathBuf,
     comments_path: PathBuf,
+    /// When the source is an event log, the model is a projection replayed from it and
+    /// comments are appended to the log as events rather than to `comments.jsonl`.
+    log_mode: bool,
     cache: Mutex<Cache>,
 }
 
 impl Ctx {
-    /// The on-disk model and its short content hash, recorded in the recent-model ring.
+    /// The current board and its short content hash, recorded in the recent-model ring.
+    /// In log mode the board is replayed from the event log; otherwise it is the parsed
+    /// model file. Either way the version hashes the raw source bytes, so the cached
+    /// projection is rebuilt only when a new event (or edit) lands.
     fn current(&self) -> Result<(String, Model), String> {
         let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
         let version = fnv12(&raw);
         let text = String::from_utf8_lossy(&raw);
-        let j = json::parse(&text)?;
-        let model = model::from_json(&j);
+        let model = if self.log_mode {
+            events::replay(&events::parse_log(&text)?)
+        } else {
+            model::from_json(&json::parse(&text)?)
+        };
         let mut c = self.cache.lock().unwrap();
         if !c.map.contains_key(&version) {
             c.map.insert(version.clone(), model.clone());
@@ -56,9 +65,11 @@ pub fn serve(model_path: &Path, port: u16) -> Result<(), String> {
         .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
+    let log_mode = events::is_log_path(model_path);
     let ctx = Arc::new(Ctx {
         model_path: model_path.to_path_buf(),
         comments_path: dir.join("comments.jsonl"),
+        log_mode,
         cache: Mutex::new(Cache {
             map: HashMap::new(),
             order: VecDeque::new(),
@@ -72,11 +83,19 @@ pub fn serve(model_path: &Path, port: u16) -> Result<(), String> {
         "faceto board live → http://127.0.0.1:{}  (Ctrl-C to stop)",
         port
     );
-    println!(
-        "  {} elements · comments → {}",
-        model.elements.len(),
-        ctx.comments_path.display()
-    );
+    if log_mode {
+        println!(
+            "  {} elements · event-sourced · comments append to {}",
+            model.elements.len(),
+            ctx.model_path.display()
+        );
+    } else {
+        println!(
+            "  {} elements · comments → {}",
+            model.elements.len(),
+            ctx.comments_path.display()
+        );
+    }
 
     for stream in listener.incoming() {
         let stream = match stream {
@@ -189,7 +208,11 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
             ),
         },
         ("GET", "/comments") => {
-            let body = read_comments_json(&ctx.comments_path);
+            let body = if ctx.log_mode {
+                comments_from_log(&ctx.model_path)
+            } else {
+                read_comments_json(&ctx.comments_path)
+            };
             send(&mut out, 200, "application/json", body.as_bytes(), &[])
         }
         ("GET", "/health") => send(&mut out, 200, "application/json", b"{\"ok\":true}", &[]),
@@ -199,6 +222,27 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                 return send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]);
             }
             let text = String::from_utf8_lossy(&buf);
+            if ctx.log_mode {
+                return match json::parse(&text) {
+                    Ok(v @ json::Json::Obj(_)) => match comment_to_event(&v) {
+                        Some(ev) => {
+                            if append_line(&ctx.model_path, &events::line(&ev)).is_err() {
+                                return send(
+                                    &mut out,
+                                    500,
+                                    "application/json",
+                                    b"{\"ok\":false}",
+                                    &[],
+                                );
+                            }
+                            println!("  \u{1F4AC} event: {}", events::line(&ev));
+                            send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
+                        }
+                        None => send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]),
+                    },
+                    _ => send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]),
+                };
+            }
             match json::parse(&text) {
                 Ok(json::Json::Obj(mut o)) => {
                     if !o.iter().any(|(k, _)| k == "status") {
@@ -268,6 +312,61 @@ fn query_get(query: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Map a posted comment to the event it persists, in log mode. `move`/`resolve`/`rename`
+/// carry structural intent (and fold straight into the projection); anything else is a
+/// plain annotation. Returns `None` if the comment names no element.
+fn comment_to_event(v: &json::Json) -> Option<events::Event> {
+    let id = v.get("elemId").and_then(|x| x.as_str())?.to_string();
+    let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("comment");
+    let text = v
+        .get("text")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some(match kind {
+        "move" => events::Event::ElementMoved {
+            id,
+            col: v.get("col").and_then(|x| x.as_f64()).map(|n| n as i64),
+            kind: None,
+        },
+        "resolve" => events::Event::HotspotResolved {
+            id,
+            resolution: text,
+        },
+        "rename" => events::Event::ElementRenamed { id, label: text },
+        _ => events::Event::ElementAnnotated { id, text },
+    })
+}
+
+/// Project the log's *feedback* events (annotations, resolutions, renames) back into the
+/// comment shape the client sidebar expects. Structural events (adds, moves, edges) are
+/// omitted — they already live in the rendered board.
+fn comments_from_log(path: &Path) -> String {
+    let log = match events::read_log(path) {
+        Ok(e) => e,
+        Err(_) => return "[]".to_string(),
+    };
+    let mut items: Vec<String> = Vec::new();
+    for ev in &log {
+        let (id, kind, text) = match ev {
+            events::Event::ElementAnnotated { id, text } => (id, "comment", text.clone()),
+            events::Event::HotspotResolved { id, resolution } => {
+                (id, "resolve", resolution.clone())
+            }
+            events::Event::ElementRenamed { id, label } => (id, "rename", label.clone()),
+            _ => continue,
+        };
+        let obj = json::Json::Obj(vec![
+            ("elemId".into(), json::Json::Str(id.clone())),
+            ("kind".into(), json::Json::Str(kind.into())),
+            ("text".into(), json::Json::Str(text)),
+            ("status".into(), json::Json::Str("open".into())),
+        ]);
+        items.push(json::to_string(&obj));
+    }
+    format!("[{}]", items.join(","))
 }
 
 fn read_comments_json(path: &Path) -> String {
