@@ -168,7 +168,11 @@ function applyLayout() {
   });
 }
 
-// Rebuild positions from the authored layout + every move comment, in order. Idempotent.
+// Rebuild positions from the authored layout + every move comment, in order. Idempotent: each
+// move carries an *absolute* target col, so re-applying the same comment converges (no drift).
+// In log mode this is a no-op — the server folds moves into the board via `ElementMoved` and
+// `/comments` returns feedback only — so the loop iterates nothing; it still drives the legacy
+// `comments.jsonl` mode, where the board SVG is the authored layout and moves ride on top.
 function replayMoves() {
   for (const id in baseCol) colOf[id] = baseCol[id];
   for (const c of comments) {
@@ -198,15 +202,21 @@ function doMove(id, dir) {
   postComment(c);
 }
 
-// Persist a comment (move or feedback): POST when live, else stash in localStorage.
+// Persist a comment (move or feedback): POST when live, else stash in localStorage. Offline
+// stash is best-effort and one-way — it is NOT replayed to the server on reconnect (the next
+// live `load()` replaces `comments` with the server's), so structural ops made offline (`add`,
+// `move`) never reach the log. Export keeps them; the user is told so below.
 async function postComment(c) {
   let posted = false;
   try {
     const r = await fetch("/comment", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(c) });
     posted = r.ok;
   } catch {}
-  if (posted) { await load(); }
-  else { const a = lsGet(); a.push(c); lsSet(a); comments = a; replayMoves(); paint(); }
+  if (posted) { await load(); return; }
+  const a = lsGet(); a.push(c); lsSet(a); comments = a; replayMoves(); paint();
+  note(c.kind === "add"
+    ? "offline — add saved locally (not on the board yet; Export to keep it)"
+    : "offline — saved locally (Export to keep)");
 }
 
 // Reload: re-pull comments, and when the model changed under us, redraw the board with the
@@ -290,11 +300,12 @@ function paint() {
   $("#status").textContent = serverLive ? "● live (server)" : "○ offline (localStorage)";
   $("#status").className = serverLive ? "live" : "";
   document.querySelectorAll(".sticky").forEach((g) => g.classList.remove("has-note"));
-  // Moves ride in comments.jsonl for persistence but aren't feedback — keep them out of the
-  // note badges, counts and prior-comment list.
-  const feedback = comments.filter((c) => c.kind !== "move");
+  // `move` and `add` are structural, not feedback on an existing box — keep them out of the note
+  // badges, counts and prior-comment list. (`add` carries no `elemId`; offline it only lives in
+  // localStorage until export — there is no element to ring yet, see postComment.)
+  const feedback = comments.filter((c) => c.kind !== "move" && c.kind !== "add");
   const byEl = {};
-  for (const c of feedback) (byEl[c.elemId] ||= []).push(c);
+  for (const c of feedback) if (c.elemId) (byEl[c.elemId] ||= []).push(c);
   for (const id in byEl) document.getElementById(id)?.classList.add("has-note");
   // A resolve comment quiets its hotspot right away (model `resolved:true` does it durably).
   for (const c of feedback) if (c.kind === "resolve") document.getElementById(c.elemId)?.classList.add("resolved");

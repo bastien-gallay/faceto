@@ -111,13 +111,29 @@ logic is `events::compact`; `main.rs` only does the IO. Covered by
 rename, move, comment, resolution, and add folded to 27 with the projection (12 elements)
 byte-for-byte intact and the rename/move gone from the log.
 
+### Client `replayMoves` / offline fallback audit → **done.**
+
+Audited `src/template.html` against the event semantics, three findings:
+
+- **`replayMoves` is redundant in log mode but safe.** `/comments` (`comments_from_log`) returns
+  feedback only — no `ElementMoved` — so the move loop iterates nothing and the server's
+  re-rendered board is authoritative; it still drives legacy `comments.jsonl` mode. Moves carry an
+  *absolute* target col (`colOf = c.col`), so re-applying a duplicate converges — idempotent, no
+  drift. Kept, with a clarifying comment.
+- **Offline `add` was mishandled (fixed).** A stashed `add` has no `elemId`, but `paint()` only
+  excluded `move` from feedback, so it fell into `byEl[undefined]` and inflated the comment count.
+  Now `move` *and* `add` are excluded and `byEl` is guarded against a missing `elemId`. Verified in
+  a browser: an offline `add` no longer counts and creates no `undefined` bucket; a move still
+  replays (col 2→4 → `translate(420,0)`); a real comment still rings its sticky.
+- **Offline structural ops are one-way (documented, not "fixed").** The localStorage stash is
+  best-effort and is *not* replayed to the server on reconnect (the next live `load()` replaces
+  `comments`), so an `add`/`move` made offline never reaches the log. Building a resync queue is out
+  of scope; instead the offline branch now tells the user plainly ("offline — add saved locally
+  (not on the board yet; Export to keep it)") and the limitation is noted at `postComment`.
+
 ## Pick up here tomorrow (open work, roughly in order)
 
-1. **Client (`src/template.html`)** — the "add element" affordance is wired (above). Remaining:
-   in log mode, server-side `ElementMoved` already moves the sticky, so the client's
-   `replayMoves` is redundant (harmless); audit the offline/localStorage fallback path against
-   the new event semantics.
-2. **Reconcile the docs** — `source-of-truth.md` is now superseded (banner added). Decide
+1. **Reconcile the docs** — `source-of-truth.md` is now superseded (banner added). Decide
    whether to rewrite it or fold it into this note once the inversion lands. Update the
    architecture section of `CLAUDE.md` (now six source files; `events.rs` is the new spine)
    **when the branch is ready to merge**, not before.
