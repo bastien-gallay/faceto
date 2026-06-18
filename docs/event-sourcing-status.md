@@ -55,6 +55,7 @@ HotspotResolved {id, resolution}   # sets resolved + detail on replay
 ElementRemoved {id}                # also drops touching edges
 EdgeAdded {src, dst}
 EdgeRemoved {src, dst}
+LogCompacted {folded}              # provenance marker from `compact`; no-op on replay
 ```
 
 Read policy: blank lines skipped; malformed JSON is a hard error; **unknown event kinds are
@@ -94,15 +95,29 @@ shows the new sticky as *added*. Offline, the add stashes to `localStorage` like
 feedback (no mint until back online). `/comments` omits `ElementAdded`, so a structural add
 never shows up as a sidebar comment. Verified live: an `add` of a `readmodel` minted `R2`.
 
+### `faceto compact` — fold the log to a snapshot → **done.**
+
+`faceto compact [LOG]` (default `event-log.jsonl`) replays the log, then rewrites it as a
+`LogCompacted {folded}` provenance marker followed by `from_model(projection)` — the genesis
+batch of the current board. This bounds replay length (H1's snapshot escape hatch). The fold is
+**projection-preserving and lossy only in history**: renames/moves collapse into the element's
+final `ElementAdded`, the latest annotation and any resolution survive as `detail`, but the
+per-comment *timeline* is dropped. `LogCompacted` replays as a no-op; compacting again is a fixed
+point (only the marker's count changes). The prior log is copied to `<log>.bak` before the truth
+file is overwritten in place (and it's git-tracked, so deeper history is recoverable too). Domain
+logic is `events::compact`; `main.rs` only does the IO. Covered by
+`compact_preserves_the_projection_and_folds_history` and
+`compacting_twice_leaves_the_snapshot_stable`. Verified live: a 29-event session log with a
+rename, move, comment, resolution, and add folded to 27 with the projection (12 elements)
+byte-for-byte intact and the rename/move gone from the log.
+
 ## Pick up here tomorrow (open work, roughly in order)
 
-1. **`faceto compact`** — snapshot the log (fold to a minimal genesis batch) to bound replay;
-   this is the concrete form of H1's "snapshot" escape hatch. (On the board: `LogCompacted`.)
-2. **Client (`src/template.html`)** — the "add element" affordance is wired (above). Remaining:
+1. **Client (`src/template.html`)** — the "add element" affordance is wired (above). Remaining:
    in log mode, server-side `ElementMoved` already moves the sticky, so the client's
    `replayMoves` is redundant (harmless); audit the offline/localStorage fallback path against
    the new event semantics.
-3. **Reconcile the docs** — `source-of-truth.md` is now superseded (banner added). Decide
+2. **Reconcile the docs** — `source-of-truth.md` is now superseded (banner added). Decide
    whether to rewrite it or fold it into this note once the inversion lands. Update the
    architecture section of `CLAUDE.md` (now six source files; `events.rs` is the new spine)
    **when the branch is ready to merge**, not before.

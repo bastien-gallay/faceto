@@ -59,6 +59,11 @@ pub enum Event {
         src: String,
         dst: String,
     },
+    /// Provenance marker written by `faceto compact`: the log up to here was folded into the
+    /// genesis batch that follows. A no-op on replay; `folded` is the event count it replaced.
+    LogCompacted {
+        folded: i64,
+    },
 }
 
 /// Is this path an event log (vs. a legacy `model.json`)? Chosen by extension so the same
@@ -143,6 +148,9 @@ pub fn parse_event(j: &Json) -> Option<Event> {
             src: s("src")?,
             dst: s("dst")?,
         },
+        "LogCompacted" => Event::LogCompacted {
+            folded: i("folded").unwrap_or(0),
+        },
         _ => return None,
     })
 }
@@ -226,6 +234,9 @@ pub fn replay(events: &[Event]) -> Model {
             Event::EdgeRemoved { src, dst } => {
                 m.edges.retain(|e| !(&e.src == src && &e.dst == dst))
             }
+            // A compaction marker carries no board state; it only records that earlier history
+            // was folded away. Replaying it is a no-op.
+            Event::LogCompacted { .. } => {}
         }
     }
     m
@@ -275,6 +286,23 @@ pub fn from_model(m: &Model) -> Vec<Event> {
         });
     }
     ev
+}
+
+/// Fold a log down to the shortest sequence that replays to the same board: a `LogCompacted`
+/// provenance marker, then the genesis batch of the current projection. This bounds replay
+/// length (H1's snapshot escape hatch). It is lossy *by design* — only the projection survives,
+/// so the comment **history** is dropped (each element keeps just its latest note, folded into
+/// `detail`); the full prior log stays recoverable from version control or a `.bak`.
+///
+/// `replay(compact(log))` always projects the same `Model` as `replay(log)`, and the genesis
+/// tail is a fixed point (compacting again changes only the marker's count).
+pub fn compact(events: &[Event]) -> Vec<Event> {
+    let model = replay(events);
+    let mut out = vec![Event::LogCompacted {
+        folded: events.len() as i64,
+    }];
+    out.extend(from_model(&model));
+    out
 }
 
 /// Serialize one event to its canonical JSON object.
@@ -353,6 +381,9 @@ pub fn to_json(ev: &Event) -> Json {
             ("src", s(src)),
             ("dst", s(dst)),
         ]),
+        Event::LogCompacted { folded } => {
+            obj(vec![("event", s("LogCompacted")), ("folded", n(*folded))])
+        }
     }
 }
 
@@ -447,6 +478,49 @@ mod tests {
         assert_eq!(h1.detail.as_deref(), Some("done"));
         let e2 = rebuilt.elements.iter().find(|e| e.id == "E2").unwrap();
         assert_eq!(e2.detail.as_deref(), Some("a note"));
+    }
+
+    #[test]
+    fn compact_preserves_the_projection_and_folds_history() {
+        let log = [
+            ev(r#"{"event":"BoardTitled","title":"T"}"#),
+            ev(r#"{"event":"ElementAdded","id":"E1","type":"event","label":"Born","col":1}"#),
+            ev(r#"{"event":"ElementRenamed","id":"E1","label":"Reborn"}"#),
+            ev(r#"{"event":"ElementAnnotated","id":"E1","text":"a note"}"#),
+            ev(r#"{"event":"ElementAdded","id":"H1","type":"hotspot","label":"q"}"#),
+            ev(r#"{"event":"HotspotResolved","id":"H1","resolution":"settled"}"#),
+        ];
+        let folded = compact(&log);
+
+        // Leads with a provenance marker recording the prior length, and reparses cleanly.
+        assert!(matches!(folded[0], Event::LogCompacted { folded: 6 }));
+        let reparsed = parse_log(&to_jsonl(&folded)).unwrap();
+        assert!(matches!(reparsed[0], Event::LogCompacted { folded: 6 }));
+
+        // Shorter than the original: the rename + annotate + resolve history collapsed.
+        assert!(folded.len() < log.len());
+
+        // Same projection: title, the *latest* label, the note folded into detail, the resolution.
+        let (before, after) = (replay(&log), replay(&folded));
+        assert_eq!(after.title, before.title);
+        let e1 = after.elements.iter().find(|e| e.id == "E1").unwrap();
+        assert_eq!(e1.label, "Reborn");
+        assert_eq!(e1.detail.as_deref(), Some("a note"));
+        let h1 = after.elements.iter().find(|e| e.id == "H1").unwrap();
+        assert!(h1.resolved);
+        assert_eq!(h1.detail.as_deref(), Some("settled"));
+    }
+
+    #[test]
+    fn compacting_twice_leaves_the_snapshot_stable() {
+        let log = [
+            ev(r#"{"event":"ElementAdded","id":"E1","type":"event","label":"A","col":0}"#),
+            ev(r#"{"event":"ElementMoved","id":"E1","col":2}"#),
+        ];
+        let once = compact(&log);
+        let twice = compact(&once);
+        // The genesis tail (everything past the marker) is a fixed point; only the count moves.
+        assert_eq!(to_jsonl(&once[1..]), to_jsonl(&twice[1..]));
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //!   faceto render  [SOURCE]           write board.svg + index.html next to SOURCE
 //!   faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar
 //!   faceto genesis [MODEL]            migrate a model.json into an event-log.jsonl
+//!   faceto compact [LOG]              fold a log to a snapshot, bounding replay length
 //!
 //! SOURCE is a `model.json` or an event log (`*.jsonl` / `*.log`); it defaults to
 //! ./model.json. Zero dependencies, offline.
@@ -34,6 +35,10 @@ fn main() {
         "genesis" => {
             let model = args.get(2).map(String::as_str).unwrap_or("model.json");
             cmd_genesis(model);
+        }
+        "compact" => {
+            let log = args.get(2).map(String::as_str).unwrap_or("event-log.jsonl");
+            cmd_compact(log);
         }
         "help" | "-h" | "--help" => print_help(),
         "version" | "-V" | "--version" => println!("faceto {}", env!("CARGO_PKG_VERSION")),
@@ -122,6 +127,54 @@ fn cmd_genesis(model_path: &str) {
     );
 }
 
+/// Fold an event log to a minimal snapshot — a `LogCompacted` marker plus the genesis batch of
+/// the current projection — bounding how long replay has to run (H1's snapshot escape hatch).
+/// The board is preserved exactly; compaction is lossy only in dropping comment *history*, so
+/// the prior log is copied to `<log>.bak` before the source of truth is overwritten in place.
+fn cmd_compact(log_path: &str) {
+    let path = Path::new(log_path);
+    if !events::is_log_path(path) {
+        eprintln!(
+            "error: compact operates on an event log (*.jsonl / *.log), not {}",
+            path.display()
+        );
+        exit(1);
+    }
+    let original = match events::read_log(path) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error: {e}");
+            exit(1);
+        }
+    };
+    let folded = events::compact(&original);
+
+    // Preserve the prior log alongside before overwriting the truth file.
+    let mut bak = path.as_os_str().to_owned();
+    bak.push(".bak");
+    let bak = std::path::PathBuf::from(bak);
+    if let Err(e) = std::fs::copy(path, &bak) {
+        eprintln!(
+            "error backing up {} → {}: {e}",
+            path.display(),
+            bak.display()
+        );
+        exit(1);
+    }
+    if let Err(e) = std::fs::write(path, events::to_jsonl(&folded)) {
+        eprintln!("error writing {}: {e}", path.display());
+        exit(1);
+    }
+    println!(
+        "compacted {} events → {} (1 marker + {} genesis) in {} · prior log saved to {}",
+        original.len(),
+        folded.len(),
+        folded.len() - 1,
+        path.display(),
+        bak.display()
+    );
+}
+
 fn parse_serve(args: &[String]) -> (String, u16) {
     let mut model = "model.json".to_string();
     let mut port: u16 = 8753;
@@ -151,6 +204,7 @@ fn print_help() {
          \x20 faceto render  [SOURCE]            write board.svg + index.html next to SOURCE\n\
          \x20 faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar (default :8753)\n\
          \x20 faceto genesis [MODEL]             migrate a model.json into an event-log.jsonl\n\
+         \x20 faceto compact [LOG]               fold a log to a snapshot, bounding replay (default event-log.jsonl)\n\
          \x20 faceto help | version\n\
          \n\
          SOURCE is a model.json or an event log (*.jsonl / *.log); it defaults to ./model.json.",
