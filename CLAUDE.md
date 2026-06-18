@@ -10,6 +10,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 the first format). It renders a static board or serves a live one with a click→comment sidecar and
 an in-page diff. The whole point is "a simple typed file you think through with an LLM."
 
+For how to write code here — Tidy First, CUPID & YAGNI, TDD+Reflect, Clean Code, commit style — see
+[`CODING_STANDARDS.md`](CODING_STANDARDS.md). [`AGENTS.md`](AGENTS.md) is the short cross-tool entry
+point that maps the rest of the docs.
+
 ## Hard constraint: zero dependencies
 
 `faceto` is **pure Rust standard library — no crates, ever.** This is a deliberate product

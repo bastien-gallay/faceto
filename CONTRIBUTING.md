@@ -25,7 +25,22 @@ The toolchain is pinned in `rust-toolchain.toml` (currently 1.95.0); `rustup`
 picks it up automatically. Keep that file, `Cargo.toml`'s `rust-version`, and the
 CI `toolchain:` inputs in lockstep when bumping.
 
-## Design principles
+### Pre-commit setup (optional but recommended)
+
+`.pre-commit-config.yaml` runs the same gates locally — fmt, clippy and
+markdownlint + `typos` on commit, the test suite on push. Install it once:
+
+```bash
+uvx pre-commit install --hook-type pre-commit --hook-type pre-push
+```
+
+(or `pipx run pre-commit …` / `pip install pre-commit` if you don't use `uv`).
+
+## Working agreement
+
+The full working agreement — **Tidy First**, CUPID & YAGNI, TDD+Reflect, Clean
+Code, commit style, and the toolchain policy — lives in
+[`CODING_STANDARDS.md`](CODING_STANDARDS.md). The essentials:
 
 - **CUPID** — Composable, Unix-philosophy, Predictable, Idiomatic, Domain-based.
 - Each source file is one stage of the `JSON → Model → SVG → HTML` pipeline; keep
@@ -37,12 +52,14 @@ CI `toolchain:` inputs in lockstep when bumping.
 
 Unit tests live in-file under `#[cfg(test)] mod tests`. New behaviour needs a
 test; bug fixes need a regression test. The pure stages (`json`, `model`,
-`render`) are the easiest and most valuable to cover.
+`render`, `events`) are the easiest and most valuable to cover.
 
 ## Commits
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`,
-`fix:`, `chore:`, `docs:`, `test:`, `ci:`, `build:`). Keep behavioural and
-structural (refactor/format) changes in separate commits.
+`fix:`, `chore:`, `docs:`, `test:`, `ci:`, `build:`). Following **Tidy First**,
+keep behavioural and structural (refactor/format) changes in separate commits —
+see [`CODING_STANDARDS.md`](CODING_STANDARDS.md) §1 for the rationale and the
+acceptable commit shapes.
 
 Record user-visible changes under `## [Unreleased]` in `CHANGELOG.md`.

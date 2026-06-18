@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the dependency tree.
 - Unit tests for the JSON parser/serializer, the id-keyed model diff, the SVG
   label layout, and the server's hashing/date helpers.
+- `CODING_STANDARDS.md` (Tidy First, CUPID & YAGNI, TDD+Reflect, Clean Code) and
+  `AGENTS.md`, a cross-tool entry point for coding agents.
+- A local `pre-commit` harness (`.pre-commit-config.yaml` + `.typos.toml`) that
+  runs the CI gates — fmt, clippy, markdownlint, typos, and tests on push.
 
 ## [0.1.0]
 
