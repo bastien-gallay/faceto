@@ -1,0 +1,54 @@
+# Local quality harness — mirrors the CI gates so they fire before push, not
+# only in CI. Install with `uvx pre-commit install` (and `--hook-type pre-push`).
+# See https://pre-commit.com and CONTRIBUTING.md.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.md$'
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  # Rust gates run through the system toolchain (pinned by rust-toolchain.toml).
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      # The suite is small and fast; run it on pre-push to keep commits snappy.
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --all-targets
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-push]
+
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.17.1
+    hooks:
+      - id: markdownlint-cli2
+        args: ["--config", ".markdownlint-cli2.jsonc"]
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.31.1
+    hooks:
+      - id: typos

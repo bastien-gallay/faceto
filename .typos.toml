@@ -1,0 +1,11 @@
+# Spell-check config for `typos` (run via the pre-commit hook or `uvx typos`).
+# Keep the allowlist small and intentional — domain/identifier words, not a
+# dumping ground for real typos.
+[files]
+extend-exclude = ["target/", "*.svg"]
+
+[default.extend-words]
+# faceto's hand-rolled hash is FNV-1a; "fnv" is not a typo.
+fnv = "fnv"
+# A render test name uses the verb "ellipsise" (to cut with an ellipsis).
+ellipsises = "ellipsises"
