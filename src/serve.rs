@@ -4,6 +4,7 @@
 
 use crate::{events, json, model, model::Model, render};
 use std::collections::{HashMap, VecDeque};
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -25,6 +26,10 @@ struct Ctx {
     /// comments are appended to the log as events rather than to `comments.jsonl`.
     log_mode: bool,
     cache: Mutex<Cache>,
+    /// Serializes appends to the log (H4): concurrent `POST /comment` handlers run on
+    /// separate threads, so without this two events could interleave mid-line. Holding
+    /// this lock around a single `write_all` makes each appended line atomic.
+    appends: Mutex<()>,
 }
 
 impl Ctx {
@@ -57,6 +62,17 @@ impl Ctx {
     fn cached(&self, version: &str) -> Option<Model> {
         self.cache.lock().unwrap().map.get(version).cloned()
     }
+
+    /// Append one line to `path`, serialized against all other appends so concurrent
+    /// posts cannot interleave (H4). The line and its newline are written in a single
+    /// `write_all`, so even under `O_APPEND` no half-line ever lands.
+    fn append_line(&self, path: &Path, line: &str) -> std::io::Result<()> {
+        let _guard = self.appends.lock().unwrap();
+        let mut f = OpenOptions::new().create(true).append(true).open(path)?;
+        let mut bytes = line.as_bytes().to_vec();
+        bytes.push(b'\n');
+        f.write_all(&bytes)
+    }
 }
 
 pub fn serve(model_path: &Path, port: u16) -> Result<(), String> {
@@ -74,6 +90,7 @@ pub fn serve(model_path: &Path, port: u16) -> Result<(), String> {
             map: HashMap::new(),
             order: VecDeque::new(),
         }),
+        appends: Mutex::new(()),
     });
 
     // Validate the model up front so a typo fails loudly, not per-request.
@@ -226,7 +243,10 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                 return match json::parse(&text) {
                     Ok(v @ json::Json::Obj(_)) => match comment_to_event(&v) {
                         Some(ev) => {
-                            if append_line(&ctx.model_path, &events::line(&ev)).is_err() {
+                            if ctx
+                                .append_line(&ctx.model_path, &events::line(&ev))
+                                .is_err()
+                            {
                                 return send(
                                     &mut out,
                                     500,
@@ -251,7 +271,7 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                     o.push(("received".into(), json::Json::Str(now_iso())));
                     let v = json::Json::Obj(o);
                     let line = json::to_string(&v);
-                    if append_line(&ctx.comments_path, &line).is_err() {
+                    if ctx.append_line(&ctx.comments_path, &line).is_err() {
                         return send(&mut out, 500, "application/json", b"{\"ok\":false}", &[]);
                     }
                     let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("comment");
@@ -387,12 +407,6 @@ fn read_comments_json(path: &Path) -> String {
     format!("[{}]", items.join(","))
 }
 
-fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
-    use std::fs::OpenOptions;
-    let mut f = OpenOptions::new().create(true).append(true).open(path)?;
-    writeln!(f, "{}", line)
-}
-
 /// FNV-1a 64-bit, first 12 hex chars — a stable, dependency-free content version token.
 fn fnv12(bytes: &[u8]) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
@@ -453,6 +467,55 @@ mod tests {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(10957), (2000, 1, 1));
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
+
+    #[test]
+    fn concurrent_appends_never_interleave() {
+        // H4: many threads append to one log through a shared Ctx; every line must land
+        // whole and intact, with the expected total count and no torn/merged lines.
+        let path = std::env::temp_dir().join(format!("faceto-h4-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let ctx = Arc::new(Ctx {
+            model_path: path.clone(),
+            comments_path: path.clone(),
+            log_mode: true,
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        });
+
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 50;
+        let handles: Vec<_> = (0..THREADS)
+            .map(|t| {
+                let ctx = Arc::clone(&ctx);
+                let path = path.clone();
+                thread::spawn(move || {
+                    for i in 0..PER_THREAD {
+                        // A long payload makes a torn write easy to detect if the lock fails.
+                        let line = format!("t{t}-i{i}-{}", "x".repeat(200));
+                        ctx.append_line(&path, &line).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), THREADS * PER_THREAD);
+        // Every line is whole: matches the exact shape we wrote, nothing spliced.
+        for line in &lines {
+            assert!(
+                line.starts_with('t') && line.ends_with(&"x".repeat(200)),
+                "torn line: {line}"
+            );
+        }
     }
 
     #[test]
