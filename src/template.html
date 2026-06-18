@@ -71,13 +71,23 @@
       <div class="prior" id="m-prior"></div>
       <select id="m-kind">
         <option value="comment">comment</option>
-        <option value="add">add — a new element, described below, from this one</option>
+        <option value="add">add — a new element, just after this one</option>
         <option value="split">split — this is more than one element</option>
         <option value="rename">rename / reword</option>
         <option value="drop">drop — never happened</option>
         <option value="move">move — wrong lane / position</option>
         <option value="question">open question</option>
         <option value="resolve">resolve a hotspot</option>
+      </select>
+      <select id="m-type" style="display:none" title="which lane the new element belongs to">
+        <option value="event">event</option>
+        <option value="command">command</option>
+        <option value="aggregate">aggregate</option>
+        <option value="policy">policy</option>
+        <option value="readmodel">read model</option>
+        <option value="actor">actor</option>
+        <option value="external">external system</option>
+        <option value="hotspot">hotspot</option>
       </select>
       <textarea id="m-text" placeholder="short note — the next session reads this and adjusts the model"></textarea>
     </div>
@@ -290,10 +300,16 @@ function paint() {
 }
 
 const PLACEHOLDERS = {
-  add: "describe the new element: type (event/command/aggregate/policy/readmodel/external/hotspot) + label + where, relative to this one — e.g. event 'ItemDeleted' right after this",
+  add: "label for the new element — e.g. ItemDeleted",
 };
-const setPlaceholder = () =>
-  ($("#m-text").placeholder = PLACEHOLDERS[$("#m-kind").value] || "short note — the next session reads this and adjusts the model");
+// `add` mints a real element (it needs a lane + a label), so reveal the type select and
+// retitle the save button; every other kind is a note on the element under the cursor.
+function setKind() {
+  const adding = $("#m-kind").value === "add";
+  $("#m-type").style.display = adding ? "" : "none";
+  $("#m-save").textContent = adding ? "Add element" : "Save comment";
+  $("#m-text").placeholder = PLACEHOLDERS[$("#m-kind").value] || "short note — the next session reads this and adjusts the model";
+}
 
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 function openModal(g) {
@@ -309,22 +325,31 @@ function openModal(g) {
   $("#m-rel").innerHTML = rel ? "connected to: " + rel : "";
   $("#m-text").value = "";
   $("#m-kind").value = "comment";
-  setPlaceholder();
+  $("#m-type").value = "event";
+  setKind();
   const prior = (window._byEl?.[id] || []).map((c) => `<div>[${esc(c.kind)}] ${esc(c.text)}</div>`).join("");
   $("#m-prior").innerHTML = prior ? "<b>prior:</b>" + prior : "";
   $("#modal").returnValue = "cancel";
   $("#modal").showModal();
   window._activeId = id;
+  window._activeCol = +g.dataset.col;   // a new element added "from this one" lands just after it
 }
 
-$("#m-kind").addEventListener("change", setPlaceholder);
+$("#m-kind").addEventListener("change", setKind);
 bindStickies();
 
 $("#modal").addEventListener("close", () => {
   if ($("#modal").returnValue !== "save") return;
   const text = $("#m-text").value.trim();
   if (!text) return;
-  postComment({ elemId: window._activeId, kind: $("#m-kind").value, text, ts: new Date().toISOString(), status: "open" });
+  const ts = new Date().toISOString();
+  // `add` is a structural command: the server mints the id and folds it into the board, so it
+  // carries a lane (`type`) and `col` instead of an `elemId`. Everything else annotates the box.
+  if ($("#m-kind").value === "add") {
+    postComment({ kind: "add", type: $("#m-type").value, text, col: (window._activeCol ?? 0) + 1, ts, status: "open" });
+    return;
+  }
+  postComment({ elemId: window._activeId, kind: $("#m-kind").value, text, ts, status: "open" });
 });
 
 // Move buttons close the modal first so the nudge is visible (the backdrop dims the board).

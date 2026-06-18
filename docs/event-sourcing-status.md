@@ -85,17 +85,23 @@ outside the log**. `Ctx::append_add` does the replay *and* the write under the `
 `append_add_mints_persists_and_replays`. Verified live: against a genesis of `sample.model.json`
 (highest `E3`, `C2`), an `event` add minted `E4` and a `command` add minted `C3`.
 
-Still client-side TODO (item 2 below): there is no "add element" affordance in
-`src/template.html` yet — the endpoint is reachable but unwired in the UI.
+Client wiring (`src/template.html`) — **done.** The modal's `add` kind is now structural:
+selecting it reveals a lane (`type`) select and retitles the button to *Add element*; the
+textarea becomes the new element's label. On save it posts `{kind:"add", type, text, col}`
+with `col = source col + 1` (the new element lands just after the one the modal was opened
+from). The server mints the id, the model-version bumps, and the existing reload/diff path
+shows the new sticky as *added*. Offline, the add stashes to `localStorage` like any other
+feedback (no mint until back online). `/comments` omits `ElementAdded`, so a structural add
+never shows up as a sidebar comment. Verified live: an `add` of a `readmodel` minted `R2`.
 
 ## Pick up here tomorrow (open work, roughly in order)
 
 1. **`faceto compact`** — snapshot the log (fold to a minimal genesis batch) to bound replay;
    this is the concrete form of H1's "snapshot" escape hatch. (On the board: `LogCompacted`.)
-2. **Client (`src/template.html`)** — wire an "add element" affordance to the new `kind:"add"`
-   endpoint (H6 server side is done). Also: in log mode, server-side `ElementMoved` already moves
-   the sticky, so the client's `replayMoves` is redundant (harmless); audit the
-   offline/localStorage fallback path against the new event semantics.
+2. **Client (`src/template.html`)** — the "add element" affordance is wired (above). Remaining:
+   in log mode, server-side `ElementMoved` already moves the sticky, so the client's
+   `replayMoves` is redundant (harmless); audit the offline/localStorage fallback path against
+   the new event semantics.
 3. **Reconcile the docs** — `source-of-truth.md` is now superseded (banner added). Decide
    whether to rewrite it or fold it into this note once the inversion lands. Update the
    architecture section of `CLAUDE.md` (now six source files; `events.rs` is the new spine)
