@@ -307,8 +307,11 @@ pub fn render_svg(model: &Model) -> String {
         "<rect width=\"{}\" height=\"{}\" fill=\"#fbfbfd\"/>",
         width, height
     ));
+    // The board title is the instrument's engraved nameplate: a refined system serif, the one
+    // place a second font family appears (see DESIGN.md §3). Everything else stays the SVG sans.
     p.push(format!(
-        "<text x=\"20\" y=\"34\" font-size=\"20\" font-weight=\"700\" fill=\"#222\">{}</text>",
+        "<text x=\"20\" y=\"34\" font-size=\"20\" font-weight=\"700\" fill=\"#222\" \
+         font-family=\"'Iowan Old Style','Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif\">{}</text>",
         esc(&model.title)
     ));
 

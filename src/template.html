@@ -5,17 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
 <style>
-  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #fbfbfd; color: #222; }
+  /* Nameplate: the one serif in the system, for the board title only — the engraved maker's
+     mark on the optical bench (DESIGN.md §3). All system fonts; nothing is downloaded. */
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; font-size: 13px;
+         background: #fbfbfd; color: #222;
+         --nameplate: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif; }
   header { position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center;
            padding: 8px 16px; background: #fff; border-bottom: 1px solid #e6e6ee; }
-  header b { font-size: 14px; }
+  header b { font-family: var(--nameplate); font-size: 20px; font-weight: 700; letter-spacing: .2px; }
   header .spacer { flex: 1; }
   button { font: inherit; padding: 5px 11px; border: 1px solid #cfcfda; border-radius: 7px;
            background: #fff; cursor: pointer; }
   button:hover { background: #f2f2f7; }
-  #status { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: #eef; color: #557; }
+  #status { font-size: 11px; padding: 3px 9px; border-radius: 999px; background: #eef; color: #557; }
   #status.live { background: #e6f7ec; color: #1b7a3d; }
-  #note { font-size: 12px; color: #1b7a3d; }
+  #note { font-size: 11px; color: #1b7a3d; }
   #board { overflow: auto; padding: 12px; }
   .edge, .sticky { transition: opacity .15s ease-out; }
   .edge.hl { stroke: #2f3c45; opacity: 1 !important; stroke-width: 2.4; }
@@ -31,18 +35,18 @@
   dialog::backdrop { background: #0006; }
   .modal-h { padding: 14px 16px; border-bottom: 1px solid #eee; }
   .modal-h .id { font-size: 11px; font-weight: 700; color: #888; }
-  .modal-h .label { font-size: 15px; font-weight: 600; margin-top: 2px; }
-  .modal-h .detail { font-size: 12.5px; color: #5a5a5a; margin-top: 3px; }
+  .modal-h .label { font-size: 16px; font-weight: 600; margin-top: 2px; }
+  .modal-h .detail { font-size: 11px; color: #5a5a5a; margin-top: 3px; }
   .modal-h .detail:empty { display: none; }
   .modal-b { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
   .modal-b select, .modal-b textarea { font: inherit; padding: 8px; border: 1px solid #cfcfda; border-radius: 8px; }
   .modal-b textarea { min-height: 90px; resize: vertical; }
   .modal-f { padding: 12px 16px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid #eee; }
-  .rel { font-size: 12px; color: #666; display: flex; flex-wrap: wrap; gap: 5px; align-items: baseline; }
+  .rel { font-size: 11px; color: #666; display: flex; flex-wrap: wrap; gap: 5px; align-items: baseline; }
   .rel:empty { display: none; }
   .rel .chip { background: #eef1f4; border-radius: 6px; padding: 1px 7px; color: #334; }
   .rel .chip b { color: #1A6FAE; font-weight: 700; }
-  .prior { font-size: 12px; color: #777; }
+  .prior { font-size: 11px; color: #777; }
   .prior div { padding: 3px 0; border-top: 1px dashed #eee; }
 </style>
 </head>
