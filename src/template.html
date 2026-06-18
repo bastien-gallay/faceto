@@ -82,6 +82,9 @@
       <textarea id="m-text" placeholder="short note — the next session reads this and adjusts the model"></textarea>
     </div>
     <div class="modal-f">
+      <button type="button" id="m-left" title="move this sticky one column left (or press ← while hovering it)">Move ←</button>
+      <button type="button" id="m-right" title="move this sticky one column right (or press → while hovering it)">Move →</button>
+      <span class="spacer" style="flex:1"></span>
       <button value="cancel">Cancel</button>
       <button id="m-save" value="save" style="background:#1A6FAE;color:#fff;border-color:#1A6FAE">Save comment</button>
     </div>
@@ -90,8 +93,9 @@
 
 <script>
 const LS_KEY = "facetoComments";
+const CFG = __CONFIG__;   // { colW, stickyW, stickyH } — geometry, injected from render.rs
 let serverLive = false;
-let comments = [];        // {elemId, kind, text, ts}
+let comments = [];        // {elemId, kind, text, ts}  (kind:"move" carries col/prevCol/swap…)
 let shownVersion = null;  // model hash the board currently displays — the diff baseline
 let diffing = false;
 
@@ -104,6 +108,93 @@ const liveVersion = async () => {
   return null;
 };
 
+// ---- moving stickies left / right -----------------------------------------
+// A move never touches edges' endpoints (identity is `id`); it only shifts a sticky along the
+// shared column axis. Persistence is a kind:"move" comment in comments.jsonl — the model file is
+// left untouched for now — and the client replays those comments so a move survives reloads.
+let hoverId = null;                              // sticky under the cursor, target of ← / →
+let baseCol = {}, baseCx = {}, cyOf = {}, kindOf = {}, colOf = {};
+
+// Snapshot the server-rendered layout: each sticky's authored column, lane and centre.
+function readLayout() {
+  baseCol = {}; baseCx = {}; cyOf = {}; kindOf = {}; colOf = {};
+  document.querySelectorAll(".sticky").forEach((g) => {
+    baseCol[g.id] = +g.dataset.col;
+    baseCx[g.id] = +g.dataset.cx;
+    cyOf[g.id] = +g.dataset.cy;
+    kindOf[g.id] = g.dataset.kind;
+    colOf[g.id] = +g.dataset.col;
+  });
+}
+
+const centerOf = (id) => [baseCx[id] + (colOf[id] - baseCol[id]) * CFG.colW, cyOf[id]];
+
+// Port of render.rs `edge_path`: a smooth connector anchored on the boxes' facing edges.
+function edgePath([x1, y1], [x2, y2]) {
+  const W = CFG.stickyW, H = CFG.stickyH, f = (n) => n.toFixed(1);
+  if (Math.abs(x2 - x1) < W) {
+    const s = y2 >= y1 ? 1 : -1, ay1 = y1 + s * H / 2, ay2 = y2 - s * H / 2, my = (ay1 + ay2) / 2;
+    return `M${f(x1)},${f(ay1)} C${f(x1)},${f(my)} ${f(x2)},${f(my)} ${f(x2)},${f(ay2)}`;
+  }
+  const s = x2 >= x1 ? 1 : -1, ax1 = x1 + s * W / 2, ax2 = x2 - s * W / 2, mx = (ax1 + ax2) / 2;
+  return `M${f(ax1)},${f(y1)} C${f(mx)},${f(y1)} ${f(mx)},${f(y2)} ${f(ax2)},${f(y2)}`;
+}
+
+// Translate every sticky to its current column and redraw the connectors that touch it.
+function applyLayout() {
+  document.querySelectorAll(".sticky").forEach((g) => {
+    if (colOf[g.id] === undefined) return;
+    const dx = (colOf[g.id] - baseCol[g.id]) * CFG.colW;
+    g.setAttribute("transform", dx ? `translate(${dx},0)` : "");
+  });
+  document.querySelectorAll(".edge").forEach((p) => {
+    const s = p.dataset.src, d = p.dataset.dst;
+    if (colOf[s] === undefined || colOf[d] === undefined) return;
+    p.setAttribute("d", edgePath(centerOf(s), centerOf(d)));
+  });
+}
+
+// Rebuild positions from the authored layout + every move comment, in order. Idempotent.
+function replayMoves() {
+  for (const id in baseCol) colOf[id] = baseCol[id];
+  for (const c of comments) {
+    if (c.kind !== "move" || colOf[c.elemId] === undefined) continue;
+    colOf[c.elemId] = c.col;
+    if (c.swapId !== undefined && colOf[c.swapId] !== undefined) colOf[c.swapId] = c.swapCol;
+  }
+  applyLayout();
+}
+
+// Nudge a sticky one column. Within its lane an occupied target column means the two swap.
+function doMove(id, dir) {
+  if (colOf[id] === undefined) return;
+  const from = colOf[id], target = from + (dir === "left" ? -1 : 1);
+  if (target < 0) { note("already at the left edge"); return; }
+  let swapId = null;
+  for (const oid in colOf) {
+    if (oid !== id && kindOf[oid] === kindOf[id] && colOf[oid] === target) { swapId = oid; break; }
+  }
+  colOf[id] = target;
+  if (swapId) colOf[swapId] = from;
+  applyLayout();
+  const c = { elemId: id, kind: "move", col: target, prevCol: from,
+              text: `moved ${dir} to col ${target}`, ts: new Date().toISOString(), status: "open" };
+  if (swapId) { c.swapId = swapId; c.swapCol = from; c.swapPrevCol = target; }
+  note(swapId ? `swapped with ${swapId}` : `moved ${dir}`);
+  postComment(c);
+}
+
+// Persist a comment (move or feedback): POST when live, else stash in localStorage.
+async function postComment(c) {
+  let posted = false;
+  try {
+    const r = await fetch("/comment", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(c) });
+    posted = r.ok;
+  } catch {}
+  if (posted) { await load(); }
+  else { const a = lsGet(); a.push(c); lsSet(a); comments = a; replayMoves(); paint(); }
+}
+
 // Reload: re-pull comments, and when the model changed under us, redraw the board with the
 // changes-since-you-last-looked overlay (diffed against the version currently on screen).
 async function load() {
@@ -112,10 +203,11 @@ async function load() {
     const r = await fetch("/comments", { cache: "no-store" });
     if (r.ok) { comments = await r.json(); serverLive = true; }
   } catch {}
-  if (!serverLive) { comments = lsGet(); paint(); return; }
+  if (!serverLive) { comments = lsGet(); replayMoves(); paint(); return; }
   const live = await liveVersion();
   if (live && shownVersion && live !== shownVersion) await showDiff(shownVersion, live);
   else if (shownVersion === null) shownVersion = live;  // baseline the initial server-rendered board
+  replayMoves();
   paint();
 }
 
@@ -141,7 +233,7 @@ async function showDiff(base, live) {
 async function showPlain() {
   try {
     const r = await fetch("/board.svg", { cache: "no-store" });
-    if (r.ok) { $("#board").innerHTML = await r.text(); bindStickies(); }
+    if (r.ok) { $("#board").innerHTML = await r.text(); bindStickies(); replayMoves(); }
   } catch {}
   diffing = false;
   $("#plain").style.display = "none";
@@ -172,10 +264,11 @@ function hoverOff() {
 }
 function bindStickies() {
   buildGraph();
+  readLayout();
   document.querySelectorAll(".sticky").forEach((g) => {
     g.onclick = () => openModal(g);
-    g.onmouseenter = () => hoverOn(g.id);
-    g.onmouseleave = hoverOff;
+    g.onmouseenter = () => { hoverId = g.id; hoverOn(g.id); };
+    g.onmouseleave = () => { if (hoverId === g.id) hoverId = null; hoverOff(); };
   });
 }
 
@@ -183,13 +276,16 @@ function paint() {
   $("#status").textContent = serverLive ? "● live (server)" : "○ offline (localStorage)";
   $("#status").className = serverLive ? "live" : "";
   document.querySelectorAll(".sticky").forEach((g) => g.classList.remove("has-note"));
+  // Moves ride in comments.jsonl for persistence but aren't feedback — keep them out of the
+  // note badges, counts and prior-comment list.
+  const feedback = comments.filter((c) => c.kind !== "move");
   const byEl = {};
-  for (const c of comments) (byEl[c.elemId] ||= []).push(c);
+  for (const c of feedback) (byEl[c.elemId] ||= []).push(c);
   for (const id in byEl) document.getElementById(id)?.classList.add("has-note");
   // A resolve comment quiets its hotspot right away (model `resolved:true` does it durably).
-  for (const c of comments) if (c.kind === "resolve") document.getElementById(c.elemId)?.classList.add("resolved");
-  const open = comments.filter((c) => c.status !== "resolved").length;
-  $("#count").textContent = comments.length ? `${comments.length} comment(s), ${open} open` : "";
+  for (const c of feedback) if (c.kind === "resolve") document.getElementById(c.elemId)?.classList.add("resolved");
+  const open = feedback.filter((c) => c.status !== "resolved").length;
+  $("#count").textContent = feedback.length ? `${feedback.length} comment(s), ${open} open` : "";
   window._byEl = byEl;
 }
 
@@ -224,18 +320,25 @@ function openModal(g) {
 $("#m-kind").addEventListener("change", setPlaceholder);
 bindStickies();
 
-$("#modal").addEventListener("close", async () => {
+$("#modal").addEventListener("close", () => {
   if ($("#modal").returnValue !== "save") return;
   const text = $("#m-text").value.trim();
   if (!text) return;
-  const c = { elemId: window._activeId, kind: $("#m-kind").value, text, ts: new Date().toISOString(), status: "open" };
-  let posted = false;
-  try {
-    const r = await fetch("/comment", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(c) });
-    posted = r.ok;
-  } catch {}
-  if (posted) { await load(); }
-  else { const a = lsGet(); a.push(c); lsSet(a); comments = a; paint(); }
+  postComment({ elemId: window._activeId, kind: $("#m-kind").value, text, ts: new Date().toISOString(), status: "open" });
+});
+
+// Move buttons close the modal first so the nudge is visible (the backdrop dims the board).
+$("#m-left").addEventListener("click", () => { const id = window._activeId; $("#modal").close("move"); doMove(id, "left"); });
+$("#m-right").addEventListener("click", () => { const id = window._activeId; $("#modal").close("move"); doMove(id, "right"); });
+
+// Hover a sticky and press ← / → to nudge it a column — the keyboard-fast path.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  if ($("#modal").open || !hoverId) return;
+  const ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
+  e.preventDefault();
+  doMove(hoverId, e.key === "ArrowLeft" ? "left" : "right");
 });
 
 $("#refresh").addEventListener("click", load);

@@ -474,12 +474,19 @@ pub fn render_svg(model: &Model) -> String {
         if let Some(s) = status {
             cls.push_str(&format!(" diff-{}", s));
         }
+        // data-kind / data-col / data-cx / data-cy let the client replay a move (translate the
+        // group, recompute its edges) without a server round-trip — see template.html.
         p.push(format!(
-            "<g id=\"{}\" class=\"{}\" data-hero=\"{}\" data-detail=\"{}\" style=\"cursor:pointer\"{}>",
+            "<g id=\"{}\" class=\"{}\" data-hero=\"{}\" data-detail=\"{}\" data-kind=\"{}\" \
+             data-col=\"{}\" data-cx=\"{:.1}\" data-cy=\"{:.1}\" style=\"cursor:pointer\"{}>",
             esc(&e.id),
             cls,
             esc(&hero),
             esc(&detail),
+            esc(&e.kind),
+            e.col.unwrap(),
+            cx,
+            cy,
             g_op
         ));
         if let (Some(_), Some(meta)) = (status, &diff_meta) {
@@ -637,9 +644,16 @@ pub fn render_svg(model: &Model) -> String {
 }
 
 pub fn render_html(svg: &str, title: &str) -> String {
+    // The client reuses these geometry constants to re-place a moved sticky and redraw its
+    // edges in the browser — keep render.rs the single source of truth for them.
+    let cfg = format!(
+        "{{\"colW\":{},\"stickyW\":{},\"stickyH\":{}}}",
+        COL_W, STICKY_W, STICKY_H
+    );
     HTML_TEMPLATE
         .replace("__TITLE__", &esc(title))
         .replace("__SVG__", svg)
+        .replace("__CONFIG__", &cfg)
 }
 
 const HTML_TEMPLATE: &str = include_str!("template.html");
@@ -674,6 +688,45 @@ mod tests {
             split_label("Plain", None),
             ("Plain".to_string(), String::new())
         );
+    }
+
+    // The client's instant-move replay reads col / lane / centre off the sticky group; if these
+    // attributes ever stop being emitted, moves silently break. Pin them here.
+    fn one_event_at_col(col: i64) -> Model {
+        Model {
+            title: "t".into(),
+            phases: vec![],
+            elements: vec![Element {
+                id: "E1".into(),
+                kind: "event".into(),
+                label: "L".into(),
+                col: Some(col),
+                detail: None,
+                resolved: false,
+                x: 0.0,
+                diff: None,
+                was: None,
+            }],
+            edges: vec![],
+            diff_meta: None,
+        }
+    }
+
+    #[test]
+    fn sticky_group_exposes_layout_data_attributes() {
+        let svg = render_svg(&one_event_at_col(2));
+        assert!(svg.contains("data-kind=\"event\""));
+        assert!(svg.contains("data-col=\"2\""));
+        assert!(svg.contains("data-cx="));
+        assert!(svg.contains("data-cy="));
+    }
+
+    #[test]
+    fn render_html_injects_the_geometry_config() {
+        let html = render_html("<svg></svg>", "t");
+        assert!(!html.contains("__CONFIG__"));
+        assert!(html.contains("\"colW\":210"));
+        assert!(html.contains("\"stickyW\":176"));
     }
 
     #[test]
