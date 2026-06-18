@@ -68,11 +68,80 @@ impl Ctx {
     /// `write_all`, so even under `O_APPEND` no half-line ever lands.
     fn append_line(&self, path: &Path, line: &str) -> std::io::Result<()> {
         let _guard = self.appends.lock().unwrap();
+        Self::write_line(path, line)
+    }
+
+    /// The atomic write itself — one line + newline in a single `write_all`. Callers must
+    /// already hold `appends`; `append_line` is the locked entry point.
+    fn write_line(path: &Path, line: &str) -> std::io::Result<()> {
         let mut f = OpenOptions::new().create(true).append(true).open(path)?;
         let mut bytes = line.as_bytes().to_vec();
         bytes.push(b'\n');
         f.write_all(&bytes)
     }
+
+    /// Mint a fresh id and append an `ElementAdded` — the answer to H6. The id is derived
+    /// from the *current* projection (next free `<PREFIX><N>` for this lane) rather than a
+    /// stored counter, so the log stays the only durable record. Both the replay and the
+    /// write happen under `appends`, so two concurrent adds can never mint the same id.
+    /// Returns the event so the handler can echo the minted id.
+    fn append_add(
+        &self,
+        kind: &str,
+        label: String,
+        col: Option<i64>,
+        detail: Option<String>,
+    ) -> std::io::Result<events::Event> {
+        let _guard = self.appends.lock().unwrap();
+        let raw = std::fs::read(&self.model_path).unwrap_or_default();
+        let text = String::from_utf8_lossy(&raw);
+        let existing = events::parse_log(&text)
+            .map(|e| events::replay(&e))
+            .unwrap_or_default();
+        let ev = events::Event::ElementAdded {
+            id: mint_id(kind, &existing),
+            kind: kind.to_string(),
+            label,
+            col,
+            detail,
+        };
+        Self::write_line(&self.model_path, &events::line(&ev))?;
+        Ok(ev)
+    }
+}
+
+/// The single letter each lane stamps onto a freshly minted id, matching the convention the
+/// example boards already use (`actor`→`X`, `aggregate`→`A`, so they don't collide). Kept in
+/// sync with the 8-lane grammar in `render.rs`.
+fn id_prefix(kind: &str) -> char {
+    match kind {
+        "actor" => 'X',
+        "command" => 'C',
+        "aggregate" => 'A',
+        "event" => 'E',
+        "policy" => 'P',
+        "readmodel" => 'R',
+        "external" => 'G',
+        "hotspot" => 'H',
+        // Off-grammar type: fall back to its first letter, upper-cased.
+        other => other.chars().next().unwrap_or('Z').to_ascii_uppercase(),
+    }
+}
+
+/// Next free id for `kind`: `<PREFIX>` followed by one past the highest numeric suffix already
+/// used under that prefix (so ids are never renumbered, only added — the model convention).
+fn mint_id(kind: &str, model: &Model) -> String {
+    let prefix = id_prefix(kind);
+    let max = model
+        .elements
+        .iter()
+        .filter_map(|e| {
+            let mut chars = e.id.chars();
+            (chars.next() == Some(prefix)).then(|| chars.as_str().parse::<u32>().ok())?
+        })
+        .max()
+        .unwrap_or(0);
+    format!("{}{}", prefix, max + 1)
 }
 
 pub fn serve(model_path: &Path, port: u16) -> Result<(), String> {
@@ -241,6 +310,19 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
             let text = String::from_utf8_lossy(&buf);
             if ctx.log_mode {
                 return match json::parse(&text) {
+                    Ok(v @ json::Json::Obj(_))
+                        if v.get("kind").and_then(|x| x.as_str()) == Some("add") =>
+                    {
+                        match add_from_comment(&ctx, &v) {
+                            Ok(ev) => {
+                                println!("  \u{2795} event: {}", events::line(&ev));
+                                send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
+                            }
+                            Err(code) => {
+                                send(&mut out, code, "application/json", b"{\"ok\":false}", &[])
+                            }
+                        }
+                    }
                     Ok(v @ json::Json::Obj(_)) => match comment_to_event(&v) {
                         Some(ev) => {
                             if ctx
@@ -332,6 +414,32 @@ fn query_get(query: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Handle a `kind:"add"` post: an element-creation command rather than a comment on an
+/// existing one. `type` (the lane) is required; `text`→label, optional `col`/`detail`. The
+/// server mints the id (H6). Returns the HTTP status to fail with: `400` for a missing/empty
+/// type, `500` if the append itself fails.
+fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
+    let kind = v
+        .get("type")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or(400u16)?
+        .to_string();
+    let label = v
+        .get("text")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let col = v.get("col").and_then(|x| x.as_f64()).map(|n| n as i64);
+    let detail = v
+        .get("detail")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    ctx.append_add(&kind, label, col, detail)
+        .map_err(|_| 500u16)
 }
 
 /// Map a posted comment to the event it persists, in log mode. `move`/`resolve`/`rename`
@@ -516,6 +624,67 @@ mod tests {
                 "torn line: {line}"
             );
         }
+    }
+
+    fn added(id: &str, kind: &str) -> events::Event {
+        events::Event::ElementAdded {
+            id: id.into(),
+            kind: kind.into(),
+            label: id.into(),
+            col: None,
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn mint_id_picks_next_free_suffix_per_lane() {
+        // H6: ids are type-prefixed and never renumbered — minting takes one past the
+        // highest suffix already used under that prefix, independently per lane.
+        let model = events::replay(&[
+            added("E1", "event"),
+            added("E3", "event"),
+            added("C1", "command"),
+        ]);
+        assert_eq!(mint_id("event", &model), "E4"); // past the highest E, not filling the E2 gap
+        assert_eq!(mint_id("command", &model), "C2");
+        assert_eq!(mint_id("hotspot", &model), "H1"); // empty lane starts at 1
+        assert_eq!(mint_id("actor", &model), "X1"); // actor stamps X, not A
+        assert_eq!(mint_id("aggregate", &model), "A1");
+    }
+
+    #[test]
+    fn append_add_mints_persists_and_replays() {
+        // The minted id round-trips: append_add writes an ElementAdded that replay folds
+        // back into a real element, and a second add under the same lane increments.
+        let path = std::env::temp_dir().join(format!("faceto-h6-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, events::line(&added("E1", "event")) + "\n").unwrap();
+        let ctx = Ctx {
+            model_path: path.clone(),
+            comments_path: path.clone(),
+            log_mode: true,
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        };
+
+        let ev = ctx
+            .append_add("event", "DayStarted".into(), Some(2), None)
+            .unwrap();
+        assert!(matches!(&ev, events::Event::ElementAdded { id, .. } if id == "E2"));
+        let ev2 = ctx
+            .append_add("command", "start".into(), None, None)
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        let model = events::replay(&events::parse_log(&text).unwrap());
+        let e2 = model.elements.iter().find(|e| e.id == "E2").unwrap();
+        assert_eq!(e2.label, "DayStarted");
+        assert_eq!(e2.col, Some(2));
+        assert!(matches!(&ev2, events::Event::ElementAdded { id, .. } if id == "C1"));
     }
 
     #[test]
