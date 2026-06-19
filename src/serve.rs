@@ -136,7 +136,9 @@ fn mint_id(kind: &str, log: &[events::Event]) -> String {
         })
         .max()
         .unwrap_or(0);
-    format!("{}{}", prefix, max + 1)
+    // saturating_add: a hand-edited log with a suffix at u32::MAX must not panic (debug) or
+    // wrap to 0 (release) and re-mint a colliding low id.
+    format!("{}{}", prefix, max.saturating_add(1))
 }
 
 pub fn serve(model_path: &Path, port: u16) -> Result<(), String> {
@@ -411,10 +413,13 @@ fn query_get(query: &str, key: &str) -> Option<String> {
 /// `col`/`detail`. The server mints the id (H6). Returns the HTTP status to fail with: `400` for
 /// a missing/empty type or label, `500` if the append itself fails.
 fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
+    // `type` must be one of the 8 lanes. An off-grammar type would fall back to a first-letter
+    // prefix in `id_prefix` and could mint into a real lane's id space (e.g. "epic"→'E'),
+    // colliding the diff/comment join key — so reject it here rather than letting it through.
     let kind = v
         .get("type")
         .and_then(|x| x.as_str())
-        .filter(|s| !s.is_empty())
+        .filter(|s| render::lane_prefix(s).is_some())
         .ok_or(400u16)?
         .to_string();
     // A blank label would mint a permanent, never-renumbered empty element — refuse it here
@@ -455,17 +460,28 @@ fn comment_to_event(v: &json::Json) -> Vec<events::Event> {
     let col_at = |k: &str| v.get(k).and_then(|x| x.as_f64()).map(|n| n as i64);
     match kind {
         "move" => {
+            // A move is a column change; a missing target col would replay as a no-op, so reject
+            // it (empty vec → 400) rather than logging a phantom move.
+            let Some(col) = col_at("col") else {
+                return Vec::new();
+            };
             let mut evs = vec![events::Event::ElementMoved {
-                id,
-                col: col_at("col"),
+                id: id.clone(),
+                col: Some(col),
                 kind: None,
             }];
-            if let Some(swap_id) = v.get("swapId").and_then(|x| x.as_str()) {
-                evs.push(events::Event::ElementMoved {
-                    id: swap_id.to_string(),
-                    col: col_at("swapCol"),
-                    kind: None,
-                });
+            // A swap also relocates the displaced sticky — but only a *different* one, to a real
+            // col. Guard against a self-swap or a swap missing its target col (would no-op).
+            if let (Some(swap_id), Some(swap_col)) =
+                (v.get("swapId").and_then(|x| x.as_str()), col_at("swapCol"))
+            {
+                if swap_id != id.as_str() {
+                    evs.push(events::Event::ElementMoved {
+                        id: swap_id.to_string(),
+                        col: Some(swap_col),
+                        kind: None,
+                    });
+                }
             }
             evs
         }
@@ -481,12 +497,16 @@ fn comment_to_event(v: &json::Json) -> Vec<events::Event> {
 
 /// Project the log's *feedback* events (annotations, resolutions, renames) back into the
 /// comment shape the client sidebar expects. Structural events (adds, moves, edges) are
-/// omitted — they already live in the rendered board.
+/// omitted — they already live in the rendered board. Feedback on an element that was later
+/// removed is dropped too, so the sidebar never lists a comment for a box that's off the board.
 fn comments_from_log(path: &Path) -> String {
     let log = match events::read_log(path) {
         Ok(e) => e,
         Err(_) => return "[]".to_string(),
     };
+    let model = events::replay(&log);
+    let present: std::collections::HashSet<&str> =
+        model.elements.iter().map(|e| e.id.as_str()).collect();
     let mut items: Vec<String> = Vec::new();
     for ev in &log {
         let (id, kind, text) = match ev {
@@ -497,6 +517,9 @@ fn comments_from_log(path: &Path) -> String {
             events::Event::ElementRenamed { id, label } => (id, "rename", label.clone()),
             _ => continue,
         };
+        if !present.contains(id.as_str()) {
+            continue;
+        }
         let obj = json::Json::Obj(vec![
             ("elemId".into(), json::Json::Str(id.clone())),
             ("kind".into(), json::Json::Str(kind.into())),
@@ -684,6 +707,48 @@ mod tests {
     }
 
     #[test]
+    fn mint_id_saturates_instead_of_overflowing() {
+        // A hand-edited log with a suffix at u32::MAX must not panic/wrap.
+        let log = [added("E4294967295", "event")];
+        assert_eq!(mint_id("event", &log), "E4294967295");
+    }
+
+    #[test]
+    fn move_without_a_col_is_rejected() {
+        let v = json::parse(r#"{"elemId":"E1","kind":"move"}"#).unwrap();
+        assert!(comment_to_event(&v).is_empty());
+    }
+
+    #[test]
+    fn move_ignores_a_self_swap_or_a_swap_missing_its_col() {
+        // Self-swap → just the primary move; swapId without swapCol → no phantom partner move.
+        let selfswap =
+            json::parse(r#"{"elemId":"E1","kind":"move","col":2,"swapId":"E1","swapCol":0}"#)
+                .unwrap();
+        assert_eq!(comment_to_event(&selfswap).len(), 1);
+        let nocol = json::parse(r#"{"elemId":"E1","kind":"move","col":2,"swapId":"E2"}"#).unwrap();
+        assert_eq!(comment_to_event(&nocol).len(), 1);
+    }
+
+    #[test]
+    fn comments_from_log_skips_a_removed_elements_feedback() {
+        // Annotate E2, then drop it — its comment must not surface for a box off the board.
+        let path = std::env::temp_dir().join(format!("faceto-cfl-{}.jsonl", std::process::id()));
+        let log = [
+            added("E2", "event"),
+            events::Event::ElementAnnotated {
+                id: "E2".into(),
+                text: "is this right?".into(),
+            },
+            events::Event::ElementRemoved { id: "E2".into() },
+        ];
+        std::fs::write(&path, events::to_jsonl(&log)).unwrap();
+        let json = comments_from_log(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(json, "[]");
+    }
+
+    #[test]
     fn append_add_mints_persists_and_replays() {
         // The minted id round-trips: append_add writes an ElementAdded that replay folds
         // back into a real element, and a second add under the same lane increments.
@@ -778,6 +843,10 @@ mod tests {
         };
         let v = json::parse(r#"{"kind":"add","type":"event","text":"   "}"#).unwrap();
         assert_eq!(add_from_comment(&ctx, &v), Err(400));
+
+        // An off-grammar type would mint into a real lane's id space — reject it too.
+        let off = json::parse(r#"{"kind":"add","type":"epic","text":"Saga"}"#).unwrap();
+        assert_eq!(add_from_comment(&ctx, &off), Err(400));
     }
 
     #[test]

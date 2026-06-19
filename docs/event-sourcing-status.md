@@ -71,7 +71,7 @@ skipped** (forward compatibility — partial answer to H3).
 - `cargo fmt --check` · `cargo clippy --all-targets -D warnings` · `cargo test` (30 passed,
   1 new H4 concurrency test) — all green.
 
-### H6 — id minting for `add` → **server mints, derived from the projection.** ✅
+### H6 — id minting for `add` → **server mints, derived from the log.** ✅
 
 A `POST /comment {kind:"add", type:<lane>, text:<label>, col?, detail?}` appends an
 `ElementAdded`. The server mints the id — **not** a client uuid — to preserve the board's

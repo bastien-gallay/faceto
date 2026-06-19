@@ -739,6 +739,18 @@ mod tests {
     }
 
     #[test]
+    fn the_add_element_picker_offers_every_lane() {
+        // The client's <select id="m-type"> is a hand-written copy of the lane grammar; pin it to
+        // LANES so a new/renamed lane can't silently drop out of the "add element" picker.
+        for lane in LANES {
+            assert!(
+                HTML_TEMPLATE.contains(&format!("<option value=\"{lane}\"")),
+                "template.html #m-type is missing lane `{lane}`"
+            );
+        }
+    }
+
+    #[test]
     fn sticky_group_exposes_layout_data_attributes() {
         let svg = render_svg(&one_event_at_col(2));
         assert!(svg.contains("data-kind=\"event\""));

@@ -108,6 +108,9 @@
 <script>
 const LS_KEY = "facetoComments";
 const CFG = __CONFIG__;   // { colW, stickyW, stickyH } — geometry, injected from render.rs
+// Structural ops change the board itself, not feedback on a box — kept out of the note badges,
+// counts and prior-comment list (and never resynced offline; the log is the truth).
+const STRUCTURAL_KINDS = new Set(["move", "add", "drop"]);
 let serverLive = false;
 let comments = [];        // {elemId, kind, text, ts}  (kind:"move" carries col/prevCol/swap…)
 let shownVersion = null;  // model hash the board currently displays — the diff baseline
@@ -214,8 +217,9 @@ async function postComment(c) {
   } catch {}
   if (posted) { await load(); return; }
   const a = lsGet(); a.push(c); lsSet(a); comments = a; replayMoves(); paint();
-  note(c.kind === "add"
-    ? "offline — add saved locally (not on the board yet; Export to keep it)"
+  // add/drop can't reach the board offline (no server to mint/remove); move is applied locally.
+  note((c.kind === "add" || c.kind === "drop")
+    ? `offline — ${c.kind} saved locally (not applied to the board; Export to keep it)`
     : "offline — saved locally (Export to keep)");
 }
 
@@ -300,10 +304,10 @@ function paint() {
   $("#status").textContent = serverLive ? "● live (server)" : "○ offline (localStorage)";
   $("#status").className = serverLive ? "live" : "";
   document.querySelectorAll(".sticky").forEach((g) => g.classList.remove("has-note"));
-  // `move` and `add` are structural, not feedback on an existing box — keep them out of the note
-  // badges, counts and prior-comment list. (`add` carries no `elemId`; offline it only lives in
-  // localStorage until export — there is no element to ring yet, see postComment.)
-  const feedback = comments.filter((c) => c.kind !== "move" && c.kind !== "add");
+  // Structural ops (move/add/drop) aren't feedback on an existing box — keep them out of the note
+  // badges, counts and prior-comment list. (Offline, a stashed `add`/`drop` lives only in
+  // localStorage until export; there is no element to ring — or it's gone — see postComment.)
+  const feedback = comments.filter((c) => !STRUCTURAL_KINDS.has(c.kind));
   const byEl = {};
   for (const c of feedback) if (c.elemId) (byEl[c.elemId] ||= []).push(c);
   for (const id in byEl) document.getElementById(id)?.classList.add("has-note");
