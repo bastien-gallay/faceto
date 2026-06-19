@@ -307,9 +307,7 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
             let text = String::from_utf8_lossy(&buf);
             if ctx.log_mode {
                 return match json::parse(&text) {
-                    Ok(v @ json::Json::Obj(_))
-                        if v.get("kind").and_then(|x| x.as_str()) == Some("add") =>
-                    {
+                    Ok(v @ json::Json::Obj(_)) if v.get_str("kind") == Some("add") => {
                         match add_from_comment(&ctx, &v) {
                             Ok(ev) => {
                                 println!("  \u{2795} event: {}", events::line(&ev));
@@ -348,9 +346,9 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                     if ctx.append_line(&ctx.comments_path, &line).is_err() {
                         return send(&mut out, 500, "application/json", b"{\"ok\":false}", &[]);
                     }
-                    let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("comment");
-                    let elem = v.get("elemId").and_then(|x| x.as_str()).unwrap_or("?");
-                    let body = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
+                    let kind = v.get_str("kind").unwrap_or("comment");
+                    let elem = v.get_str("elemId").unwrap_or("?");
+                    let body = v.get_str("text").unwrap_or("");
                     println!("  \u{1F4AC} [{}] {}: {}", kind, elem, body);
                     send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
                 }
@@ -417,24 +415,21 @@ fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
     // prefix in `id_prefix` and could mint into a real lane's id space (e.g. "epic"→'E'),
     // colliding the diff/comment join key — so reject it here rather than letting it through.
     let kind = v
-        .get("type")
-        .and_then(|x| x.as_str())
+        .get_str("type")
         .filter(|s| render::lane_prefix(s).is_some())
         .ok_or(400u16)?
         .to_string();
     // A blank label would mint a permanent, never-renumbered empty element — refuse it here
     // (the client modal already guards it, but a direct POST must not slip a blank box in).
     let label = v
-        .get("text")
-        .and_then(|x| x.as_str())
+        .get_str("text")
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or(400u16)?
         .to_string();
-    let col = v.get("col").and_then(|x| x.as_f64()).map(|n| n as i64);
+    let col = v.get_i64("col");
     let detail = v
-        .get("detail")
-        .and_then(|x| x.as_str())
+        .get_str("detail")
         .filter(|s| !s.is_empty())
         .map(String::from);
     ctx.append_add(&kind, label, col, detail)
@@ -448,21 +443,16 @@ fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
 /// without that the partner reverts on reload. `drop` ("never happened") removes the element (and
 /// its touching edges, via replay). Returns an empty vec if the comment names no element (400).
 fn comment_to_event(v: &json::Json) -> Vec<events::Event> {
-    let Some(id) = v.get("elemId").and_then(|x| x.as_str()).map(str::to_string) else {
+    let Some(id) = v.get_str("elemId").map(str::to_string) else {
         return Vec::new();
     };
-    let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("comment");
-    let text = v
-        .get("text")
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .to_string();
-    let col_at = |k: &str| v.get(k).and_then(|x| x.as_f64()).map(|n| n as i64);
+    let kind = v.get_str("kind").unwrap_or("comment");
+    let text = v.get_str("text").unwrap_or("").to_string();
     match kind {
         "move" => {
             // A move is a column change; a missing target col would replay as a no-op, so reject
             // it (empty vec → 400) rather than logging a phantom move.
-            let Some(col) = col_at("col") else {
+            let Some(col) = v.get_i64("col") else {
                 return Vec::new();
             };
             let mut evs = vec![events::Event::ElementMoved {
@@ -472,9 +462,7 @@ fn comment_to_event(v: &json::Json) -> Vec<events::Event> {
             }];
             // A swap also relocates the displaced sticky — but only a *different* one, to a real
             // col. Guard against a self-swap or a swap missing its target col (would no-op).
-            if let (Some(swap_id), Some(swap_col)) =
-                (v.get("swapId").and_then(|x| x.as_str()), col_at("swapCol"))
-            {
+            if let (Some(swap_id), Some(swap_col)) = (v.get_str("swapId"), v.get_i64("swapCol")) {
                 if swap_id != id.as_str() {
                     evs.push(events::Event::ElementMoved {
                         id: swap_id.to_string(),
