@@ -60,7 +60,7 @@ LogCompacted {folded}              # provenance marker from `compact`; no-op on 
 ```
 
 Read policy: blank lines skipped; malformed JSON is a hard error; **unknown event kinds are
-skipped** and **unknown fields are ignored** (forward compatibility); a renamed kind/field is
+skipped** and **unknown fields are ignored** (forward compatibility); a renamed event *kind* is
 migrated forward at the `upcast` seam (backward compatibility). See **H3** below.
 
 ## Verified end-to-end
@@ -107,11 +107,13 @@ The schema is allowed to evolve, and an old log must still replay. The contract,
 - **Additive change is free (forward compatibility).** A new *optional field* is simply not read by
   older code; a wholly new *event kind* is skipped on read (`parse_log`). Neither breaks an old or a
   new log, so additive change is the preferred way to extend. (`unknown_event_kinds_are_skipped…`
-  and `unknown_fields_on_a_known_event_are_ignored` pin both halves.)
-- **Renames are migrated forward at one seam (backward compatibility).** Renaming an event kind or a
-  field is the *only* backward-incompatible change, and `events::upcast` is the single place a legacy
-  spelling is rewritten to today's shape before `parse_event` reads a field — so the rest of the
-  pipeline only ever sees the current schema. Detection is **by shape** (the old spelling's presence),
+  and `unknown_fields_on_a_known_event_are_ignored` pin both halves.) *Fields* evolve **only** this
+  way: a renamed field is, by shape, indistinguishable from a new optional one, so add the new name
+  and keep reading the old — there is no field-rename machinery, by design.
+- **A renamed event kind is migrated forward at one seam (backward compatibility).** Renaming a
+  *kind* is the backward-incompatible change `events::upcast` repairs: it is the single place a
+  legacy kind string is rewritten to today's, before `parse_event` reads a field — so the rest of
+  the pipeline only ever sees current kinds. Detection is **by shape** (the old kind's presence),
   not a stored version counter, so an old log replays with no marker to set and the log format is
   unchanged (zero churn to existing logs, `compact`, or the verified counts above). The seam is
   seeded with the project's own history: the annotation event used to be a first-class "comment", so
@@ -133,9 +135,12 @@ uses: `events::comment_to_events` (one JSON comment → its event(s)) is now the
 truth, shared by `POST /comment` in log mode and `events::from_comments` (the inbox folder).
 `comment`/`question`/`split` → `ElementAnnotated`, `resolve` → `HotspotResolved`, `rename` →
 `ElementRenamed`, `move` (+ optional `swapId`/`swapCol`) → one or two `ElementMoved`, `drop` →
-`ElementRemoved`. The inbox was always a best-effort sidecar, so `from_comments` **skips** a blank,
-unparseable, or `elemId`-less line rather than aborting the migration (the log proper still treats
-malformed JSON as a hard error). Missing `comments.jsonl` is the common no-op case. Covered by
+`ElementRemoved`. The inbox was always a best-effort sidecar, so `from_comments` **skips** a line it
+cannot migrate (unparseable, not an object, `elemId`-less — including a legacy `add`, which in
+non-log mode was only ever an inbox note) rather than aborting the migration (the log proper still
+treats malformed JSON as a hard error). It **returns the count of skipped lines** so `genesis`
+reports them (`… N not migrated from comments.jsonl`) instead of dropping them silently. Missing
+`comments.jsonl` is the common no-op case. Covered by
 `from_comments_folds_a_legacy_inbox_onto_the_genesis_batch` and
 `from_comments_skips_blank_malformed_and_element_less_lines`. Verified live: a
 `genesis sample.model.json` next to a 4-line inbox seeded `24 genesis + 2 folded` (the garbage and

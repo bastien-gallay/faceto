@@ -12,12 +12,13 @@
 //! must still replay. The rules:
 //! - *Additive change is free.* A new optional field is simply not read by older code, and a
 //!   wholly new event kind is skipped on read ([`parse_log`]). Neither breaks an old or a new log,
-//!   so this is the preferred way to extend.
-//! - *Renames are migrated forward at one seam.* Renaming an event kind or a field is the only
-//!   backward-incompatible change; [`upcast`] is the single place a legacy spelling is rewritten
-//!   to today's shape, so the rest of the pipeline only ever sees the current schema. Detection is
-//!   by shape (the old spelling's presence), not a stored version counter — an old log replays
-//!   with nothing to set.
+//!   so this is the preferred way to extend. *Fields* evolve only this way: a renamed field is, by
+//!   shape, indistinguishable from a new optional one, so add the new name and keep reading the old.
+//! - *A renamed event kind is migrated forward at one seam.* Renaming a kind is the
+//!   backward-incompatible change [`upcast`] repairs: it is the single place a legacy kind string
+//!   is rewritten to today's, so the rest of the pipeline only ever sees current kinds. Detection
+//!   is by shape (the old kind's presence), not a stored version counter — an old log replays with
+//!   nothing to set.
 //! - *A kind's meaning is never silently repurposed.* If semantics must change, introduce a new
 //!   kind (additive) and upcast the old one; never redefine an existing kind in place.
 
@@ -126,9 +127,11 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
 
 /// Normalise a raw event object to the current schema before [`parse_event`] matches it — the
 /// single seam where the log's *history* is migrated forward (H3). Additive change needs no entry
-/// here (new fields are ignored, new kinds are skipped on read); only a *rename* of a kind or
-/// field is repaired, so everything downstream sees today's shape. Detection is by shape, not a
-/// version counter, and a current-shape object is returned untouched (borrowed, no allocation).
+/// here (new fields are ignored, new kinds are skipped on read); only a renamed *event kind* is
+/// repaired, so everything downstream sees today's kinds. (A renamed *field* can't be repaired by
+/// shape — an absent key looks like a new optional one — so fields evolve additively instead.)
+/// Detection is by shape, not a version counter, and a current-shape object is returned untouched
+/// (borrowed, no allocation).
 ///
 /// Current rules:
 /// - The annotation event was once a first-class "comment" (see this module's history); a log or
@@ -394,24 +397,34 @@ pub fn comment_to_events(v: &Json) -> Vec<Event> {
 }
 
 /// Fold a legacy `comments.jsonl` into the events it represents — the answer to H5, the second
-/// half of the migration story alongside [`from_model`]. Each line is one stored comment;
+/// half of the migration story alongside [`from_model`]. Each non-blank line is one stored comment;
 /// [`comment_to_events`] translates it. Unlike the log proper, the comments inbox was always a
-/// *best-effort* sidecar, so a blank, unparseable, or element-less line is **skipped** (not a hard
-/// error) — migrating disposable feedback must not abort on one stray line. Append the result
-/// after a model's genesis batch: the batch mints the ids these comments reference, so replaying
-/// the two together reconstructs the board *and* its annotations/resolutions/renames.
-pub fn from_comments(text: &str) -> Vec<Event> {
+/// *best-effort* sidecar, so a line that cannot be migrated is **skipped** (not a hard error) —
+/// migrating disposable feedback must not abort on one stray line. Append the result after a
+/// model's genesis batch: the batch mints the ids these comments reference, so replaying the two
+/// together reconstructs the board *and* its annotations/resolutions/renames.
+///
+/// Returns the events **and the count of non-blank lines that produced none** — unparseable, not
+/// an object, naming no element, or a kind that carries no board change (e.g. a legacy `add`, which
+/// in non-log mode was only ever an inbox note and carries no `elemId` to attach to). The count
+/// lets the caller report the loss instead of dropping those lines silently.
+pub fn from_comments(text: &str) -> (Vec<Event>, usize) {
     let mut out = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Ok(v @ Json::Obj(_)) = json::parse(line) {
-            out.extend(comment_to_events(&v));
+    let mut skipped = 0usize;
+    for (_, line) in jsonl_records(text) {
+        match json::parse(line) {
+            Ok(v @ Json::Obj(_)) => {
+                let evs = comment_to_events(&v);
+                if evs.is_empty() {
+                    skipped += 1;
+                } else {
+                    out.extend(evs);
+                }
+            }
+            _ => skipped += 1,
         }
     }
-    out
+    (out, skipped)
 }
 
 /// Fold a log down to the shortest sequence that replays to the same board: a `LogCompacted`
@@ -667,8 +680,10 @@ mod tests {
             {\"elemId\":\"E1\",\"kind\":\"move\",\"col\":4}\n\
             {\"elemId\":\"H1\",\"kind\":\"resolve\",\"text\":\"settled\"}\n";
 
+        let (folded, skipped) = from_comments(inbox);
+        assert_eq!(skipped, 0); // every line migrated
         let mut log = from_model(&model);
-        log.extend(from_comments(inbox));
+        log.extend(folded);
         let m = replay(&log);
 
         let e1 = m.elements.iter().find(|e| e.id == "E1").unwrap();
@@ -688,11 +703,14 @@ mod tests {
             \n  \n\
             {not json}\n\
             {\"kind\":\"comment\",\"text\":\"orphan, no elemId\"}\n\
+            {\"kind\":\"add\",\"type\":\"event\",\"text\":\"legacy add, no elemId\"}\n\
             {\"elemId\":\"E1\",\"kind\":\"comment\",\"text\":\"kept\"}\n";
-        let evs = from_comments(inbox);
+        let (evs, skipped) = from_comments(inbox);
         assert_eq!(evs.len(), 1);
         assert!(matches!(&evs[0], Event::ElementAnnotated { id, text }
             if id == "E1" && text == "kept"));
+        // Blank lines are not counted; the malformed line, the orphan, and the legacy `add` are.
+        assert_eq!(skipped, 3);
     }
 
     // H3: a renamed event kind from an older schema is migrated forward at the upcast seam, so an

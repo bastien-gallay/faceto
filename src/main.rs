@@ -124,7 +124,7 @@ fn cmd_genesis(model_path: &str) {
     // best-effort: a missing file is the common case (nothing to fold), and the inbox itself
     // tolerates stray lines (see `events::from_comments`).
     let comments_path = dir.join("comments.jsonl");
-    let folded = std::fs::read_to_string(&comments_path)
+    let (folded, skipped) = std::fs::read_to_string(&comments_path)
         .ok()
         .map(|text| events::from_comments(&text))
         .unwrap_or_default();
@@ -135,24 +135,25 @@ fn cmd_genesis(model_path: &str) {
         eprintln!("error writing {}: {e}", out.display());
         exit(1);
     }
-    if folded_len > 0 {
-        println!(
-            "seeded {} events from {} ({} genesis + {} folded from {}) → {}",
-            batch.len(),
-            path.display(),
-            genesis_len,
-            folded_len,
-            comments_path.display(),
-            out.display()
-        );
+    // One message, with an optional inbox clause: how many comment lines folded in, and how many
+    // could not be migrated (reported, never dropped silently).
+    let inbox = if folded_len > 0 || skipped > 0 {
+        let mut clause = format!(" ({genesis_len} genesis + {folded_len} folded");
+        if skipped > 0 {
+            clause.push_str(&format!(", {skipped} not migrated"));
+        }
+        clause.push_str(&format!(" from {})", comments_path.display()));
+        clause
     } else {
-        println!(
-            "seeded {} events from {} → {}",
-            batch.len(),
-            path.display(),
-            out.display()
-        );
-    }
+        String::new()
+    };
+    println!(
+        "seeded {} events from {}{} → {}",
+        batch.len(),
+        path.display(),
+        inbox,
+        out.display()
+    );
 }
 
 /// Fold an event log to a minimal snapshot — a `LogCompacted` marker plus the genesis batch of

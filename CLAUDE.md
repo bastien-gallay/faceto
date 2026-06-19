@@ -77,7 +77,8 @@ one stage:
   latter is the single source of truth shared with `serve.rs`'s `POST /comment`), and `compact`
   (fold a log to a `LogCompacted` marker + genesis snapshot). Schema evolves additively — unknown
   event kinds are skipped and unknown fields ignored on read (forward compatibility) — and a
-  renamed kind/field is migrated forward at the `upcast` read-path seam (backward compatibility).
+  renamed event *kind* is migrated forward at the `upcast` read-path seam (backward compatibility;
+  fields evolve additively, since a renamed field is indistinguishable from a new one by shape).
 - **`src/model.rs`** — the typed board (`Model`, `Element`, `Edge`, `Phase`), `from_json`/`load`,
   and `diff_models`. This is where the board's domain rules live.
 - **`src/render.rs`** — pure layout + SVG generation (`render_svg`) and HTML wrapping
@@ -125,9 +126,9 @@ come from violating them:
 - **`replay` is pure and deterministic** — same log → same `Model`. Keep it free of clocks/IO. New
   `Event` variants must extend `parse_event`/`to_json`/`replay` together (the compiler enforces the
   match), and unknown kinds must keep being skipped on read. **Evolve the schema additively**
-  (new optional field, or new kind) so old and new logs stay mutually replayable; a *rename* is the
-  only backward-incompatible change and belongs in the `upcast` seam (never repurpose a kind's
-  meaning in place).
+  (new optional field, or new kind) so old and new logs stay mutually replayable; a renamed *kind*
+  is the only backward-incompatible change and belongs in the `upcast` seam (a renamed *field*
+  can't be shape-detected, so evolve fields additively; never repurpose a kind's meaning in place).
 - **Ids are minted server-side**, never by the client: `<PREFIX><N>`, one past the highest suffix
   ever added under that lane's prefix in the log (removed-but-not-compacted ids stay reserved),
   computed under the appends lock so concurrent adds can't collide (`mint_id` in `serve.rs`;
