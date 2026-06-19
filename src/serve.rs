@@ -63,9 +63,10 @@ impl Ctx {
         self.cache.lock().unwrap().map.get(version).cloned()
     }
 
-    /// Append one line to `path`, serialized against all other appends so concurrent
-    /// posts cannot interleave (H4). The line and its newline are written in a single
-    /// `write_all`, so even under `O_APPEND` no half-line ever lands.
+    /// Append a text block (one line, or several newline-joined lines for a multi-event action)
+    /// to `path`, serialized against all other appends so concurrent posts cannot interleave
+    /// (H4). The block and its trailing newline are written in a single `write_all`, so even
+    /// under `O_APPEND` no half-line — and no half of a multi-event action — ever lands.
     fn append_line(&self, path: &Path, line: &str) -> std::io::Result<()> {
         let _guard = self.appends.lock().unwrap();
         Self::write_line(path, line)
@@ -84,20 +85,20 @@ impl Ctx {
     /// from the *current* projection (next free `<PREFIX><N>` for this lane) rather than a
     /// stored counter, so the log stays the only durable record. Both the replay and the
     /// write happen under `appends`, so two concurrent adds can never mint the same id.
-    /// Returns the event so the handler can echo the minted id.
+    /// Returns the minted event so the handler can log it.
     fn append_add(
         &self,
         kind: &str,
         label: String,
         col: Option<i64>,
         detail: Option<String>,
-    ) -> std::io::Result<events::Event> {
+    ) -> Result<events::Event, String> {
         let _guard = self.appends.lock().unwrap();
-        let raw = std::fs::read(&self.model_path).unwrap_or_default();
+        // Mint from the *real* current projection. A corrupt/unreadable log must fail the add,
+        // not silently fold to an empty model (which would re-mint E1/C1… and collide).
+        let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
         let text = String::from_utf8_lossy(&raw);
-        let existing = events::parse_log(&text)
-            .map(|e| events::replay(&e))
-            .unwrap_or_default();
+        let existing = events::replay(&events::parse_log(&text)?);
         let ev = events::Event::ElementAdded {
             id: mint_id(kind, &existing),
             kind: kind.to_string(),
@@ -105,7 +106,7 @@ impl Ctx {
             col,
             detail,
         };
-        Self::write_line(&self.model_path, &events::line(&ev))?;
+        Self::write_line(&self.model_path, &events::line(&ev)).map_err(|e| e.to_string())?;
         Ok(ev)
     }
 }
@@ -323,25 +324,20 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                             }
                         }
                     }
-                    Ok(v @ json::Json::Obj(_)) => match comment_to_event(&v) {
-                        Some(ev) => {
-                            if ctx
-                                .append_line(&ctx.model_path, &events::line(&ev))
-                                .is_err()
-                            {
-                                return send(
-                                    &mut out,
-                                    500,
-                                    "application/json",
-                                    b"{\"ok\":false}",
-                                    &[],
-                                );
-                            }
-                            println!("  \u{1F4AC} event: {}", events::line(&ev));
-                            send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
+                    Ok(v @ json::Json::Obj(_)) => {
+                        let evs = comment_to_event(&v);
+                        if evs.is_empty() {
+                            return send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]);
                         }
-                        None => send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]),
-                    },
+                        // Join so a multi-event action (a swap is two `ElementMoved`s) lands as
+                        // consecutive lines under one append — never split by another post.
+                        let block = evs.iter().map(events::line).collect::<Vec<_>>().join("\n");
+                        if ctx.append_line(&ctx.model_path, &block).is_err() {
+                            return send(&mut out, 500, "application/json", b"{\"ok\":false}", &[]);
+                        }
+                        println!("  \u{1F4AC} event: {}", block);
+                        send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
+                    }
                     _ => send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]),
                 };
             }
@@ -442,30 +438,45 @@ fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
         .map_err(|_| 500u16)
 }
 
-/// Map a posted comment to the event it persists, in log mode. `move`/`resolve`/`rename`
-/// carry structural intent (and fold straight into the projection); anything else is a
-/// plain annotation. Returns `None` if the comment names no element.
-fn comment_to_event(v: &json::Json) -> Option<events::Event> {
-    let id = v.get("elemId").and_then(|x| x.as_str())?.to_string();
+/// Map a posted comment to the event(s) it persists, in log mode. `move`/`resolve`/`rename`
+/// carry structural intent (and fold straight into the projection); anything else is a plain
+/// annotation. A `move` that displaces an occupant — the client sends `swapId`/`swapCol` — yields
+/// **two** `ElementMoved`s so the swap round-trips; without that the partner reverts on reload.
+/// Returns an empty vec if the comment names no element (the handler answers 400).
+fn comment_to_event(v: &json::Json) -> Vec<events::Event> {
+    let Some(id) = v.get("elemId").and_then(|x| x.as_str()).map(str::to_string) else {
+        return Vec::new();
+    };
     let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("comment");
     let text = v
         .get("text")
         .and_then(|x| x.as_str())
         .unwrap_or("")
         .to_string();
-    Some(match kind {
-        "move" => events::Event::ElementMoved {
-            id,
-            col: v.get("col").and_then(|x| x.as_f64()).map(|n| n as i64),
-            kind: None,
-        },
-        "resolve" => events::Event::HotspotResolved {
+    let col_at = |k: &str| v.get(k).and_then(|x| x.as_f64()).map(|n| n as i64);
+    match kind {
+        "move" => {
+            let mut evs = vec![events::Event::ElementMoved {
+                id,
+                col: col_at("col"),
+                kind: None,
+            }];
+            if let Some(swap_id) = v.get("swapId").and_then(|x| x.as_str()) {
+                evs.push(events::Event::ElementMoved {
+                    id: swap_id.to_string(),
+                    col: col_at("swapCol"),
+                    kind: None,
+                });
+            }
+            evs
+        }
+        "resolve" => vec![events::Event::HotspotResolved {
             id,
             resolution: text,
-        },
-        "rename" => events::Event::ElementRenamed { id, label: text },
-        _ => events::Event::ElementAnnotated { id, text },
-    })
+        }],
+        "rename" => vec![events::Event::ElementRenamed { id, label: text }],
+        _ => vec![events::Event::ElementAnnotated { id, text }],
+    }
 }
 
 /// Project the log's *feedback* events (annotations, resolutions, renames) back into the
@@ -685,6 +696,51 @@ mod tests {
         assert_eq!(e2.label, "DayStarted");
         assert_eq!(e2.col, Some(2));
         assert!(matches!(&ev2, events::Event::ElementAdded { id, .. } if id == "C1"));
+    }
+
+    #[test]
+    fn move_with_swap_persists_both_stickies() {
+        // A move into an occupied column swaps two stickies; both relocations must be logged,
+        // else the partner reverts on the next replay and the two overlap.
+        let v = json::parse(r#"{"elemId":"E1","kind":"move","col":3,"swapId":"E2","swapCol":1}"#)
+            .unwrap();
+        let evs = comment_to_event(&v);
+        assert_eq!(evs.len(), 2);
+        assert!(
+            matches!(&evs[0], events::Event::ElementMoved { id, col: Some(3), .. } if id == "E1")
+        );
+        assert!(
+            matches!(&evs[1], events::Event::ElementMoved { id, col: Some(1), .. } if id == "E2")
+        );
+    }
+
+    #[test]
+    fn plain_move_is_one_event_and_no_elem_id_is_rejected() {
+        let mv = json::parse(r#"{"elemId":"E1","kind":"move","col":2}"#).unwrap();
+        assert_eq!(comment_to_event(&mv).len(), 1);
+        let orphan = json::parse(r#"{"kind":"comment","text":"hi"}"#).unwrap();
+        assert!(comment_to_event(&orphan).is_empty());
+    }
+
+    #[test]
+    fn append_add_errors_on_a_corrupt_log_rather_than_minting_from_empty() {
+        // A malformed log must fail the add — not fold to an empty model and re-mint E1.
+        let path =
+            std::env::temp_dir().join(format!("faceto-corrupt-{}.jsonl", std::process::id()));
+        std::fs::write(&path, "{ this is not json\n").unwrap();
+        let ctx = Ctx {
+            model_path: path.clone(),
+            comments_path: path.clone(),
+            log_mode: true,
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        };
+        let r = ctx.append_add("event", "X".into(), None, None);
+        let _ = std::fs::remove_file(&path);
+        assert!(r.is_err());
     }
 
     #[test]
