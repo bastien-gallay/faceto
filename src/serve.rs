@@ -2,8 +2,9 @@
 //! demand (so an edited model shows without a restart), an in-page diff against a cached
 //! baseline, and a click→comment channel appended to `comments.jsonl`.
 
-use crate::{json, model, model::Model, render};
+use crate::{events, json, model, model::Model, render};
 use std::collections::{HashMap, VecDeque};
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -21,17 +22,30 @@ struct Cache {
 struct Ctx {
     model_path: PathBuf,
     comments_path: PathBuf,
+    /// When the source is an event log, the model is a projection replayed from it and
+    /// comments are appended to the log as events rather than to `comments.jsonl`.
+    log_mode: bool,
     cache: Mutex<Cache>,
+    /// Serializes appends to the log (H4): concurrent `POST /comment` handlers run on
+    /// separate threads, so without this two events could interleave mid-line. Holding
+    /// this lock around a single `write_all` makes each appended line atomic.
+    appends: Mutex<()>,
 }
 
 impl Ctx {
-    /// The on-disk model and its short content hash, recorded in the recent-model ring.
+    /// The current board and its short content hash, recorded in the recent-model ring.
+    /// In log mode the board is replayed from the event log; otherwise it is the parsed
+    /// model file. Either way the version hashes the raw source bytes, so the cached
+    /// projection is rebuilt only when a new event (or edit) lands.
     fn current(&self) -> Result<(String, Model), String> {
         let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
         let version = fnv12(&raw);
         let text = String::from_utf8_lossy(&raw);
-        let j = json::parse(&text)?;
-        let model = model::from_json(&j);
+        let model = if self.log_mode {
+            events::replay(&events::parse_log(&text)?)
+        } else {
+            model::from_json(&json::parse(&text)?)
+        };
         let mut c = self.cache.lock().unwrap();
         if !c.map.contains_key(&version) {
             c.map.insert(version.clone(), model.clone());
@@ -48,6 +62,83 @@ impl Ctx {
     fn cached(&self, version: &str) -> Option<Model> {
         self.cache.lock().unwrap().map.get(version).cloned()
     }
+
+    /// Append a text block (one line, or several newline-joined lines for a multi-event action)
+    /// to `path`, serialized against all other appends so concurrent posts cannot interleave
+    /// (H4). The block and its trailing newline are written in a single `write_all`, so even
+    /// under `O_APPEND` no half-line — and no half of a multi-event action — ever lands.
+    fn append_line(&self, path: &Path, line: &str) -> std::io::Result<()> {
+        let _guard = self.appends.lock().unwrap();
+        Self::write_line(path, line)
+    }
+
+    /// The atomic write itself — one line + newline in a single `write_all`. Callers must
+    /// already hold `appends`; `append_line` is the locked entry point.
+    fn write_line(path: &Path, line: &str) -> std::io::Result<()> {
+        let mut f = OpenOptions::new().create(true).append(true).open(path)?;
+        let mut bytes = line.as_bytes().to_vec();
+        bytes.push(b'\n');
+        f.write_all(&bytes)
+    }
+
+    /// Mint a fresh id and append an `ElementAdded` — the answer to H6. The id is derived from
+    /// the log's `ElementAdded` history (next free `<PREFIX><N>` for this lane) rather than a
+    /// stored counter, so the log stays the only durable record. Both the read and the write
+    /// happen under `appends`, so two concurrent adds can never mint the same id. Returns the
+    /// minted event so the handler can log it.
+    fn append_add(
+        &self,
+        kind: &str,
+        label: String,
+        col: Option<i64>,
+        detail: Option<String>,
+    ) -> Result<events::Event, String> {
+        let _guard = self.appends.lock().unwrap();
+        // Mint from the *real* log. A corrupt/unreadable log must fail the add, not silently
+        // fold to empty (which would re-mint E1/C1… and collide).
+        let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&raw);
+        let log = events::parse_log(&text)?;
+        let ev = events::Event::ElementAdded {
+            id: mint_id(kind, &log),
+            kind: kind.to_string(),
+            label,
+            col,
+            detail,
+        };
+        Self::write_line(&self.model_path, &events::line(&ev)).map_err(|e| e.to_string())?;
+        Ok(ev)
+    }
+}
+
+/// The single letter each lane stamps onto a freshly minted id. The 8-lane prefixes come from
+/// `render::lane_prefix` (one source of truth, in sync with `LANES`); an off-grammar type falls
+/// back to its first letter, upper-cased.
+fn id_prefix(kind: &str) -> char {
+    render::lane_prefix(kind)
+        .unwrap_or_else(|| kind.chars().next().unwrap_or('Z').to_ascii_uppercase())
+}
+
+/// Next free id for `kind`: `<PREFIX>` one past the highest suffix **ever added** under that
+/// prefix in the log — scanning every `ElementAdded`, including ids since removed but not yet
+/// compacted away. Deriving from the live projection instead would re-mint a removed element's
+/// id while leftover events still reference it (e.g. its annotations in `/comments`). `compact`
+/// folds removed elements out entirely, so reuse after compaction is safe.
+fn mint_id(kind: &str, log: &[events::Event]) -> String {
+    let prefix = id_prefix(kind);
+    let max = log
+        .iter()
+        .filter_map(|ev| match ev {
+            events::Event::ElementAdded { id, .. } => id
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.parse::<u32>().ok()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    // saturating_add: a hand-edited log with a suffix at u32::MAX must not panic (debug) or
+    // wrap to 0 (release) and re-mint a colliding low id.
+    format!("{}{}", prefix, max.saturating_add(1))
 }
 
 pub fn serve(model_path: &Path, port: u16) -> Result<(), String> {
@@ -56,13 +147,16 @@ pub fn serve(model_path: &Path, port: u16) -> Result<(), String> {
         .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
+    let log_mode = events::is_log_path(model_path);
     let ctx = Arc::new(Ctx {
         model_path: model_path.to_path_buf(),
         comments_path: dir.join("comments.jsonl"),
+        log_mode,
         cache: Mutex::new(Cache {
             map: HashMap::new(),
             order: VecDeque::new(),
         }),
+        appends: Mutex::new(()),
     });
 
     // Validate the model up front so a typo fails loudly, not per-request.
@@ -72,11 +166,19 @@ pub fn serve(model_path: &Path, port: u16) -> Result<(), String> {
         "faceto board live → http://127.0.0.1:{}  (Ctrl-C to stop)",
         port
     );
-    println!(
-        "  {} elements · comments → {}",
-        model.elements.len(),
-        ctx.comments_path.display()
-    );
+    if log_mode {
+        println!(
+            "  {} elements · event-sourced · comments append to {}",
+            model.elements.len(),
+            ctx.model_path.display()
+        );
+    } else {
+        println!(
+            "  {} elements · comments → {}",
+            model.elements.len(),
+            ctx.comments_path.display()
+        );
+    }
 
     for stream in listener.incoming() {
         let stream = match stream {
@@ -189,7 +291,11 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
             ),
         },
         ("GET", "/comments") => {
-            let body = read_comments_json(&ctx.comments_path);
+            let body = if ctx.log_mode {
+                comments_from_log(&ctx.model_path)
+            } else {
+                read_comments_json(&ctx.comments_path)
+            };
             send(&mut out, 200, "application/json", body.as_bytes(), &[])
         }
         ("GET", "/health") => send(&mut out, 200, "application/json", b"{\"ok\":true}", &[]),
@@ -199,6 +305,36 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                 return send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]);
             }
             let text = String::from_utf8_lossy(&buf);
+            if ctx.log_mode {
+                return match json::parse(&text) {
+                    Ok(v @ json::Json::Obj(_)) if v.get_str("kind") == Some("add") => {
+                        match add_from_comment(&ctx, &v) {
+                            Ok(ev) => {
+                                println!("  \u{2795} event: {}", events::line(&ev));
+                                send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
+                            }
+                            Err(code) => {
+                                send(&mut out, code, "application/json", b"{\"ok\":false}", &[])
+                            }
+                        }
+                    }
+                    Ok(v @ json::Json::Obj(_)) => {
+                        let evs = comment_to_event(&v);
+                        if evs.is_empty() {
+                            return send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]);
+                        }
+                        // Join so a multi-event action (a swap is two `ElementMoved`s) lands as
+                        // consecutive lines under one append — never split by another post.
+                        let block = evs.iter().map(events::line).collect::<Vec<_>>().join("\n");
+                        if ctx.append_line(&ctx.model_path, &block).is_err() {
+                            return send(&mut out, 500, "application/json", b"{\"ok\":false}", &[]);
+                        }
+                        println!("  \u{1F4AC} event: {}", block);
+                        send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
+                    }
+                    _ => send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]),
+                };
+            }
             match json::parse(&text) {
                 Ok(json::Json::Obj(mut o)) => {
                     if !o.iter().any(|(k, _)| k == "status") {
@@ -207,12 +343,12 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                     o.push(("received".into(), json::Json::Str(now_iso())));
                     let v = json::Json::Obj(o);
                     let line = json::to_string(&v);
-                    if append_line(&ctx.comments_path, &line).is_err() {
+                    if ctx.append_line(&ctx.comments_path, &line).is_err() {
                         return send(&mut out, 500, "application/json", b"{\"ok\":false}", &[]);
                     }
-                    let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("comment");
-                    let elem = v.get("elemId").and_then(|x| x.as_str()).unwrap_or("?");
-                    let body = v.get("text").and_then(|x| x.as_str()).unwrap_or("");
+                    let kind = v.get_str("kind").unwrap_or("comment");
+                    let elem = v.get_str("elemId").unwrap_or("?");
+                    let body = v.get_str("text").unwrap_or("");
                     println!("  \u{1F4AC} [{}] {}: {}", kind, elem, body);
                     send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
                 }
@@ -270,6 +406,119 @@ fn query_get(query: &str, key: &str) -> Option<String> {
     None
 }
 
+/// Handle a `kind:"add"` post: an element-creation command rather than a comment on an
+/// existing one. `type` (the lane) and a non-empty `text` (label) are required; optional
+/// `col`/`detail`. The server mints the id (H6). Returns the HTTP status to fail with: `400` for
+/// a missing/empty type or label, `500` if the append itself fails.
+fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
+    // `type` must be one of the 8 lanes. An off-grammar type would fall back to a first-letter
+    // prefix in `id_prefix` and could mint into a real lane's id space (e.g. "epic"→'E'),
+    // colliding the diff/comment join key — so reject it here rather than letting it through.
+    let kind = v
+        .get_str("type")
+        .filter(|s| render::lane_prefix(s).is_some())
+        .ok_or(400u16)?
+        .to_string();
+    // A blank label would mint a permanent, never-renumbered empty element — refuse it here
+    // (the client modal already guards it, but a direct POST must not slip a blank box in).
+    let label = v
+        .get_str("text")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or(400u16)?
+        .to_string();
+    let col = v.get_i64("col");
+    let detail = v
+        .get_str("detail")
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    ctx.append_add(&kind, label, col, detail)
+        .map_err(|_| 500u16)
+}
+
+/// Map a posted comment to the event(s) it persists, in log mode. `move`/`resolve`/`rename`/`drop`
+/// carry structural intent (and fold straight into the projection); `split`/`question`/`comment`
+/// stay advisory annotations for the next session. A `move` that displaces an occupant — the
+/// client sends `swapId`/`swapCol` — yields **two** `ElementMoved`s so the swap round-trips;
+/// without that the partner reverts on reload. `drop` ("never happened") removes the element (and
+/// its touching edges, via replay). Returns an empty vec if the comment names no element (400).
+fn comment_to_event(v: &json::Json) -> Vec<events::Event> {
+    let Some(id) = v.get_str("elemId").map(str::to_string) else {
+        return Vec::new();
+    };
+    let kind = v.get_str("kind").unwrap_or("comment");
+    let text = v.get_str("text").unwrap_or("").to_string();
+    match kind {
+        "move" => {
+            // A move is a column change; a missing target col would replay as a no-op, so reject
+            // it (empty vec → 400) rather than logging a phantom move.
+            let Some(col) = v.get_i64("col") else {
+                return Vec::new();
+            };
+            let mut evs = vec![events::Event::ElementMoved {
+                id: id.clone(),
+                col: Some(col),
+                kind: None,
+            }];
+            // A swap also relocates the displaced sticky — but only a *different* one, to a real
+            // col. Guard against a self-swap or a swap missing its target col (would no-op).
+            if let (Some(swap_id), Some(swap_col)) = (v.get_str("swapId"), v.get_i64("swapCol")) {
+                if swap_id != id.as_str() {
+                    evs.push(events::Event::ElementMoved {
+                        id: swap_id.to_string(),
+                        col: Some(swap_col),
+                        kind: None,
+                    });
+                }
+            }
+            evs
+        }
+        "resolve" => vec![events::Event::HotspotResolved {
+            id,
+            resolution: text,
+        }],
+        "rename" => vec![events::Event::ElementRenamed { id, label: text }],
+        "drop" => vec![events::Event::ElementRemoved { id }],
+        _ => vec![events::Event::ElementAnnotated { id, text }],
+    }
+}
+
+/// Project the log's *feedback* events (annotations, resolutions, renames) back into the
+/// comment shape the client sidebar expects. Structural events (adds, moves, edges) are
+/// omitted — they already live in the rendered board. Feedback on an element that was later
+/// removed is dropped too, so the sidebar never lists a comment for a box that's off the board.
+fn comments_from_log(path: &Path) -> String {
+    let log = match events::read_log(path) {
+        Ok(e) => e,
+        Err(_) => return "[]".to_string(),
+    };
+    let model = events::replay(&log);
+    let present: std::collections::HashSet<&str> =
+        model.elements.iter().map(|e| e.id.as_str()).collect();
+    let mut items: Vec<String> = Vec::new();
+    for ev in &log {
+        let (id, kind, text) = match ev {
+            events::Event::ElementAnnotated { id, text } => (id, "comment", text.clone()),
+            events::Event::HotspotResolved { id, resolution } => {
+                (id, "resolve", resolution.clone())
+            }
+            events::Event::ElementRenamed { id, label } => (id, "rename", label.clone()),
+            _ => continue,
+        };
+        if !present.contains(id.as_str()) {
+            continue;
+        }
+        let obj = json::Json::Obj(vec![
+            ("elemId".into(), json::Json::Str(id.clone())),
+            ("kind".into(), json::Json::Str(kind.into())),
+            ("text".into(), json::Json::Str(text)),
+            ("status".into(), json::Json::Str("open".into())),
+        ]);
+        items.push(json::to_string(&obj));
+    }
+    format!("[{}]", items.join(","))
+}
+
 fn read_comments_json(path: &Path) -> String {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -286,12 +535,6 @@ fn read_comments_json(path: &Path) -> String {
         }
     }
     format!("[{}]", items.join(","))
-}
-
-fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
-    use std::fs::OpenOptions;
-    let mut f = OpenOptions::new().create(true).append(true).open(path)?;
-    writeln!(f, "{}", line)
 }
 
 /// FNV-1a 64-bit, first 12 hex chars — a stable, dependency-free content version token.
@@ -354,6 +597,244 @@ mod tests {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(10957), (2000, 1, 1));
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
+
+    #[test]
+    fn concurrent_appends_never_interleave() {
+        // H4: many threads append to one log through a shared Ctx; every line must land
+        // whole and intact, with the expected total count and no torn/merged lines.
+        let path = std::env::temp_dir().join(format!("faceto-h4-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let ctx = Arc::new(Ctx {
+            model_path: path.clone(),
+            comments_path: path.clone(),
+            log_mode: true,
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        });
+
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 50;
+        let handles: Vec<_> = (0..THREADS)
+            .map(|t| {
+                let ctx = Arc::clone(&ctx);
+                let path = path.clone();
+                thread::spawn(move || {
+                    for i in 0..PER_THREAD {
+                        // A long payload makes a torn write easy to detect if the lock fails.
+                        let line = format!("t{t}-i{i}-{}", "x".repeat(200));
+                        ctx.append_line(&path, &line).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), THREADS * PER_THREAD);
+        // Every line is whole: matches the exact shape we wrote, nothing spliced.
+        for line in &lines {
+            assert!(
+                line.starts_with('t') && line.ends_with(&"x".repeat(200)),
+                "torn line: {line}"
+            );
+        }
+    }
+
+    fn added(id: &str, kind: &str) -> events::Event {
+        events::Event::ElementAdded {
+            id: id.into(),
+            kind: kind.into(),
+            label: id.into(),
+            col: None,
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn mint_id_picks_next_free_suffix_per_lane() {
+        // H6: ids are type-prefixed and never renumbered — minting takes one past the
+        // highest suffix already used under that prefix, independently per lane.
+        let log = [
+            added("E1", "event"),
+            added("E3", "event"),
+            added("C1", "command"),
+        ];
+        assert_eq!(mint_id("event", &log), "E4"); // past the highest E, not filling the E2 gap
+        assert_eq!(mint_id("command", &log), "C2");
+        assert_eq!(mint_id("hotspot", &log), "H1"); // empty lane starts at 1
+        assert_eq!(mint_id("actor", &log), "X1"); // actor stamps X, not A
+        assert_eq!(mint_id("aggregate", &log), "A1");
+    }
+
+    #[test]
+    fn mint_id_does_not_reuse_a_removed_id() {
+        // A dropped element's ElementAdded stays in the log (until compaction), so its id must
+        // stay reserved — re-minting it would alias leftover events (e.g. its annotations).
+        let log = [
+            added("E1", "event"),
+            added("E2", "event"),
+            events::Event::ElementRemoved { id: "E2".into() },
+        ];
+        assert_eq!(mint_id("event", &log), "E3");
+    }
+
+    #[test]
+    fn drop_maps_to_element_removed() {
+        let v = json::parse(r#"{"elemId":"E2","kind":"drop","text":"never happened"}"#).unwrap();
+        let evs = comment_to_event(&v);
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], events::Event::ElementRemoved { id } if id == "E2"));
+    }
+
+    #[test]
+    fn mint_id_saturates_instead_of_overflowing() {
+        // A hand-edited log with a suffix at u32::MAX must not panic/wrap.
+        let log = [added("E4294967295", "event")];
+        assert_eq!(mint_id("event", &log), "E4294967295");
+    }
+
+    #[test]
+    fn move_without_a_col_is_rejected() {
+        let v = json::parse(r#"{"elemId":"E1","kind":"move"}"#).unwrap();
+        assert!(comment_to_event(&v).is_empty());
+    }
+
+    #[test]
+    fn move_ignores_a_self_swap_or_a_swap_missing_its_col() {
+        // Self-swap → just the primary move; swapId without swapCol → no phantom partner move.
+        let selfswap =
+            json::parse(r#"{"elemId":"E1","kind":"move","col":2,"swapId":"E1","swapCol":0}"#)
+                .unwrap();
+        assert_eq!(comment_to_event(&selfswap).len(), 1);
+        let nocol = json::parse(r#"{"elemId":"E1","kind":"move","col":2,"swapId":"E2"}"#).unwrap();
+        assert_eq!(comment_to_event(&nocol).len(), 1);
+    }
+
+    #[test]
+    fn comments_from_log_skips_a_removed_elements_feedback() {
+        // Annotate E2, then drop it — its comment must not surface for a box off the board.
+        let path = std::env::temp_dir().join(format!("faceto-cfl-{}.jsonl", std::process::id()));
+        let log = [
+            added("E2", "event"),
+            events::Event::ElementAnnotated {
+                id: "E2".into(),
+                text: "is this right?".into(),
+            },
+            events::Event::ElementRemoved { id: "E2".into() },
+        ];
+        std::fs::write(&path, events::to_jsonl(&log)).unwrap();
+        let json = comments_from_log(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(json, "[]");
+    }
+
+    #[test]
+    fn append_add_mints_persists_and_replays() {
+        // The minted id round-trips: append_add writes an ElementAdded that replay folds
+        // back into a real element, and a second add under the same lane increments.
+        let path = std::env::temp_dir().join(format!("faceto-h6-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, events::line(&added("E1", "event")) + "\n").unwrap();
+        let ctx = Ctx {
+            model_path: path.clone(),
+            comments_path: path.clone(),
+            log_mode: true,
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        };
+
+        let ev = ctx
+            .append_add("event", "DayStarted".into(), Some(2), None)
+            .unwrap();
+        assert!(matches!(&ev, events::Event::ElementAdded { id, .. } if id == "E2"));
+        let ev2 = ctx
+            .append_add("command", "start".into(), None, None)
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        let model = events::replay(&events::parse_log(&text).unwrap());
+        let e2 = model.elements.iter().find(|e| e.id == "E2").unwrap();
+        assert_eq!(e2.label, "DayStarted");
+        assert_eq!(e2.col, Some(2));
+        assert!(matches!(&ev2, events::Event::ElementAdded { id, .. } if id == "C1"));
+    }
+
+    #[test]
+    fn move_with_swap_persists_both_stickies() {
+        // A move into an occupied column swaps two stickies; both relocations must be logged,
+        // else the partner reverts on the next replay and the two overlap.
+        let v = json::parse(r#"{"elemId":"E1","kind":"move","col":3,"swapId":"E2","swapCol":1}"#)
+            .unwrap();
+        let evs = comment_to_event(&v);
+        assert_eq!(evs.len(), 2);
+        assert!(
+            matches!(&evs[0], events::Event::ElementMoved { id, col: Some(3), .. } if id == "E1")
+        );
+        assert!(
+            matches!(&evs[1], events::Event::ElementMoved { id, col: Some(1), .. } if id == "E2")
+        );
+    }
+
+    #[test]
+    fn plain_move_is_one_event_and_no_elem_id_is_rejected() {
+        let mv = json::parse(r#"{"elemId":"E1","kind":"move","col":2}"#).unwrap();
+        assert_eq!(comment_to_event(&mv).len(), 1);
+        let orphan = json::parse(r#"{"kind":"comment","text":"hi"}"#).unwrap();
+        assert!(comment_to_event(&orphan).is_empty());
+    }
+
+    #[test]
+    fn append_add_errors_on_a_corrupt_log_rather_than_minting_from_empty() {
+        // A malformed log must fail the add — not fold to an empty model and re-mint E1.
+        let path =
+            std::env::temp_dir().join(format!("faceto-corrupt-{}.jsonl", std::process::id()));
+        std::fs::write(&path, "{ this is not json\n").unwrap();
+        let ctx = Ctx {
+            model_path: path.clone(),
+            comments_path: path.clone(),
+            log_mode: true,
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        };
+        let r = ctx.append_add("event", "X".into(), None, None);
+        let _ = std::fs::remove_file(&path);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn add_with_a_blank_label_is_rejected() {
+        // The label check fires before any file access, so a bare Ctx is enough.
+        let ctx = Ctx {
+            model_path: std::env::temp_dir().join("faceto-nonexistent.jsonl"),
+            comments_path: std::env::temp_dir().join("faceto-nonexistent.jsonl"),
+            log_mode: true,
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        };
+        let v = json::parse(r#"{"kind":"add","type":"event","text":"   "}"#).unwrap();
+        assert_eq!(add_from_comment(&ctx, &v), Err(400));
+
+        // An off-grammar type would mint into a real lane's id space — reject it too.
+        let off = json::parse(r#"{"kind":"add","type":"epic","text":"Saga"}"#).unwrap();
+        assert_eq!(add_from_comment(&ctx, &off), Err(400));
     }
 
     #[test]

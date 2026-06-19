@@ -1,0 +1,77 @@
+{
+  "title": "faceto — event-sourced (comments become the log; the model is a projection)",
+  "lanes": ["actor", "command", "aggregate", "event", "policy", "readmodel", "external", "hotspot"],
+  "phases": [
+    { "label": "interact", "fromCol": 0, "toCol": 1 },
+    { "label": "persist", "fromCol": 2, "toCol": 3 },
+    { "label": "project", "fromCol": 4, "toCol": 4 },
+    { "label": "maintain", "fromCol": 5, "toCol": 5 }
+  ],
+  "elements": [
+    { "id": "X1", "type": "actor", "label": "Author (thinks with an LLM)", "col": 0 },
+    { "id": "X2", "type": "actor", "label": "LLM collaborator", "col": 1 },
+
+    { "id": "A3", "type": "aggregate", "label": "Board", "col": 0 },
+    { "id": "A2", "type": "aggregate", "label": "Element", "col": 1 },
+    { "id": "A1", "type": "aggregate", "label": "EventLog (append-only spine)", "col": 2 },
+
+    { "id": "C1", "type": "command", "label": "open board", "col": 0 },
+    { "id": "C2", "type": "command", "label": "annotate element (click → comment)", "col": 1 },
+    { "id": "C3", "type": "command", "label": "rename element", "col": 1 },
+    { "id": "C4", "type": "command", "label": "move element", "col": 1 },
+    { "id": "C5", "type": "command", "label": "add element", "col": 1 },
+    { "id": "C6", "type": "command", "label": "resolve hotspot", "col": 1 },
+    { "id": "C7", "type": "command", "label": "rebuild model (replay log)", "col": 4 },
+    { "id": "C8", "type": "command", "label": "compact log → snapshot", "col": 5 },
+
+    { "id": "E1", "type": "event", "label": "BoardOpened", "col": 0 },
+    { "id": "E2", "type": "event", "label": "ElementAnnotated (the former comment)", "col": 2 },
+    { "id": "E3", "type": "event", "label": "ElementRenamed", "col": 2 },
+    { "id": "E4", "type": "event", "label": "ElementMoved", "col": 2 },
+    { "id": "E5", "type": "event", "label": "ElementAdded", "col": 2 },
+    { "id": "E6", "type": "event", "label": "HotspotResolved", "col": 2 },
+    { "id": "E7", "type": "event", "label": "EventAppended to log", "col": 3 },
+    { "id": "E8", "type": "event", "label": "ModelProjected (rebuilt from log)", "col": 4 },
+    { "id": "E9", "type": "event", "label": "LogCompacted", "col": 5 },
+
+    { "id": "P1", "type": "policy", "label": "when a command succeeds, append the event to the log", "col": 2 },
+    { "id": "P2", "type": "policy", "label": "when EventAppended, re-project the model", "col": 3 },
+    { "id": "P3", "type": "policy", "label": "when model-version changes, client swaps the SVG", "col": 4 },
+    { "id": "P4", "type": "policy", "label": "when the log grows past threshold, compact", "col": 3 },
+
+    { "id": "R1", "type": "readmodel", "label": "Model (board projection)", "col": 4 },
+    { "id": "R2", "type": "readmodel", "label": "board.svg / index.html", "col": 4 },
+    { "id": "R3", "type": "readmodel", "label": "model-version (content hash)", "col": 4 },
+    { "id": "R4", "type": "readmodel", "label": "element history (its own events)", "col": 4 },
+
+    { "id": "G1", "type": "external", "label": "event-log.jsonl (durable file)", "col": 2 },
+    { "id": "G2", "type": "external", "label": "browser client", "col": 4 },
+    { "id": "G3", "type": "external", "label": "model.json snapshot (derived)", "col": 5 },
+
+    { "id": "H6", "type": "hotspot", "label": "Who mints ids for added elements? (id is still identity)", "col": 1 },
+    { "id": "H3", "type": "hotspot", "label": "Event schema versioning / migration over time", "col": 2 },
+    { "id": "H4", "type": "hotspot", "label": "Concurrency: ordering of appends from multiple clients", "col": 2 },
+    { "id": "H5", "type": "hotspot", "label": "Migration: fold the existing comments.jsonl into the log", "col": 2 },
+    { "id": "H1", "type": "hotspot", "label": "Replay cost: rebuild per request, or cache the projection?", "col": 3, "resolved": true, "detail": "cache the projection: version = fnv12(log bytes); reuse the existing ring keyed on the log hash; replay only on a cache miss; an in-memory snapshot caps replay length", "resolution": "Cache the projection, keyed on the log's content hash. Extends serve.rs's existing rebuild-on-change + ring-cache idiom; replay runs only when a new event lands; snapshotting bounds replay cost." },
+    { "id": "H2", "type": "hotspot", "label": "Is model.json a derived snapshot, or gone entirely?", "col": 5, "resolved": true, "detail": "log-only (pure ES): model.json is derived & gitignored, never hand-edited; the log is the only write path; render & serve replay the log; an existing model.json bootstraps as a genesis batch of ElementAdded events", "resolution": "Gone entirely as a source of truth. event-log.jsonl is the only durable record and only write path; model.json becomes disposable derived output. You append events instead of editing a file." }
+  ],
+  "edges": [
+    ["X1", "C1"], ["C1", "E1"], ["E1", "A3"],
+    ["X1", "C2"], ["X2", "C2"], ["C2", "A2"], ["C2", "E2"],
+    ["X1", "C3"], ["C3", "E3"],
+    ["X1", "C4"], ["C4", "E4"],
+    ["X1", "C5"], ["C5", "E5"],
+    ["X1", "C6"], ["C6", "E6"],
+
+    ["E1", "P1"], ["E2", "P1"], ["E3", "P1"], ["E4", "P1"], ["E5", "P1"], ["E6", "P1"],
+    ["P1", "E7"], ["P1", "A1"], ["E7", "A1"], ["E7", "G1"],
+
+    ["E7", "P2"], ["P2", "E8"], ["C7", "A1"], ["A1", "E8"],
+    ["E8", "R1"], ["R1", "R2"], ["R1", "R3"], ["R1", "R4"],
+    ["R3", "P3"], ["P3", "G2"],
+
+    ["E7", "P4"], ["P4", "C8"], ["C8", "E9"], ["E9", "A1"], ["E9", "G3"],
+
+    ["H6", "C5"], ["H3", "A1"], ["H4", "P1"], ["H5", "G1"], ["H1", "P2"], ["H2", "E9"]
+  ]
+}

@@ -5,17 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
 <style>
-  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #fbfbfd; color: #222; }
+  /* Nameplate: the one serif in the system, for the board title only — the engraved maker's
+     mark on the optical bench (DESIGN.md §3). All system fonts; nothing is downloaded. */
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; font-size: 13px;
+         background: #fbfbfd; color: #222;
+         --nameplate: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif; }
   header { position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center;
            padding: 8px 16px; background: #fff; border-bottom: 1px solid #e6e6ee; }
-  header b { font-size: 14px; }
+  header b { font-family: var(--nameplate); font-size: 20px; font-weight: 700; letter-spacing: .2px; }
   header .spacer { flex: 1; }
   button { font: inherit; padding: 5px 11px; border: 1px solid #cfcfda; border-radius: 7px;
            background: #fff; cursor: pointer; }
   button:hover { background: #f2f2f7; }
-  #status { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: #eef; color: #557; }
+  #status { font-size: 11px; padding: 3px 9px; border-radius: 999px; background: #eef; color: #557; }
   #status.live { background: #e6f7ec; color: #1b7a3d; }
-  #note { font-size: 12px; color: #1b7a3d; }
+  #note { font-size: 11px; color: #1b7a3d; }
   #board { overflow: auto; padding: 12px; }
   .edge, .sticky { transition: opacity .15s ease-out; }
   .edge.hl { stroke: #2f3c45; opacity: 1 !important; stroke-width: 2.4; }
@@ -31,18 +35,18 @@
   dialog::backdrop { background: #0006; }
   .modal-h { padding: 14px 16px; border-bottom: 1px solid #eee; }
   .modal-h .id { font-size: 11px; font-weight: 700; color: #888; }
-  .modal-h .label { font-size: 15px; font-weight: 600; margin-top: 2px; }
-  .modal-h .detail { font-size: 12.5px; color: #5a5a5a; margin-top: 3px; }
+  .modal-h .label { font-size: 16px; font-weight: 600; margin-top: 2px; }
+  .modal-h .detail { font-size: 11px; color: #5a5a5a; margin-top: 3px; }
   .modal-h .detail:empty { display: none; }
   .modal-b { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
   .modal-b select, .modal-b textarea { font: inherit; padding: 8px; border: 1px solid #cfcfda; border-radius: 8px; }
   .modal-b textarea { min-height: 90px; resize: vertical; }
   .modal-f { padding: 12px 16px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid #eee; }
-  .rel { font-size: 12px; color: #666; display: flex; flex-wrap: wrap; gap: 5px; align-items: baseline; }
+  .rel { font-size: 11px; color: #666; display: flex; flex-wrap: wrap; gap: 5px; align-items: baseline; }
   .rel:empty { display: none; }
   .rel .chip { background: #eef1f4; border-radius: 6px; padding: 1px 7px; color: #334; }
   .rel .chip b { color: #1A6FAE; font-weight: 700; }
-  .prior { font-size: 12px; color: #777; }
+  .prior { font-size: 11px; color: #777; }
   .prior div { padding: 3px 0; border-top: 1px dashed #eee; }
 </style>
 </head>
@@ -71,7 +75,7 @@
       <div class="prior" id="m-prior"></div>
       <select id="m-kind">
         <option value="comment">comment</option>
-        <option value="add">add — a new element, described below, from this one</option>
+        <option value="add">add — a new element, just after this one</option>
         <option value="split">split — this is more than one element</option>
         <option value="rename">rename / reword</option>
         <option value="drop">drop — never happened</option>
@@ -79,9 +83,22 @@
         <option value="question">open question</option>
         <option value="resolve">resolve a hotspot</option>
       </select>
+      <select id="m-type" style="display:none" title="which lane the new element belongs to">
+        <option value="event">event</option>
+        <option value="command">command</option>
+        <option value="aggregate">aggregate</option>
+        <option value="policy">policy</option>
+        <option value="readmodel">read model</option>
+        <option value="actor">actor</option>
+        <option value="external">external system</option>
+        <option value="hotspot">hotspot</option>
+      </select>
       <textarea id="m-text" placeholder="short note — the next session reads this and adjusts the model"></textarea>
     </div>
     <div class="modal-f">
+      <button type="button" id="m-left" title="move this sticky one column left (or press ← while hovering it)">Move ←</button>
+      <button type="button" id="m-right" title="move this sticky one column right (or press → while hovering it)">Move →</button>
+      <span class="spacer" style="flex:1"></span>
       <button value="cancel">Cancel</button>
       <button id="m-save" value="save" style="background:#1A6FAE;color:#fff;border-color:#1A6FAE">Save comment</button>
     </div>
@@ -90,8 +107,12 @@
 
 <script>
 const LS_KEY = "facetoComments";
+const CFG = __CONFIG__;   // { colW, stickyW, stickyH } — geometry, injected from render.rs
+// Structural ops change the board itself, not feedback on a box — kept out of the note badges,
+// counts and prior-comment list (and never resynced offline; the log is the truth).
+const STRUCTURAL_KINDS = new Set(["move", "add", "drop"]);
 let serverLive = false;
-let comments = [];        // {elemId, kind, text, ts}
+let comments = [];        // {elemId, kind, text, ts}  (kind:"move" carries col/prevCol/swap…)
 let shownVersion = null;  // model hash the board currently displays — the diff baseline
 let diffing = false;
 
@@ -104,6 +125,104 @@ const liveVersion = async () => {
   return null;
 };
 
+// ---- moving stickies left / right -----------------------------------------
+// A move never touches edges' endpoints (identity is `id`); it only shifts a sticky along the
+// shared column axis. Persistence is a kind:"move" comment in comments.jsonl — the model file is
+// left untouched for now — and the client replays those comments so a move survives reloads.
+let hoverId = null;                              // sticky under the cursor, target of ← / →
+let baseCol = {}, baseCx = {}, cyOf = {}, kindOf = {}, colOf = {};
+
+// Snapshot the server-rendered layout: each sticky's authored column, lane and centre.
+function readLayout() {
+  baseCol = {}; baseCx = {}; cyOf = {}; kindOf = {}; colOf = {};
+  document.querySelectorAll(".sticky").forEach((g) => {
+    baseCol[g.id] = +g.dataset.col;
+    baseCx[g.id] = +g.dataset.cx;
+    cyOf[g.id] = +g.dataset.cy;
+    kindOf[g.id] = g.dataset.kind;
+    colOf[g.id] = +g.dataset.col;
+  });
+}
+
+const centerOf = (id) => [baseCx[id] + (colOf[id] - baseCol[id]) * CFG.colW, cyOf[id]];
+
+// Port of render.rs `edge_path`: a smooth connector anchored on the boxes' facing edges.
+function edgePath([x1, y1], [x2, y2]) {
+  const W = CFG.stickyW, H = CFG.stickyH, f = (n) => n.toFixed(1);
+  if (Math.abs(x2 - x1) < W) {
+    const s = y2 >= y1 ? 1 : -1, ay1 = y1 + s * H / 2, ay2 = y2 - s * H / 2, my = (ay1 + ay2) / 2;
+    return `M${f(x1)},${f(ay1)} C${f(x1)},${f(my)} ${f(x2)},${f(my)} ${f(x2)},${f(ay2)}`;
+  }
+  const s = x2 >= x1 ? 1 : -1, ax1 = x1 + s * W / 2, ax2 = x2 - s * W / 2, mx = (ax1 + ax2) / 2;
+  return `M${f(ax1)},${f(y1)} C${f(mx)},${f(y1)} ${f(mx)},${f(y2)} ${f(ax2)},${f(y2)}`;
+}
+
+// Translate every sticky to its current column and redraw the connectors that touch it.
+function applyLayout() {
+  document.querySelectorAll(".sticky").forEach((g) => {
+    if (colOf[g.id] === undefined) return;
+    const dx = (colOf[g.id] - baseCol[g.id]) * CFG.colW;
+    g.setAttribute("transform", dx ? `translate(${dx},0)` : "");
+  });
+  document.querySelectorAll(".edge").forEach((p) => {
+    const s = p.dataset.src, d = p.dataset.dst;
+    if (colOf[s] === undefined || colOf[d] === undefined) return;
+    p.setAttribute("d", edgePath(centerOf(s), centerOf(d)));
+  });
+}
+
+// Rebuild positions from the authored layout + every move comment, in order. Idempotent: each
+// move carries an *absolute* target col, so re-applying the same comment converges (no drift).
+// In log mode this is a no-op — the server folds moves into the board via `ElementMoved` and
+// `/comments` returns feedback only — so the loop iterates nothing; it still drives the legacy
+// `comments.jsonl` mode, where the board SVG is the authored layout and moves ride on top.
+function replayMoves() {
+  for (const id in baseCol) colOf[id] = baseCol[id];
+  for (const c of comments) {
+    if (c.kind !== "move" || colOf[c.elemId] === undefined) continue;
+    colOf[c.elemId] = c.col;
+    if (c.swapId !== undefined && colOf[c.swapId] !== undefined) colOf[c.swapId] = c.swapCol;
+  }
+  applyLayout();
+}
+
+// Nudge a sticky one column. Within its lane an occupied target column means the two swap.
+function doMove(id, dir) {
+  if (colOf[id] === undefined) return;
+  const from = colOf[id], target = from + (dir === "left" ? -1 : 1);
+  if (target < 0) { note("already at the left edge"); return; }
+  let swapId = null;
+  for (const oid in colOf) {
+    if (oid !== id && kindOf[oid] === kindOf[id] && colOf[oid] === target) { swapId = oid; break; }
+  }
+  colOf[id] = target;
+  if (swapId) colOf[swapId] = from;
+  applyLayout();
+  const c = { elemId: id, kind: "move", col: target, prevCol: from,
+              text: `moved ${dir} to col ${target}`, ts: new Date().toISOString(), status: "open" };
+  if (swapId) { c.swapId = swapId; c.swapCol = from; c.swapPrevCol = target; }
+  note(swapId ? `swapped with ${swapId}` : `moved ${dir}`);
+  postComment(c);
+}
+
+// Persist a comment (move or feedback): POST when live, else stash in localStorage. Offline
+// stash is best-effort and one-way — it is NOT replayed to the server on reconnect (the next
+// live `load()` replaces `comments` with the server's), so structural ops made offline (`add`,
+// `move`) never reach the log. Export keeps them; the user is told so below.
+async function postComment(c) {
+  let posted = false;
+  try {
+    const r = await fetch("/comment", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(c) });
+    posted = r.ok;
+  } catch {}
+  if (posted) { await load(); return; }
+  const a = lsGet(); a.push(c); lsSet(a); comments = a; replayMoves(); paint();
+  // add/drop can't reach the board offline (no server to mint/remove); move is applied locally.
+  note((c.kind === "add" || c.kind === "drop")
+    ? `offline — ${c.kind} saved locally (not applied to the board; Export to keep it)`
+    : "offline — saved locally (Export to keep)");
+}
+
 // Reload: re-pull comments, and when the model changed under us, redraw the board with the
 // changes-since-you-last-looked overlay (diffed against the version currently on screen).
 async function load() {
@@ -112,10 +231,11 @@ async function load() {
     const r = await fetch("/comments", { cache: "no-store" });
     if (r.ok) { comments = await r.json(); serverLive = true; }
   } catch {}
-  if (!serverLive) { comments = lsGet(); paint(); return; }
+  if (!serverLive) { comments = lsGet(); replayMoves(); paint(); return; }
   const live = await liveVersion();
   if (live && shownVersion && live !== shownVersion) await showDiff(shownVersion, live);
   else if (shownVersion === null) shownVersion = live;  // baseline the initial server-rendered board
+  replayMoves();
   paint();
 }
 
@@ -141,7 +261,7 @@ async function showDiff(base, live) {
 async function showPlain() {
   try {
     const r = await fetch("/board.svg", { cache: "no-store" });
-    if (r.ok) { $("#board").innerHTML = await r.text(); bindStickies(); }
+    if (r.ok) { $("#board").innerHTML = await r.text(); bindStickies(); replayMoves(); }
   } catch {}
   diffing = false;
   $("#plain").style.display = "none";
@@ -172,10 +292,11 @@ function hoverOff() {
 }
 function bindStickies() {
   buildGraph();
+  readLayout();
   document.querySelectorAll(".sticky").forEach((g) => {
     g.onclick = () => openModal(g);
-    g.onmouseenter = () => hoverOn(g.id);
-    g.onmouseleave = hoverOff;
+    g.onmouseenter = () => { hoverId = g.id; hoverOn(g.id); };
+    g.onmouseleave = () => { if (hoverId === g.id) hoverId = null; hoverOff(); };
   });
 }
 
@@ -183,21 +304,31 @@ function paint() {
   $("#status").textContent = serverLive ? "● live (server)" : "○ offline (localStorage)";
   $("#status").className = serverLive ? "live" : "";
   document.querySelectorAll(".sticky").forEach((g) => g.classList.remove("has-note"));
+  // Structural ops (move/add/drop) aren't feedback on an existing box — keep them out of the note
+  // badges, counts and prior-comment list. (Offline, a stashed `add`/`drop` lives only in
+  // localStorage until export; there is no element to ring — or it's gone — see postComment.)
+  const feedback = comments.filter((c) => !STRUCTURAL_KINDS.has(c.kind));
   const byEl = {};
-  for (const c of comments) (byEl[c.elemId] ||= []).push(c);
+  for (const c of feedback) if (c.elemId) (byEl[c.elemId] ||= []).push(c);
   for (const id in byEl) document.getElementById(id)?.classList.add("has-note");
   // A resolve comment quiets its hotspot right away (model `resolved:true` does it durably).
-  for (const c of comments) if (c.kind === "resolve") document.getElementById(c.elemId)?.classList.add("resolved");
-  const open = comments.filter((c) => c.status !== "resolved").length;
-  $("#count").textContent = comments.length ? `${comments.length} comment(s), ${open} open` : "";
+  for (const c of feedback) if (c.kind === "resolve") document.getElementById(c.elemId)?.classList.add("resolved");
+  const open = feedback.filter((c) => c.status !== "resolved").length;
+  $("#count").textContent = feedback.length ? `${feedback.length} comment(s), ${open} open` : "";
   window._byEl = byEl;
 }
 
 const PLACEHOLDERS = {
-  add: "describe the new element: type (event/command/aggregate/policy/readmodel/external/hotspot) + label + where, relative to this one — e.g. event 'ItemDeleted' right after this",
+  add: "label for the new element — e.g. ItemDeleted",
 };
-const setPlaceholder = () =>
-  ($("#m-text").placeholder = PLACEHOLDERS[$("#m-kind").value] || "short note — the next session reads this and adjusts the model");
+// `add` mints a real element (it needs a lane + a label), so reveal the type select and
+// retitle the save button; every other kind is a note on the element under the cursor.
+function setKind() {
+  const adding = $("#m-kind").value === "add";
+  $("#m-type").style.display = adding ? "" : "none";
+  $("#m-save").textContent = adding ? "Add element" : "Save comment";
+  $("#m-text").placeholder = PLACEHOLDERS[$("#m-kind").value] || "short note — the next session reads this and adjusts the model";
+}
 
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 function openModal(g) {
@@ -213,29 +344,48 @@ function openModal(g) {
   $("#m-rel").innerHTML = rel ? "connected to: " + rel : "";
   $("#m-text").value = "";
   $("#m-kind").value = "comment";
-  setPlaceholder();
+  $("#m-type").value = "event";
+  setKind();
   const prior = (window._byEl?.[id] || []).map((c) => `<div>[${esc(c.kind)}] ${esc(c.text)}</div>`).join("");
   $("#m-prior").innerHTML = prior ? "<b>prior:</b>" + prior : "";
   $("#modal").returnValue = "cancel";
   $("#modal").showModal();
   window._activeId = id;
+  window._activeCol = +g.dataset.col;   // a new element added "from this one" lands just after it
 }
 
-$("#m-kind").addEventListener("change", setPlaceholder);
+$("#m-kind").addEventListener("change", setKind);
 bindStickies();
 
-$("#modal").addEventListener("close", async () => {
+$("#modal").addEventListener("close", () => {
   if ($("#modal").returnValue !== "save") return;
   const text = $("#m-text").value.trim();
   if (!text) return;
-  const c = { elemId: window._activeId, kind: $("#m-kind").value, text, ts: new Date().toISOString(), status: "open" };
-  let posted = false;
-  try {
-    const r = await fetch("/comment", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(c) });
-    posted = r.ok;
-  } catch {}
-  if (posted) { await load(); }
-  else { const a = lsGet(); a.push(c); lsSet(a); comments = a; paint(); }
+  const ts = new Date().toISOString();
+  // `add` is a structural command: the server mints the id and folds it into the board, so it
+  // carries a lane (`type`) and `col` instead of an `elemId`. Everything else annotates the box.
+  if ($("#m-kind").value === "add") {
+    // `??` only guards null/undefined, not NaN (a sticky with no numeric data-col), so test
+    // finiteness explicitly — otherwise col would serialize to JSON null and misplace the element.
+    const base = Number.isFinite(window._activeCol) ? window._activeCol : 0;
+    postComment({ kind: "add", type: $("#m-type").value, text, col: base + 1, ts, status: "open" });
+    return;
+  }
+  postComment({ elemId: window._activeId, kind: $("#m-kind").value, text, ts, status: "open" });
+});
+
+// Move buttons close the modal first so the nudge is visible (the backdrop dims the board).
+$("#m-left").addEventListener("click", () => { const id = window._activeId; $("#modal").close("move"); doMove(id, "left"); });
+$("#m-right").addEventListener("click", () => { const id = window._activeId; $("#modal").close("move"); doMove(id, "right"); });
+
+// Hover a sticky and press ← / → to nudge it a column — the keyboard-fast path.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  if ($("#modal").open || !hoverId) return;
+  const ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
+  e.preventDefault();
+  doMove(hoverId, e.key === "ArrowLeft" ? "left" : "right");
 });
 
 $("#refresh").addEventListener("click", load);

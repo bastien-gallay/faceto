@@ -36,15 +36,16 @@ colors:
   diff-removed: "#EB5757"
   diff-changed: "#E59500"
 typography:
-  title:
-    fontFamily: "-apple-system, Segoe UI, Roboto, sans-serif"
+  # Nameplate — the one serif, board title only (HTML header + SVG). All system fonts; nothing downloaded.
+  nameplate:
+    fontFamily: "'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif"
     fontSize: "20px"
     fontWeight: 700
     lineHeight: 1.2
-    letterSpacing: "normal"
+    letterSpacing: "0.2px"
   headline:
     fontFamily: "-apple-system, Segoe UI, Roboto, sans-serif"
-    fontSize: "15px"
+    fontSize: "16px"
     fontWeight: 600
     lineHeight: 1.3
   body:
@@ -52,7 +53,12 @@ typography:
     fontSize: "13px"
     fontWeight: 400
     lineHeight: 1.45
-  label:
+  caption:
+    fontFamily: "-apple-system, Segoe UI, Roboto, sans-serif"
+    fontSize: "11px"
+    fontWeight: 600
+    lineHeight: 1.3
+  lane-label:
     fontFamily: "-apple-system, Segoe UI, Roboto, sans-serif"
     fontSize: "12px"
     fontWeight: 600
@@ -153,7 +159,8 @@ a candy decoration, and the chrome around it stays sober to prove the point.
 
 - Instrument-grey, near-white bench (`#fbfbfd` / `#ffffff`); colour is reserved for the model.
 - A single accent — ink-blue `#1A6FAE`, the "live pen" — used only where you are acting.
-- One sans family at fixed (not fluid) sizes; density without noise.
+- One working sans at fixed (not fluid) sizes, plus a serif nameplate for the title alone; density
+  without noise.
 - Hover-to-focus as the primary interaction metaphor; motion conveys state, never spectacle.
 - Colour is never the only signal: lane position, label, and corner shape carry meaning too.
 
@@ -217,25 +224,42 @@ redundant non-colour cue (badge, shape, position, opacity) so a colour-blind use
 
 ## 3. Typography
 
-**Display / Body / Label Font:** `-apple-system, Segoe UI, Roboto, sans-serif` — a single system
-sans, identical in the HTML chrome and the SVG board.
+**Nameplate Font (board title only):** `'Iowan Old Style', 'Palatino Linotype', Palatino,
+'Book Antiqua', Georgia, serif` — a refined **system serif**. **Working Font (everything else):**
+`-apple-system, Segoe UI, Roboto, sans-serif`, identical in the HTML chrome and the SVG board.
+Both are system stacks: nothing is downloaded, so the board still installs and runs offline.
 
-**Character:** One well-tuned native sans carries the whole instrument — board title, lane
-captions, sticky labels, controls, and modal copy. No display/body pairing; a product tool earns
-trust through consistency, not contrast. Sizes are **fixed px**, not fluid clamps: users read at a
-consistent DPI and a sticky label that shrank with the viewport would read as broken, not elegant.
+**Character:** The instrument carries exactly one engraved mark — its **nameplate**, the board
+title, set in a precise system serif in the header bar *and* the SVG. Like the maker's plate on an
+optical bench, it is the one place a second face appears; it gives the page a true typographic
+hierarchy without dressing the chrome. Everything that does work — lane captions, sticky labels,
+controls, modal copy — stays in one well-tuned native sans, because the *working surface* earns
+trust through consistency. The pairing is deliberately lopsided: one serif word, a whole sans
+instrument. Sizes are **fixed px**, not fluid clamps: users read at a consistent DPI and a sticky
+label that shrank with the viewport would read as broken, not elegant.
 
 ### Hierarchy
 
-- **Title** (700, 20px in-SVG / 14px header bar, ~1.2): the board name. The single piece of
-  emphatic type; everything else stays calm beneath it.
-- **Headline** (600, 15px): the focused element's label in the comment modal.
-- **Body** (400, ~13px): controls, modal prose, comment text, detail/subtitle lines.
-- **Label** (600, 12px): lane and phase captions in `#90a4ae`; the modal element label.
-- **Micro** (700, 9px, 0.6 opacity): the element `id` watermark in the corner of each sticky, and
-  the 9.5px detail second line. Present for reference, never shouting.
+A four-step scale (sans) with the serif nameplate above it; steps step by roughly 1.25 so the
+levels read as distinct, not as near-duplicate sizes.
+
+- **Nameplate** (serif, 700, 20px, 0.2px tracking): the board name, in the SVG and the header bar.
+  The single piece of emphatic type and the only serif; everything else stays calm beneath it.
+- **Headline** (sans, 600, 16px): the focused element's label in the comment modal.
+- **Body** (sans, 400, 13px): controls, modal prose, comment text — the page base size.
+- **Caption** (sans, 600, 11px): the status pill, notes, prior comments, relationship chips, the
+  modal `id`, and detail lines — quiet supporting copy.
+- **Lane label** (sans, 600, 12px, `#90a4ae`): lane and phase captions on the board; quiet enough
+  to read as scaffolding.
+- **Micro** (sans, 700, 9px, 0.6 opacity): the element `id` watermark in the corner of each
+  sticky, and the 9.5px detail second line. Present for reference, never shouting.
 
 ### Named Rules
+
+**The One-Serif Rule.** The serif nameplate is for the **board title and nothing else** — it is the
+engraved maker's mark, not a heading style. Section labels, modal headlines, captions, and every
+control stay in the working sans. A second serif word anywhere on the working surface is wrong; the
+hierarchy belongs to size and weight, not to spreading the display face.
 
 **The Fixed-Scale Rule.** No `clamp()`, no fluid headings. The board is an instrument read at
 1:1; type sizes are pixel-exact and stable across viewports. Responsiveness is structural (the
@@ -318,7 +342,8 @@ nudges the sticky one column — the keyboard-fast path.
 - **Do** give every lane/state a redundant non-colour signal — position, label, corner shape, or
   badge (the Three-Signal Rule). The hotspot's squared corner and the diff badges (`+ – ≠ →`) are
   the model to follow.
-- **Do** use fixed px type sizes and a single system sans across HTML and SVG.
+- **Do** use fixed px type sizes on a ~1.25 scale, the system sans for the whole working surface,
+  and the serif nameplate for the board title alone (across HTML and SVG).
 - **Do** convey depth with hairline rules (`#e0e0e6`) and 2% tonal bands; reserve the lone shadow
   (`0 18px 50px #0003`) for the modal.
 - **Do** keep exactly one primary action (the ink-blue Save) per context; everything else is a

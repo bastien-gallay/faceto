@@ -49,6 +49,15 @@ impl Json {
             None
         }
     }
+    /// `get(key)` then `as_str` — the "read a string field" shorthand.
+    pub fn get_str(&self, key: &str) -> Option<&str> {
+        self.get(key).and_then(Json::as_str)
+    }
+    /// `get(key)` as an integer. JSON has one number type; board coordinates are integers, so
+    /// the `f64` is truncated toward zero.
+    pub fn get_i64(&self, key: &str) -> Option<i64> {
+        self.get(key).and_then(Json::as_f64).map(|n| n as i64)
+    }
 }
 
 // ---- parser ---------------------------------------------------------------

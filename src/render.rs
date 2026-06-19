@@ -19,6 +19,19 @@ const LANES: [&str; 8] = [
     "hotspot",
 ];
 
+/// Each lane's id-mint prefix, index-aligned with `LANES`. `actor`/`aggregate` both start with
+/// 'a', so actor takes 'X' and external takes 'G'. This is the single source of truth for
+/// prefixes — `serve::id_prefix` reads it rather than re-listing the grammar.
+const LANE_PREFIXES: [char; 8] = ['X', 'C', 'A', 'E', 'P', 'R', 'G', 'H'];
+
+/// The id prefix for a lane `type`, or `None` if it is not one of the 8 lanes.
+pub fn lane_prefix(kind: &str) -> Option<char> {
+    LANES
+        .iter()
+        .position(|&l| l == kind)
+        .map(|i| LANE_PREFIXES[i])
+}
+
 fn colour(kind: &str) -> &'static str {
     match kind {
         "actor" => "#FCEFA1",
@@ -307,8 +320,11 @@ pub fn render_svg(model: &Model) -> String {
         "<rect width=\"{}\" height=\"{}\" fill=\"#fbfbfd\"/>",
         width, height
     ));
+    // The board title is the instrument's engraved nameplate: a refined system serif, the one
+    // place a second font family appears (see DESIGN.md §3). Everything else stays the SVG sans.
     p.push(format!(
-        "<text x=\"20\" y=\"34\" font-size=\"20\" font-weight=\"700\" fill=\"#222\">{}</text>",
+        "<text x=\"20\" y=\"34\" font-size=\"20\" font-weight=\"700\" fill=\"#222\" \
+         font-family=\"'Iowan Old Style','Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif\">{}</text>",
         esc(&model.title)
     ));
 
@@ -474,12 +490,19 @@ pub fn render_svg(model: &Model) -> String {
         if let Some(s) = status {
             cls.push_str(&format!(" diff-{}", s));
         }
+        // data-kind / data-col / data-cx / data-cy let the client replay a move (translate the
+        // group, recompute its edges) without a server round-trip — see template.html.
         p.push(format!(
-            "<g id=\"{}\" class=\"{}\" data-hero=\"{}\" data-detail=\"{}\" style=\"cursor:pointer\"{}>",
+            "<g id=\"{}\" class=\"{}\" data-hero=\"{}\" data-detail=\"{}\" data-kind=\"{}\" \
+             data-col=\"{}\" data-cx=\"{:.1}\" data-cy=\"{:.1}\" style=\"cursor:pointer\"{}>",
             esc(&e.id),
             cls,
             esc(&hero),
             esc(&detail),
+            esc(&e.kind),
+            e.col.unwrap(),
+            cx,
+            cy,
             g_op
         ));
         if let (Some(_), Some(meta)) = (status, &diff_meta) {
@@ -637,9 +660,16 @@ pub fn render_svg(model: &Model) -> String {
 }
 
 pub fn render_html(svg: &str, title: &str) -> String {
+    // The client reuses these geometry constants to re-place a moved sticky and redraw its
+    // edges in the browser — keep render.rs the single source of truth for them.
+    let cfg = format!(
+        "{{\"colW\":{},\"stickyW\":{},\"stickyH\":{}}}",
+        COL_W, STICKY_W, STICKY_H
+    );
     HTML_TEMPLATE
         .replace("__TITLE__", &esc(title))
         .replace("__SVG__", svg)
+        .replace("__CONFIG__", &cfg)
 }
 
 const HTML_TEMPLATE: &str = include_str!("template.html");
@@ -674,6 +704,67 @@ mod tests {
             split_label("Plain", None),
             ("Plain".to_string(), String::new())
         );
+    }
+
+    // The client's instant-move replay reads col / lane / centre off the sticky group; if these
+    // attributes ever stop being emitted, moves silently break. Pin them here.
+    fn one_event_at_col(col: i64) -> Model {
+        Model {
+            title: "t".into(),
+            phases: vec![],
+            elements: vec![Element {
+                id: "E1".into(),
+                kind: "event".into(),
+                label: "L".into(),
+                col: Some(col),
+                detail: None,
+                resolved: false,
+                x: 0.0,
+                diff: None,
+                was: None,
+            }],
+            edges: vec![],
+            diff_meta: None,
+        }
+    }
+
+    #[test]
+    fn lane_prefix_is_aligned_with_lanes_and_total() {
+        assert_eq!(LANES.len(), LANE_PREFIXES.len());
+        assert!(LANES.iter().all(|l| lane_prefix(l).is_some()));
+        assert_eq!(lane_prefix("actor"), Some('X')); // not 'A' — aggregate owns that
+        assert_eq!(lane_prefix("aggregate"), Some('A'));
+        assert_eq!(lane_prefix("hotspot"), Some('H'));
+        assert_eq!(lane_prefix("not-a-lane"), None);
+    }
+
+    #[test]
+    fn the_add_element_picker_offers_every_lane() {
+        // The client's <select id="m-type"> is a hand-written copy of the lane grammar; pin it to
+        // LANES so a new/renamed lane can't silently drop out of the "add element" picker.
+        for lane in LANES {
+            assert!(
+                HTML_TEMPLATE.contains(&format!("<option value=\"{lane}\"")),
+                "template.html #m-type is missing lane `{lane}`"
+            );
+        }
+    }
+
+    #[test]
+    fn sticky_group_exposes_layout_data_attributes() {
+        let svg = render_svg(&one_event_at_col(2));
+        assert!(svg.contains("data-kind=\"event\""));
+        assert!(svg.contains("data-col=\"2\""));
+        assert!(svg.contains("data-cx="));
+        assert!(svg.contains("data-cy="));
+    }
+
+    #[test]
+    fn render_html_injects_the_geometry_config() {
+        let html = render_html("<svg></svg>", "t");
+        assert!(!html.contains("__CONFIG__"));
+        assert!(html.contains("\"colW\":210"));
+        assert!(html.contains("\"stickyW\":176"));
     }
 
     #[test]
