@@ -2,7 +2,8 @@
 
 # Event-sourcing inversion — status & handoff
 
-Status: **in progress** · Branch: `feat/event-sourced-log` · Last updated: 2026-06-18
+Status: **feature-complete (all hotspots H1–H6 resolved); pending merge** · Branch:
+`feat/event-sourced-log` · Last updated: 2026-06-19
 
 ## The inversion (what & why)
 
@@ -59,7 +60,8 @@ LogCompacted {folded}              # provenance marker from `compact`; no-op on 
 ```
 
 Read policy: blank lines skipped; malformed JSON is a hard error; **unknown event kinds are
-skipped** (forward compatibility — partial answer to H3).
+skipped** and **unknown fields are ignored** (forward compatibility); a renamed kind/field is
+migrated forward at the `upcast` seam (backward compatibility). See **H3** below.
 
 ## Verified end-to-end
 
@@ -96,6 +98,30 @@ from). The server mints the id, the model-version bumps, and the existing reload
 shows the new sticky as *added*. Offline, the add stashes to `localStorage` like any other
 feedback (no mint until back online). `/comments` omits `ElementAdded`, so a structural add
 never shows up as a sidebar comment. Verified live: an `add` of a `readmodel` minted `R2`.
+
+### H3 — event schema versioning / migration over time → **done.**
+
+The schema is allowed to evolve, and an old log must still replay. The contract, now codified in
+`events.rs`'s module docs and enforced by the read path:
+
+- **Additive change is free (forward compatibility).** A new *optional field* is simply not read by
+  older code; a wholly new *event kind* is skipped on read (`parse_log`). Neither breaks an old or a
+  new log, so additive change is the preferred way to extend. (`unknown_event_kinds_are_skipped…`
+  and `unknown_fields_on_a_known_event_are_ignored` pin both halves.)
+- **Renames are migrated forward at one seam (backward compatibility).** Renaming an event kind or a
+  field is the *only* backward-incompatible change, and `events::upcast` is the single place a legacy
+  spelling is rewritten to today's shape before `parse_event` reads a field — so the rest of the
+  pipeline only ever sees the current schema. Detection is **by shape** (the old spelling's presence),
+  not a stored version counter, so an old log replays with no marker to set and the log format is
+  unchanged (zero churn to existing logs, `compact`, or the verified counts above). The seam is
+  seeded with the project's own history: the annotation event used to be a first-class "comment", so
+  a log/tool still emitting `CommentAdded` / `Comment` is read as `ElementAnnotated`
+  (`legacy_comment_kind_upcasts_to_element_annotated`).
+- **A kind's meaning is never silently repurposed.** If semantics must change, add a *new* kind
+  (additive) and upcast the old one; never redefine an existing kind in place.
+
+This subsumes the earlier "partial answer to H3" (unknown kinds skipped): forward *and* backward
+compatibility now have a defined rule and a test.
 
 ### H5 — fold the existing `comments.jsonl` into the log → **done.**
 

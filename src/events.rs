@@ -6,10 +6,24 @@
 //! the only write path; `model.json` becomes derived output. Each log line is one JSON
 //! object discriminated by an `"event"` field; [`replay`] folds a sequence into a `Model`,
 //! and [`from_model`] turns an existing model file into a genesis batch (the migration and
-//! bootstrap path). Unknown event kinds are skipped on read, so the schema can grow forward.
+//! bootstrap path).
+//!
+//! **Schema evolution (H3).** The on-disk schema is allowed to grow over time, and an old log
+//! must still replay. The rules:
+//! - *Additive change is free.* A new optional field is simply not read by older code, and a
+//!   wholly new event kind is skipped on read ([`parse_log`]). Neither breaks an old or a new log,
+//!   so this is the preferred way to extend.
+//! - *Renames are migrated forward at one seam.* Renaming an event kind or a field is the only
+//!   backward-incompatible change; [`upcast`] is the single place a legacy spelling is rewritten
+//!   to today's shape, so the rest of the pipeline only ever sees the current schema. Detection is
+//!   by shape (the old spelling's presence), not a stored version counter — an old log replays
+//!   with nothing to set.
+//! - *A kind's meaning is never silently repurposed.* If semantics must change, introduce a new
+//!   kind (additive) and upcast the old one; never redefine an existing kind in place.
 
 use crate::json::{self, Json};
 use crate::model::{Edge, Element, Model, Phase};
+use std::borrow::Cow;
 use std::path::Path;
 
 /// One fact in the log. Variants mirror the board operations a session performs; the
@@ -104,8 +118,44 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
     Ok(events)
 }
 
-/// One JSON object → an `Event`, or `None` for an unknown/ill-shaped event kind.
+/// Normalise a raw event object to the current schema before [`parse_event`] matches it — the
+/// single seam where the log's *history* is migrated forward (H3). Additive change needs no entry
+/// here (new fields are ignored, new kinds are skipped on read); only a *rename* of a kind or
+/// field is repaired, so everything downstream sees today's shape. Detection is by shape, not a
+/// version counter, and a current-shape object is returned untouched (borrowed, no allocation).
+///
+/// Current rules:
+/// - The annotation event was once a first-class "comment" (see this module's history); a log or
+///   external tool that still emits `CommentAdded` / `Comment` is read as `ElementAnnotated`.
+fn upcast(j: &Json) -> Cow<'_, Json> {
+    match j.get("event").and_then(Json::as_str) {
+        Some("CommentAdded") | Some("Comment") => {
+            Cow::Owned(with_event_kind(j, "ElementAnnotated"))
+        }
+        _ => Cow::Borrowed(j),
+    }
+}
+
+/// Return a copy of an event object with its `"event"` discriminator set to `kind` (every other
+/// field preserved in order). Used by [`upcast`] to migrate a renamed event kind forward.
+fn with_event_kind(j: &Json, kind: &str) -> Json {
+    let Json::Obj(pairs) = j else {
+        return j.clone();
+    };
+    let mut pairs = pairs.clone();
+    match pairs.iter_mut().find(|(k, _)| k == "event") {
+        Some(slot) => slot.1 = Json::Str(kind.to_string()),
+        None => pairs.push(("event".to_string(), Json::Str(kind.to_string()))),
+    }
+    Json::Obj(pairs)
+}
+
+/// One JSON object → an `Event`, or `None` for an unknown/ill-shaped event kind. The object is
+/// first run through [`upcast`], so a legacy on-disk shape is migrated to the current schema (H3)
+/// before any field is read.
 pub fn parse_event(j: &Json) -> Option<Event> {
+    let j = upcast(j);
+    let j = j.as_ref();
     let s = |k: &str| j.get(k).and_then(Json::as_str).map(String::from);
     let i = |k: &str| j.get(k).and_then(Json::as_f64).map(|n| n as i64);
     Some(match j.get("event")?.as_str()? {
@@ -637,6 +687,35 @@ mod tests {
         assert_eq!(evs.len(), 1);
         assert!(matches!(&evs[0], Event::ElementAnnotated { id, text }
             if id == "E1" && text == "kept"));
+    }
+
+    // H3: a renamed event kind from an older schema is migrated forward at the upcast seam, so an
+    // old log still replays. `CommentAdded` predates the rename to `ElementAnnotated`.
+    #[test]
+    fn legacy_comment_kind_upcasts_to_element_annotated() {
+        let log = [
+            ev(r#"{"event":"ElementAdded","id":"E1","type":"event","label":"A"}"#),
+            ev(r#"{"event":"CommentAdded","id":"E1","text":"from an old log"}"#),
+            ev(r#"{"event":"Comment","id":"E1","text":"older still"}"#),
+        ];
+        assert!(matches!(&log[1], Event::ElementAnnotated { id, text }
+            if id == "E1" && text == "from an old log"));
+        assert!(matches!(&log[2], Event::ElementAnnotated { .. }));
+        // …and the migrated event folds into the projection like any annotation.
+        assert_eq!(
+            replay(&log).elements[0].detail.as_deref(),
+            Some("older still")
+        );
+    }
+
+    // H3: additive change is free — an unknown field on a known event is ignored, not an error,
+    // so a log written by a newer schema still replays on older code.
+    #[test]
+    fn unknown_fields_on_a_known_event_are_ignored() {
+        let e = ev(
+            r#"{"event":"ElementAdded","id":"E1","type":"event","label":"A","fromTheFuture":42}"#,
+        );
+        assert!(matches!(e, Event::ElementAdded { id, .. } if id == "E1"));
     }
 
     #[test]

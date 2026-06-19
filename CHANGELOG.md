@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `faceto compact [LOG]` — fold a log to a `LogCompacted` marker plus the genesis
   batch of the current projection, bounding replay length. Projection-preserving
   (history collapses; the prior log is saved to `<log>.bak`).
+- Schema evolution: an old log keeps replaying as the event schema grows. Additive
+  change is free (new optional fields ignored, new event kinds skipped on read); a
+  renamed kind/field is migrated forward at the `upcast` read-path seam.
 - Live structural edits in log mode: `POST /comment {kind:"add", type, text, col?}`
   appends an `ElementAdded` with a **server-minted, type-prefixed id**; moves (with
   swap), renames, hotspot resolutions, and `drop` (→ `ElementRemoved`) persist as their
