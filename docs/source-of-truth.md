@@ -43,24 +43,25 @@ everything, open and closed.
 > `add`, a queued `rename`), that is **a missing state in the schema**, not a reason to
 > track the scratch log. Add the state to the model.
 
-## What this implies for faceto (the actionable part)
+## How the event-sourcing inversion subsumes this
 
-1. **A reconcile path.** A `faceto reconcile` step (CLI or a session ritual) that walks
-   `comments.jsonl` and folds **every** comment into `model.json` — `resolve`/`rename`/
-   `move`/`drop` → durable edits; `question`/unconsumed `comment`/`add` → an open `hotspot`
-   or a typed pending annotation. Then truncates/archives the inbox.
-2. **A pending representation in the schema.** `hotspot` already covers "open question".
-   For the kinds that don't map to a hotspot (`add`, `rename` awaiting a decision), decide:
-   either (a) model them as `hotspot`s with a `detail`, or (b) add a small `pending` field /
-   element state. Pick one; don't let them live only in the inbox.
-3. **Keep the ignore split honest.** `comments.jsonl` ignored = *transient inbox*;
-   `board.svg`/`index.html` ignored = *generated output*. Same rule, two reasons — document
-   both so nobody "rescues" the inbox into git later.
-4. **Optional audit trail.** If the deliberation history has value, snapshot *consumed*
-   comments into a curated, tracked log (dated, in `docs/` or the model's sibling notes) —
-   never by tracking the live `.jsonl`.
+The original "actionable part" proposed a `faceto reconcile` CLI that folds `comments.jsonl`
+into `model.json` and a schema `pending` state for kinds that didn't map to a hotspot. The
+inversion makes that plan obsolete while honouring the trap it guarded against:
 
-## One-line statement of the convention
+- **No comment is ever stranded, by construction.** Comments are now *events*
+  (`ElementAnnotated`, `HotspotResolved`, `ElementRenamed`, …) appended to the durable
+  `event-log.jsonl`. There is nothing to "reconcile into the model" — the log *is* the record,
+  and the model is replayed from it. The lossless-reconcile requirement is satisfied trivially:
+  every comment already has a permanent home.
+- **`reconcile` → `genesis` + `compact`.** Bootstrapping an existing `model.json` is
+  `faceto genesis` (a one-time migration to a genesis batch). Bounding replay length is
+  `faceto compact` (fold to a `LogCompacted` snapshot) — the durable analogue of "drain, then
+  drop the inbox", except the prior log is preserved (git + `<log>.bak`), not discarded.
+- **The "missing schema state" corollary still holds**, restated for events: a half-decided
+  `add` or a queued `rename` is just an unappended event, not a reason to keep a scratch inbox.
+- **The ignore split is unchanged in spirit, inverted in target.** `event-log.jsonl` is now
+  *tracked* (it is the truth); `board.svg` / `index.html` / `comments.jsonl` stay ignored
+  (derived / transient).
 
-> The model is truth; the inbox is a queue. **Reconcile, don't archive** — drain every
-> comment into the model (open → hotspot/pending, done → resolution), then drop the inbox.
+See [`event-sourcing-status.md`](event-sourcing-status.md) for the current design and decisions.

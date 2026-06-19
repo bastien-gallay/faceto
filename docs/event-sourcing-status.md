@@ -131,16 +131,24 @@ Audited `src/template.html` against the event semantics, three findings:
   of scope; instead the offline branch now tells the user plainly ("offline — add saved locally
   (not on the board yet; Export to keep it)") and the limitation is noted at `postComment`.
 
-## Pick up here tomorrow (open work, roughly in order)
+### Reconcile the docs → **done.**
 
-1. **Reconcile the docs** — `source-of-truth.md` is now superseded (banner added). Decide
-   whether to rewrite it or fold it into this note once the inversion lands. Update the
-   architecture section of `CLAUDE.md` (now six source files; `events.rs` is the new spine)
-   **when the branch is ready to merge**, not before.
+- **`source-of-truth.md`** kept as a trimmed historical note: its principle + the
+  lossless-reconcile *trap* stay (still worth reading), but the obsolete `faceto reconcile`
+  action plan is replaced by a "How the event-sourcing inversion subsumes this" section —
+  comments are events now, so nothing is ever stranded; `reconcile` became `genesis` + `compact`.
+  It links forward to this note; this note links back.
+- **`CLAUDE.md`** brought current: six source files with `events.rs` as the spine, the
+  `event-log.jsonl → replay → Model → SVG → HTML` pipeline, the `genesis`/`compact` verbs, log-mode
+  `POST /comment` semantics + server-side id minting, and a new "Event-sourced spine (do not break
+  these)" invariants block (append-only truth, pure deterministic `replay`, server-minted ids).
+- **`CHANGELOG.md`** carries the event-sourcing additions under Unreleased.
+
+The branch is now doc-complete and ready to prep for merge.
 
 ## Notes / caveats
 
-- `src/render.rs` and `src/template.html` had **pre-existing** uncommitted changes from before
-  this work began; they are unrelated to the inversion and were intentionally left untouched.
+- `src/render.rs` and `src/template.html` are now part of this branch's work (the serif nameplate
+  and the "add element" affordance); the earlier "left untouched" caveat no longer applies.
 - `.gitignore` is already correct: `event-log.jsonl` is **tracked** (it is the new truth);
   `board.svg` / `index.html` / `comments.jsonl` stay ignored (derived).
