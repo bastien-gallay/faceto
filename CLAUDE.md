@@ -16,6 +16,10 @@ first-class events. This event-sourcing inversion is the current spine — see
 [`docs/event-sourcing-status.md`](docs/event-sourcing-status.md) for the full rationale and the
 locked decisions.
 
+For how to write code here — Tidy First, CUPID & YAGNI, TDD+Reflect, Clean Code, commit style — see
+[`CODING_STANDARDS.md`](CODING_STANDARDS.md). [`AGENTS.md`](AGENTS.md) is the short cross-tool entry
+point that maps the rest of the docs.
+
 ## Hard constraint: zero dependencies
 
 `faceto` is **pure Rust standard library — no crates, ever.** This is a deliberate product
