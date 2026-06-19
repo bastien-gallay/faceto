@@ -319,7 +319,7 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                         }
                     }
                     Ok(v @ json::Json::Obj(_)) => {
-                        let evs = comment_to_event(&v);
+                        let evs = events::comment_to_events(&v);
                         if evs.is_empty() {
                             return send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]);
                         }
@@ -434,53 +434,6 @@ fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
         .map(String::from);
     ctx.append_add(&kind, label, col, detail)
         .map_err(|_| 500u16)
-}
-
-/// Map a posted comment to the event(s) it persists, in log mode. `move`/`resolve`/`rename`/`drop`
-/// carry structural intent (and fold straight into the projection); `split`/`question`/`comment`
-/// stay advisory annotations for the next session. A `move` that displaces an occupant — the
-/// client sends `swapId`/`swapCol` — yields **two** `ElementMoved`s so the swap round-trips;
-/// without that the partner reverts on reload. `drop` ("never happened") removes the element (and
-/// its touching edges, via replay). Returns an empty vec if the comment names no element (400).
-fn comment_to_event(v: &json::Json) -> Vec<events::Event> {
-    let Some(id) = v.get_str("elemId").map(str::to_string) else {
-        return Vec::new();
-    };
-    let kind = v.get_str("kind").unwrap_or("comment");
-    let text = v.get_str("text").unwrap_or("").to_string();
-    match kind {
-        "move" => {
-            // A move is a column change; a missing target col would replay as a no-op, so reject
-            // it (empty vec → 400) rather than logging a phantom move.
-            let Some(col) = v.get_i64("col") else {
-                return Vec::new();
-            };
-            let mut evs = vec![events::Event::ElementMoved {
-                id: id.clone(),
-                col: Some(col),
-                kind: None,
-            }];
-            // A swap also relocates the displaced sticky — but only a *different* one, to a real
-            // col. Guard against a self-swap or a swap missing its target col (would no-op).
-            if let (Some(swap_id), Some(swap_col)) = (v.get_str("swapId"), v.get_i64("swapCol")) {
-                if swap_id != id.as_str() {
-                    evs.push(events::Event::ElementMoved {
-                        id: swap_id.to_string(),
-                        col: Some(swap_col),
-                        kind: None,
-                    });
-                }
-            }
-            evs
-        }
-        "resolve" => vec![events::Event::HotspotResolved {
-            id,
-            resolution: text,
-        }],
-        "rename" => vec![events::Event::ElementRenamed { id, label: text }],
-        "drop" => vec![events::Event::ElementRemoved { id }],
-        _ => vec![events::Event::ElementAnnotated { id, text }],
-    }
 }
 
 /// Project the log's *feedback* events (annotations, resolutions, renames) back into the
@@ -689,7 +642,7 @@ mod tests {
     #[test]
     fn drop_maps_to_element_removed() {
         let v = json::parse(r#"{"elemId":"E2","kind":"drop","text":"never happened"}"#).unwrap();
-        let evs = comment_to_event(&v);
+        let evs = events::comment_to_events(&v);
         assert_eq!(evs.len(), 1);
         assert!(matches!(&evs[0], events::Event::ElementRemoved { id } if id == "E2"));
     }
@@ -704,7 +657,7 @@ mod tests {
     #[test]
     fn move_without_a_col_is_rejected() {
         let v = json::parse(r#"{"elemId":"E1","kind":"move"}"#).unwrap();
-        assert!(comment_to_event(&v).is_empty());
+        assert!(events::comment_to_events(&v).is_empty());
     }
 
     #[test]
@@ -713,9 +666,9 @@ mod tests {
         let selfswap =
             json::parse(r#"{"elemId":"E1","kind":"move","col":2,"swapId":"E1","swapCol":0}"#)
                 .unwrap();
-        assert_eq!(comment_to_event(&selfswap).len(), 1);
+        assert_eq!(events::comment_to_events(&selfswap).len(), 1);
         let nocol = json::parse(r#"{"elemId":"E1","kind":"move","col":2,"swapId":"E2"}"#).unwrap();
-        assert_eq!(comment_to_event(&nocol).len(), 1);
+        assert_eq!(events::comment_to_events(&nocol).len(), 1);
     }
 
     #[test]
@@ -777,7 +730,7 @@ mod tests {
         // else the partner reverts on the next replay and the two overlap.
         let v = json::parse(r#"{"elemId":"E1","kind":"move","col":3,"swapId":"E2","swapCol":1}"#)
             .unwrap();
-        let evs = comment_to_event(&v);
+        let evs = events::comment_to_events(&v);
         assert_eq!(evs.len(), 2);
         assert!(
             matches!(&evs[0], events::Event::ElementMoved { id, col: Some(3), .. } if id == "E1")
@@ -790,9 +743,9 @@ mod tests {
     #[test]
     fn plain_move_is_one_event_and_no_elem_id_is_rejected() {
         let mv = json::parse(r#"{"elemId":"E1","kind":"move","col":2}"#).unwrap();
-        assert_eq!(comment_to_event(&mv).len(), 1);
+        assert_eq!(events::comment_to_events(&mv).len(), 1);
         let orphan = json::parse(r#"{"kind":"comment","text":"hi"}"#).unwrap();
-        assert!(comment_to_event(&orphan).is_empty());
+        assert!(events::comment_to_events(&orphan).is_empty());
     }
 
     #[test]

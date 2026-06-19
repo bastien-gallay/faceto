@@ -6,10 +6,25 @@
 //! the only write path; `model.json` becomes derived output. Each log line is one JSON
 //! object discriminated by an `"event"` field; [`replay`] folds a sequence into a `Model`,
 //! and [`from_model`] turns an existing model file into a genesis batch (the migration and
-//! bootstrap path). Unknown event kinds are skipped on read, so the schema can grow forward.
+//! bootstrap path).
+//!
+//! **Schema evolution (H3).** The on-disk schema is allowed to grow over time, and an old log
+//! must still replay. The rules:
+//! - *Additive change is free.* A new optional field is simply not read by older code, and a
+//!   wholly new event kind is skipped on read ([`parse_log`]). Neither breaks an old or a new log,
+//!   so this is the preferred way to extend. *Fields* evolve only this way: a renamed field is, by
+//!   shape, indistinguishable from a new optional one, so add the new name and keep reading the old.
+//! - *A renamed event kind is migrated forward at one seam.* Renaming a kind is the
+//!   backward-incompatible change [`upcast`] repairs: it is the single place a legacy kind string
+//!   is rewritten to today's, so the rest of the pipeline only ever sees current kinds. Detection
+//!   is by shape (the old kind's presence), not a stored version counter — an old log replays with
+//!   nothing to set.
+//! - *A kind's meaning is never silently repurposed.* If semantics must change, introduce a new
+//!   kind (additive) and upcast the old one; never redefine an existing kind in place.
 
 use crate::json::{self, Json};
 use crate::model::{Edge, Element, Model, Phase};
+use std::borrow::Cow;
 use std::path::Path;
 
 /// One fact in the log. Variants mirror the board operations a session performs; the
@@ -86,17 +101,23 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, String> {
     parse_log(&text)
 }
 
+/// Iterate the meaningful records of JSONL text: each non-blank line, trimmed, paired with its
+/// 1-based line number. The single place the line grammar (skip blanks, trim) lives, shared by
+/// the log reader ([`parse_log`]) and the comments fold ([`from_comments`]) so the two never drift.
+fn jsonl_records(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    text.lines()
+        .enumerate()
+        .map(|(n, line)| (n + 1, line.trim()))
+        .filter(|(_, line)| !line.is_empty())
+}
+
 /// Parse JSONL text into events. Blank lines are skipped; a line that does not parse as
 /// JSON is a hard error (the log is the source of truth); a well-formed object whose
 /// `"event"` is unknown is skipped (forward compatibility across schema versions).
 pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
     let mut events = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let j = json::parse(line).map_err(|e| format!("event-log line {}: {}", n + 1, e))?;
+    for (n, line) in jsonl_records(text) {
+        let j = json::parse(line).map_err(|e| format!("event-log line {}: {}", n, e))?;
         if let Some(ev) = parse_event(&j) {
             events.push(ev);
         }
@@ -104,8 +125,46 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
     Ok(events)
 }
 
-/// One JSON object → an `Event`, or `None` for an unknown/ill-shaped event kind.
+/// Normalise a raw event object to the current schema before [`parse_event`] matches it — the
+/// single seam where the log's *history* is migrated forward (H3). Additive change needs no entry
+/// here (new fields are ignored, new kinds are skipped on read); only a renamed *event kind* is
+/// repaired, so everything downstream sees today's kinds. (A renamed *field* can't be repaired by
+/// shape — an absent key looks like a new optional one — so fields evolve additively instead.)
+/// Detection is by shape, not a version counter, and a current-shape object is returned untouched
+/// (borrowed, no allocation).
+///
+/// Current rules:
+/// - The annotation event was once a first-class "comment" (see this module's history); a log or
+///   external tool that still emits `CommentAdded` / `Comment` is read as `ElementAnnotated`.
+fn upcast(j: &Json) -> Cow<'_, Json> {
+    // Rewrite the `event` discriminator to `to`, preserving every other field in order. Only
+    // reached once a known legacy kind string has matched, so the slot is always present.
+    let rename = |pairs: &[(String, Json)], to: &str| {
+        Json::Obj(
+            pairs
+                .iter()
+                .map(|(k, v)| match k.as_str() {
+                    "event" => (k.clone(), Json::Str(to.to_string())),
+                    _ => (k.clone(), v.clone()),
+                })
+                .collect(),
+        )
+    };
+    match j {
+        Json::Obj(pairs) => match j.get("event").and_then(Json::as_str) {
+            Some("CommentAdded") | Some("Comment") => Cow::Owned(rename(pairs, "ElementAnnotated")),
+            _ => Cow::Borrowed(j),
+        },
+        _ => Cow::Borrowed(j),
+    }
+}
+
+/// One JSON object → an `Event`, or `None` for an unknown/ill-shaped event kind. The object is
+/// first run through [`upcast`], so a legacy on-disk shape is migrated to the current schema (H3)
+/// before any field is read.
 pub fn parse_event(j: &Json) -> Option<Event> {
+    let j = upcast(j);
+    let j = j.as_ref();
     let s = |k: &str| j.get(k).and_then(Json::as_str).map(String::from);
     let i = |k: &str| j.get(k).and_then(Json::as_f64).map(|n| n as i64);
     Some(match j.get("event")?.as_str()? {
@@ -286,6 +345,86 @@ pub fn from_model(m: &Model) -> Vec<Event> {
         });
     }
     ev
+}
+
+/// Map one posted/stored comment object to the event(s) it persists — the single source of
+/// truth for the comment→event translation, shared by the live server (`POST /comment` in log
+/// mode) and the `comments.jsonl` migration ([`from_comments`]). `move`/`resolve`/`rename`/`drop`
+/// carry structural intent and fold straight into the projection; `split`/`question`/`comment`
+/// stay advisory annotations. A `move` that displaces an occupant — the client sends
+/// `swapId`/`swapCol` — yields **two** `ElementMoved`s so the swap round-trips. Returns an empty
+/// vec when the comment names no element, or when a `move` carries no target col (both would
+/// replay as no-ops): the caller treats that as "nothing to persist".
+pub fn comment_to_events(v: &Json) -> Vec<Event> {
+    let Some(id) = v.get_str("elemId").map(str::to_string) else {
+        return Vec::new();
+    };
+    let kind = v.get_str("kind").unwrap_or("comment");
+    let text = v.get_str("text").unwrap_or("").to_string();
+    match kind {
+        "move" => {
+            // A move is a column change; a missing target col would replay as a no-op, so reject
+            // it (empty vec) rather than logging a phantom move.
+            let Some(col) = v.get_i64("col") else {
+                return Vec::new();
+            };
+            let mut evs = vec![Event::ElementMoved {
+                id: id.clone(),
+                col: Some(col),
+                kind: None,
+            }];
+            // A swap also relocates the displaced sticky — but only a *different* one, to a real
+            // col. Guard against a self-swap or a swap missing its target col (would no-op).
+            if let (Some(swap_id), Some(swap_col)) = (v.get_str("swapId"), v.get_i64("swapCol")) {
+                if swap_id != id.as_str() {
+                    evs.push(Event::ElementMoved {
+                        id: swap_id.to_string(),
+                        col: Some(swap_col),
+                        kind: None,
+                    });
+                }
+            }
+            evs
+        }
+        "resolve" => vec![Event::HotspotResolved {
+            id,
+            resolution: text,
+        }],
+        "rename" => vec![Event::ElementRenamed { id, label: text }],
+        "drop" => vec![Event::ElementRemoved { id }],
+        _ => vec![Event::ElementAnnotated { id, text }],
+    }
+}
+
+/// Fold a legacy `comments.jsonl` into the events it represents — the answer to H5, the second
+/// half of the migration story alongside [`from_model`]. Each non-blank line is one stored comment;
+/// [`comment_to_events`] translates it. Unlike the log proper, the comments inbox was always a
+/// *best-effort* sidecar, so a line that cannot be migrated is **skipped** (not a hard error) —
+/// migrating disposable feedback must not abort on one stray line. Append the result after a
+/// model's genesis batch: the batch mints the ids these comments reference, so replaying the two
+/// together reconstructs the board *and* its annotations/resolutions/renames.
+///
+/// Returns the events **and the count of non-blank lines that produced none** — unparseable, not
+/// an object, naming no element, or a kind that carries no board change (e.g. a legacy `add`, which
+/// in non-log mode was only ever an inbox note and carries no `elemId` to attach to). The count
+/// lets the caller report the loss instead of dropping those lines silently.
+pub fn from_comments(text: &str) -> (Vec<Event>, usize) {
+    let mut out = Vec::new();
+    let mut skipped = 0usize;
+    for (_, line) in jsonl_records(text) {
+        match json::parse(line) {
+            Ok(v @ Json::Obj(_)) => {
+                let evs = comment_to_events(&v);
+                if evs.is_empty() {
+                    skipped += 1;
+                } else {
+                    out.extend(evs);
+                }
+            }
+            _ => skipped += 1,
+        }
+    }
+    (out, skipped)
 }
 
 /// Fold a log down to the shortest sequence that replays to the same board: a `LogCompacted`
@@ -521,6 +660,86 @@ mod tests {
         let twice = compact(&once);
         // The genesis tail (everything past the marker) is a fixed point; only the count moves.
         assert_eq!(to_jsonl(&once[1..]), to_jsonl(&twice[1..]));
+    }
+
+    // H5: a legacy comments.jsonl folded after a model's genesis batch must reconstruct both the
+    // board and its feedback (annotation, resolution, rename, move).
+    #[test]
+    fn from_comments_folds_a_legacy_inbox_onto_the_genesis_batch() {
+        let model_src = r#"{
+            "title":"Legacy",
+            "elements":[
+                {"id":"E1","type":"event","label":"Born","col":0},
+                {"id":"H1","type":"hotspot","label":"open?","col":2}
+            ]
+        }"#;
+        let model = crate::model::from_json(&json::parse(model_src).unwrap());
+        let inbox = "\
+            {\"elemId\":\"E1\",\"kind\":\"comment\",\"text\":\"a note\"}\n\
+            {\"elemId\":\"E1\",\"kind\":\"rename\",\"text\":\"Reborn\"}\n\
+            {\"elemId\":\"E1\",\"kind\":\"move\",\"col\":4}\n\
+            {\"elemId\":\"H1\",\"kind\":\"resolve\",\"text\":\"settled\"}\n";
+
+        let (folded, skipped) = from_comments(inbox);
+        assert_eq!(skipped, 0); // every line migrated
+        let mut log = from_model(&model);
+        log.extend(folded);
+        let m = replay(&log);
+
+        let e1 = m.elements.iter().find(|e| e.id == "E1").unwrap();
+        assert_eq!(e1.label, "Reborn"); // rename applied
+        assert_eq!(e1.col, Some(4)); // move applied
+                                     // The annotation lands first, then the rename overwrites the label — but `detail` keeps
+                                     // the note (annotation sets detail; rename only touches the label).
+        assert_eq!(e1.detail.as_deref(), Some("a note"));
+        let h1 = m.elements.iter().find(|e| e.id == "H1").unwrap();
+        assert!(h1.resolved);
+        assert_eq!(h1.detail.as_deref(), Some("settled"));
+    }
+
+    #[test]
+    fn from_comments_skips_blank_malformed_and_element_less_lines() {
+        let inbox = "\
+            \n  \n\
+            {not json}\n\
+            {\"kind\":\"comment\",\"text\":\"orphan, no elemId\"}\n\
+            {\"kind\":\"add\",\"type\":\"event\",\"text\":\"legacy add, no elemId\"}\n\
+            {\"elemId\":\"E1\",\"kind\":\"comment\",\"text\":\"kept\"}\n";
+        let (evs, skipped) = from_comments(inbox);
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], Event::ElementAnnotated { id, text }
+            if id == "E1" && text == "kept"));
+        // Blank lines are not counted; the malformed line, the orphan, and the legacy `add` are.
+        assert_eq!(skipped, 3);
+    }
+
+    // H3: a renamed event kind from an older schema is migrated forward at the upcast seam, so an
+    // old log still replays. `CommentAdded` predates the rename to `ElementAnnotated`.
+    #[test]
+    fn legacy_comment_kind_upcasts_to_element_annotated() {
+        let log = [
+            ev(r#"{"event":"ElementAdded","id":"E1","type":"event","label":"A"}"#),
+            ev(r#"{"event":"CommentAdded","id":"E1","text":"from an old log"}"#),
+            ev(r#"{"event":"Comment","id":"E1","text":"older still"}"#),
+        ];
+        assert!(matches!(&log[1], Event::ElementAnnotated { id, text }
+            if id == "E1" && text == "from an old log"));
+        assert!(matches!(&log[2], Event::ElementAnnotated { .. }));
+        // …and the migrated event folds into the projection like any annotation.
+        assert_eq!(
+            replay(&log).elements[0].detail.as_deref(),
+            Some("older still")
+        );
+    }
+
+    // H3: additive change is free — an unknown field on a known event is ignored, not an error,
+    // so a log written by a newer schema still replays on older code.
+    #[test]
+    fn unknown_fields_on_a_known_event_are_ignored() {
+        let e = ev(
+            r#"{"event":"ElementAdded","id":"E1","type":"event","label":"A","fromTheFuture":42}"#,
+        );
+        assert!(matches!(e, Event::ElementAdded { id, .. } if id == "E1"));
     }
 
     #[test]

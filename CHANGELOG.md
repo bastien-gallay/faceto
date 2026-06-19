@@ -13,10 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   durable record; the `Model` is a projection replayed from it. `render` and `serve`
   accept a log by extension. Comments become first-class events.
 - `faceto genesis [MODEL]` — migrate a legacy `model.json` into the genesis batch of
-  an `event-log.jsonl` (the bootstrap path into the event-sourced world).
+  an `event-log.jsonl` (the bootstrap path into the event-sourced world). A sibling
+  `comments.jsonl` (the legacy feedback inbox) is folded in too, appended after the
+  batch, so its annotations/resolutions/renames/moves land on the board instead of
+  being stranded.
 - `faceto compact [LOG]` — fold a log to a `LogCompacted` marker plus the genesis
   batch of the current projection, bounding replay length. Projection-preserving
   (history collapses; the prior log is saved to `<log>.bak`).
+- Schema evolution: an old log keeps replaying as the event schema grows. Additive
+  change is free (new optional fields ignored, new event kinds skipped on read); a
+  renamed kind/field is migrated forward at the `upcast` read-path seam.
 - Live structural edits in log mode: `POST /comment {kind:"add", type, text, col?}`
   appends an `ElementAdded` with a **server-minted, type-prefixed id**; moves (with
   swap), renames, hotspot resolutions, and `drop` (→ `ElementRemoved`) persist as their
