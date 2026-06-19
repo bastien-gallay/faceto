@@ -73,7 +73,9 @@ one stage:
   `get`/`as_str`/`as_f64`/`as_bool`/`as_array`). Everything else builds on this.
 - **`src/events.rs`** — the event-sourced spine. The `Event` enum (one JSON object per log line),
   `parse_log`/`read_log`, `replay(&[Event]) -> Model` (the projection), `from_model` (genesis/
-  migration), and `compact` (fold a log to a `LogCompacted` marker + genesis snapshot). Unknown
+  migration), `from_comments`/`comment_to_events` (fold a legacy `comments.jsonl` into events; the
+  latter is the single source of truth shared with `serve.rs`'s `POST /comment`), and `compact`
+  (fold a log to a `LogCompacted` marker + genesis snapshot). Unknown
   event kinds are skipped on read (forward compatibility).
 - **`src/model.rs`** — the typed board (`Model`, `Element`, `Edge`, `Phase`), `from_json`/`load`,
   and `diff_models`. This is where the board's domain rules live.

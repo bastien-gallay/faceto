@@ -95,8 +95,10 @@ fn cmd_render(model_path: &str) {
 }
 
 /// Migrate a legacy `model.json` into the genesis batch of an `event-log.jsonl` written
-/// alongside it — the bootstrap path into the event-sourced world. Refuses to clobber an
-/// existing log.
+/// alongside it — the bootstrap path into the event-sourced world. A sibling `comments.jsonl`
+/// (the legacy feedback inbox) is folded in too (H5): its annotations/resolutions/renames/moves
+/// land as events *after* the genesis batch, which minted the ids they reference — so the inbox
+/// is preserved on the board instead of stranded. Refuses to clobber an existing log.
 fn cmd_genesis(model_path: &str) {
     let path = Path::new(model_path);
     let model = match model::load(path) {
@@ -106,7 +108,8 @@ fn cmd_genesis(model_path: &str) {
             exit(1);
         }
     };
-    let out = dir_of(path).join("event-log.jsonl");
+    let dir = dir_of(path);
+    let out = dir.join("event-log.jsonl");
     if out.exists() {
         eprintln!(
             "error: {} already exists — refusing to overwrite",
@@ -114,17 +117,42 @@ fn cmd_genesis(model_path: &str) {
         );
         exit(1);
     }
-    let batch = events::from_model(&model);
+    let mut batch = events::from_model(&model);
+    let genesis_len = batch.len();
+
+    // Fold a sibling comments.jsonl, if one exists, into the same migration. Reading it is
+    // best-effort: a missing file is the common case (nothing to fold), and the inbox itself
+    // tolerates stray lines (see `events::from_comments`).
+    let comments_path = dir.join("comments.jsonl");
+    let folded = std::fs::read_to_string(&comments_path)
+        .ok()
+        .map(|text| events::from_comments(&text))
+        .unwrap_or_default();
+    let folded_len = folded.len();
+    batch.extend(folded);
+
     if let Err(e) = std::fs::write(&out, events::to_jsonl(&batch)) {
         eprintln!("error writing {}: {e}", out.display());
         exit(1);
     }
-    println!(
-        "seeded {} events from {} → {}",
-        batch.len(),
-        path.display(),
-        out.display()
-    );
+    if folded_len > 0 {
+        println!(
+            "seeded {} events from {} ({} genesis + {} folded from {}) → {}",
+            batch.len(),
+            path.display(),
+            genesis_len,
+            folded_len,
+            comments_path.display(),
+            out.display()
+        );
+    } else {
+        println!(
+            "seeded {} events from {} → {}",
+            batch.len(),
+            path.display(),
+            out.display()
+        );
+    }
 }
 
 /// Fold an event log to a minimal snapshot — a `LogCompacted` marker plus the genesis batch of

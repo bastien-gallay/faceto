@@ -97,6 +97,24 @@ shows the new sticky as *added*. Offline, the add stashes to `localStorage` like
 feedback (no mint until back online). `/comments` omits `ElementAdded`, so a structural add
 never shows up as a sidebar comment. Verified live: an `add` of a `readmodel` minted `R2`.
 
+### H5 — fold the existing `comments.jsonl` into the log → **done.**
+
+`faceto genesis` now completes the migration story. Alongside the model's genesis batch it folds
+a *sibling* `comments.jsonl` (the legacy feedback inbox) into events, appended **after** the
+batch — so the ids the comments reference are already minted when those events replay, and the
+inbox lands on the board instead of being stranded. The mapping is the same one the live server
+uses: `events::comment_to_events` (one JSON comment → its event(s)) is now the single source of
+truth, shared by `POST /comment` in log mode and `events::from_comments` (the inbox folder).
+`comment`/`question`/`split` → `ElementAnnotated`, `resolve` → `HotspotResolved`, `rename` →
+`ElementRenamed`, `move` (+ optional `swapId`/`swapCol`) → one or two `ElementMoved`, `drop` →
+`ElementRemoved`. The inbox was always a best-effort sidecar, so `from_comments` **skips** a blank,
+unparseable, or `elemId`-less line rather than aborting the migration (the log proper still treats
+malformed JSON as a hard error). Missing `comments.jsonl` is the common no-op case. Covered by
+`from_comments_folds_a_legacy_inbox_onto_the_genesis_batch` and
+`from_comments_skips_blank_malformed_and_element_less_lines`. Verified live: a
+`genesis sample.model.json` next to a 4-line inbox seeded `24 genesis + 2 folded` (the garbage and
+orphan lines dropped), with `ElementAnnotated`/`ElementRenamed` for `E1` appended after the batch.
+
 ### `faceto compact` — fold the log to a snapshot → **done.**
 
 `faceto compact [LOG]` (default `event-log.jsonl`) replays the log, then rewrites it as a

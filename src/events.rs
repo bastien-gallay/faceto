@@ -288,6 +288,76 @@ pub fn from_model(m: &Model) -> Vec<Event> {
     ev
 }
 
+/// Map one posted/stored comment object to the event(s) it persists — the single source of
+/// truth for the comment→event translation, shared by the live server (`POST /comment` in log
+/// mode) and the `comments.jsonl` migration ([`from_comments`]). `move`/`resolve`/`rename`/`drop`
+/// carry structural intent and fold straight into the projection; `split`/`question`/`comment`
+/// stay advisory annotations. A `move` that displaces an occupant — the client sends
+/// `swapId`/`swapCol` — yields **two** `ElementMoved`s so the swap round-trips. Returns an empty
+/// vec when the comment names no element, or when a `move` carries no target col (both would
+/// replay as no-ops): the caller treats that as "nothing to persist".
+pub fn comment_to_events(v: &Json) -> Vec<Event> {
+    let Some(id) = v.get_str("elemId").map(str::to_string) else {
+        return Vec::new();
+    };
+    let kind = v.get_str("kind").unwrap_or("comment");
+    let text = v.get_str("text").unwrap_or("").to_string();
+    match kind {
+        "move" => {
+            // A move is a column change; a missing target col would replay as a no-op, so reject
+            // it (empty vec) rather than logging a phantom move.
+            let Some(col) = v.get_i64("col") else {
+                return Vec::new();
+            };
+            let mut evs = vec![Event::ElementMoved {
+                id: id.clone(),
+                col: Some(col),
+                kind: None,
+            }];
+            // A swap also relocates the displaced sticky — but only a *different* one, to a real
+            // col. Guard against a self-swap or a swap missing its target col (would no-op).
+            if let (Some(swap_id), Some(swap_col)) = (v.get_str("swapId"), v.get_i64("swapCol")) {
+                if swap_id != id.as_str() {
+                    evs.push(Event::ElementMoved {
+                        id: swap_id.to_string(),
+                        col: Some(swap_col),
+                        kind: None,
+                    });
+                }
+            }
+            evs
+        }
+        "resolve" => vec![Event::HotspotResolved {
+            id,
+            resolution: text,
+        }],
+        "rename" => vec![Event::ElementRenamed { id, label: text }],
+        "drop" => vec![Event::ElementRemoved { id }],
+        _ => vec![Event::ElementAnnotated { id, text }],
+    }
+}
+
+/// Fold a legacy `comments.jsonl` into the events it represents — the answer to H5, the second
+/// half of the migration story alongside [`from_model`]. Each line is one stored comment;
+/// [`comment_to_events`] translates it. Unlike the log proper, the comments inbox was always a
+/// *best-effort* sidecar, so a blank, unparseable, or element-less line is **skipped** (not a hard
+/// error) — migrating disposable feedback must not abort on one stray line. Append the result
+/// after a model's genesis batch: the batch mints the ids these comments reference, so replaying
+/// the two together reconstructs the board *and* its annotations/resolutions/renames.
+pub fn from_comments(text: &str) -> Vec<Event> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(v @ Json::Obj(_)) = json::parse(line) {
+            out.extend(comment_to_events(&v));
+        }
+    }
+    out
+}
+
 /// Fold a log down to the shortest sequence that replays to the same board: a `LogCompacted`
 /// provenance marker, then the genesis batch of the current projection. This bounds replay
 /// length (H1's snapshot escape hatch). It is lossy *by design* — only the projection survives,
@@ -521,6 +591,52 @@ mod tests {
         let twice = compact(&once);
         // The genesis tail (everything past the marker) is a fixed point; only the count moves.
         assert_eq!(to_jsonl(&once[1..]), to_jsonl(&twice[1..]));
+    }
+
+    // H5: a legacy comments.jsonl folded after a model's genesis batch must reconstruct both the
+    // board and its feedback (annotation, resolution, rename, move).
+    #[test]
+    fn from_comments_folds_a_legacy_inbox_onto_the_genesis_batch() {
+        let model_src = r#"{
+            "title":"Legacy",
+            "elements":[
+                {"id":"E1","type":"event","label":"Born","col":0},
+                {"id":"H1","type":"hotspot","label":"open?","col":2}
+            ]
+        }"#;
+        let model = crate::model::from_json(&json::parse(model_src).unwrap());
+        let inbox = "\
+            {\"elemId\":\"E1\",\"kind\":\"comment\",\"text\":\"a note\"}\n\
+            {\"elemId\":\"E1\",\"kind\":\"rename\",\"text\":\"Reborn\"}\n\
+            {\"elemId\":\"E1\",\"kind\":\"move\",\"col\":4}\n\
+            {\"elemId\":\"H1\",\"kind\":\"resolve\",\"text\":\"settled\"}\n";
+
+        let mut log = from_model(&model);
+        log.extend(from_comments(inbox));
+        let m = replay(&log);
+
+        let e1 = m.elements.iter().find(|e| e.id == "E1").unwrap();
+        assert_eq!(e1.label, "Reborn"); // rename applied
+        assert_eq!(e1.col, Some(4)); // move applied
+                                     // The annotation lands first, then the rename overwrites the label — but `detail` keeps
+                                     // the note (annotation sets detail; rename only touches the label).
+        assert_eq!(e1.detail.as_deref(), Some("a note"));
+        let h1 = m.elements.iter().find(|e| e.id == "H1").unwrap();
+        assert!(h1.resolved);
+        assert_eq!(h1.detail.as_deref(), Some("settled"));
+    }
+
+    #[test]
+    fn from_comments_skips_blank_malformed_and_element_less_lines() {
+        let inbox = "\
+            \n  \n\
+            {not json}\n\
+            {\"kind\":\"comment\",\"text\":\"orphan, no elemId\"}\n\
+            {\"elemId\":\"E1\",\"kind\":\"comment\",\"text\":\"kept\"}\n";
+        let evs = from_comments(inbox);
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], Event::ElementAnnotated { id, text }
+            if id == "E1" && text == "kept"));
     }
 
     #[test]
