@@ -111,22 +111,12 @@ impl Ctx {
     }
 }
 
-/// The single letter each lane stamps onto a freshly minted id, matching the convention the
-/// example boards already use (`actor`→`X`, `aggregate`→`A`, so they don't collide). Kept in
-/// sync with the 8-lane grammar in `render.rs`.
+/// The single letter each lane stamps onto a freshly minted id. The 8-lane prefixes come from
+/// `render::lane_prefix` (one source of truth, in sync with `LANES`); an off-grammar type falls
+/// back to its first letter, upper-cased.
 fn id_prefix(kind: &str) -> char {
-    match kind {
-        "actor" => 'X',
-        "command" => 'C',
-        "aggregate" => 'A',
-        "event" => 'E',
-        "policy" => 'P',
-        "readmodel" => 'R',
-        "external" => 'G',
-        "hotspot" => 'H',
-        // Off-grammar type: fall back to its first letter, upper-cased.
-        other => other.chars().next().unwrap_or('Z').to_ascii_uppercase(),
-    }
+    render::lane_prefix(kind)
+        .unwrap_or_else(|| kind.chars().next().unwrap_or('Z').to_ascii_uppercase())
 }
 
 /// Next free id for `kind`: `<PREFIX>` followed by one past the highest numeric suffix already
@@ -413,9 +403,9 @@ fn query_get(query: &str, key: &str) -> Option<String> {
 }
 
 /// Handle a `kind:"add"` post: an element-creation command rather than a comment on an
-/// existing one. `type` (the lane) is required; `text`→label, optional `col`/`detail`. The
-/// server mints the id (H6). Returns the HTTP status to fail with: `400` for a missing/empty
-/// type, `500` if the append itself fails.
+/// existing one. `type` (the lane) and a non-empty `text` (label) are required; optional
+/// `col`/`detail`. The server mints the id (H6). Returns the HTTP status to fail with: `400` for
+/// a missing/empty type or label, `500` if the append itself fails.
 fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
     let kind = v
         .get("type")
@@ -423,10 +413,14 @@ fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
         .filter(|s| !s.is_empty())
         .ok_or(400u16)?
         .to_string();
+    // A blank label would mint a permanent, never-renumbered empty element — refuse it here
+    // (the client modal already guards it, but a direct POST must not slip a blank box in).
     let label = v
         .get("text")
         .and_then(|x| x.as_str())
-        .unwrap_or("")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or(400u16)?
         .to_string();
     let col = v.get("col").and_then(|x| x.as_f64()).map(|n| n as i64);
     let detail = v
@@ -741,6 +735,23 @@ mod tests {
         let r = ctx.append_add("event", "X".into(), None, None);
         let _ = std::fs::remove_file(&path);
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn add_with_a_blank_label_is_rejected() {
+        // The label check fires before any file access, so a bare Ctx is enough.
+        let ctx = Ctx {
+            model_path: std::env::temp_dir().join("faceto-nonexistent.jsonl"),
+            comments_path: std::env::temp_dir().join("faceto-nonexistent.jsonl"),
+            log_mode: true,
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        };
+        let v = json::parse(r#"{"kind":"add","type":"event","text":"   "}"#).unwrap();
+        assert_eq!(add_from_comment(&ctx, &v), Err(400));
     }
 
     #[test]

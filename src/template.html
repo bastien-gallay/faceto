@@ -361,7 +361,10 @@ $("#modal").addEventListener("close", () => {
   // `add` is a structural command: the server mints the id and folds it into the board, so it
   // carries a lane (`type`) and `col` instead of an `elemId`. Everything else annotates the box.
   if ($("#m-kind").value === "add") {
-    postComment({ kind: "add", type: $("#m-type").value, text, col: (window._activeCol ?? 0) + 1, ts, status: "open" });
+    // `??` only guards null/undefined, not NaN (a sticky with no numeric data-col), so test
+    // finiteness explicitly — otherwise col would serialize to JSON null and misplace the element.
+    const base = Number.isFinite(window._activeCol) ? window._activeCol : 0;
+    postComment({ kind: "add", type: $("#m-type").value, text, col: base + 1, ts, status: "open" });
     return;
   }
   postComment({ elemId: window._activeId, kind: $("#m-kind").value, text, ts, status: "open" });

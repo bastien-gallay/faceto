@@ -114,14 +114,14 @@ fn cmd_genesis(model_path: &str) {
         );
         exit(1);
     }
-    let log = events::to_jsonl(&events::from_model(&model));
-    if let Err(e) = std::fs::write(&out, log) {
+    let batch = events::from_model(&model);
+    if let Err(e) = std::fs::write(&out, events::to_jsonl(&batch)) {
         eprintln!("error writing {}: {e}", out.display());
         exit(1);
     }
     println!(
         "seeded {} events from {} → {}",
-        events::from_model(&model).len(),
+        batch.len(),
         path.display(),
         out.display()
     );

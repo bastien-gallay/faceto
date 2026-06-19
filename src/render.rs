@@ -19,6 +19,19 @@ const LANES: [&str; 8] = [
     "hotspot",
 ];
 
+/// Each lane's id-mint prefix, index-aligned with `LANES`. `actor`/`aggregate` both start with
+/// 'a', so actor takes 'X' and external takes 'G'. This is the single source of truth for
+/// prefixes — `serve::id_prefix` reads it rather than re-listing the grammar.
+const LANE_PREFIXES: [char; 8] = ['X', 'C', 'A', 'E', 'P', 'R', 'G', 'H'];
+
+/// The id prefix for a lane `type`, or `None` if it is not one of the 8 lanes.
+pub fn lane_prefix(kind: &str) -> Option<char> {
+    LANES
+        .iter()
+        .position(|&l| l == kind)
+        .map(|i| LANE_PREFIXES[i])
+}
+
 fn colour(kind: &str) -> &'static str {
     match kind {
         "actor" => "#FCEFA1",
@@ -713,6 +726,16 @@ mod tests {
             edges: vec![],
             diff_meta: None,
         }
+    }
+
+    #[test]
+    fn lane_prefix_is_aligned_with_lanes_and_total() {
+        assert_eq!(LANES.len(), LANE_PREFIXES.len());
+        assert!(LANES.iter().all(|l| lane_prefix(l).is_some()));
+        assert_eq!(lane_prefix("actor"), Some('X')); // not 'A' — aggregate owns that
+        assert_eq!(lane_prefix("aggregate"), Some('A'));
+        assert_eq!(lane_prefix("hotspot"), Some('H'));
+        assert_eq!(lane_prefix("not-a-lane"), None);
     }
 
     #[test]
