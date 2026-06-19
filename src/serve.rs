@@ -81,11 +81,11 @@ impl Ctx {
         f.write_all(&bytes)
     }
 
-    /// Mint a fresh id and append an `ElementAdded` — the answer to H6. The id is derived
-    /// from the *current* projection (next free `<PREFIX><N>` for this lane) rather than a
-    /// stored counter, so the log stays the only durable record. Both the replay and the
-    /// write happen under `appends`, so two concurrent adds can never mint the same id.
-    /// Returns the minted event so the handler can log it.
+    /// Mint a fresh id and append an `ElementAdded` — the answer to H6. The id is derived from
+    /// the log's `ElementAdded` history (next free `<PREFIX><N>` for this lane) rather than a
+    /// stored counter, so the log stays the only durable record. Both the read and the write
+    /// happen under `appends`, so two concurrent adds can never mint the same id. Returns the
+    /// minted event so the handler can log it.
     fn append_add(
         &self,
         kind: &str,
@@ -94,13 +94,13 @@ impl Ctx {
         detail: Option<String>,
     ) -> Result<events::Event, String> {
         let _guard = self.appends.lock().unwrap();
-        // Mint from the *real* current projection. A corrupt/unreadable log must fail the add,
-        // not silently fold to an empty model (which would re-mint E1/C1… and collide).
+        // Mint from the *real* log. A corrupt/unreadable log must fail the add, not silently
+        // fold to empty (which would re-mint E1/C1… and collide).
         let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
         let text = String::from_utf8_lossy(&raw);
-        let existing = events::replay(&events::parse_log(&text)?);
+        let log = events::parse_log(&text)?;
         let ev = events::Event::ElementAdded {
-            id: mint_id(kind, &existing),
+            id: mint_id(kind, &log),
             kind: kind.to_string(),
             label,
             col,
@@ -119,16 +119,20 @@ fn id_prefix(kind: &str) -> char {
         .unwrap_or_else(|| kind.chars().next().unwrap_or('Z').to_ascii_uppercase())
 }
 
-/// Next free id for `kind`: `<PREFIX>` followed by one past the highest numeric suffix already
-/// used under that prefix (so ids are never renumbered, only added — the model convention).
-fn mint_id(kind: &str, model: &Model) -> String {
+/// Next free id for `kind`: `<PREFIX>` one past the highest suffix **ever added** under that
+/// prefix in the log — scanning every `ElementAdded`, including ids since removed but not yet
+/// compacted away. Deriving from the live projection instead would re-mint a removed element's
+/// id while leftover events still reference it (e.g. its annotations in `/comments`). `compact`
+/// folds removed elements out entirely, so reuse after compaction is safe.
+fn mint_id(kind: &str, log: &[events::Event]) -> String {
     let prefix = id_prefix(kind);
-    let max = model
-        .elements
+    let max = log
         .iter()
-        .filter_map(|e| {
-            let mut chars = e.id.chars();
-            (chars.next() == Some(prefix)).then(|| chars.as_str().parse::<u32>().ok())?
+        .filter_map(|ev| match ev {
+            events::Event::ElementAdded { id, .. } => id
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.parse::<u32>().ok()),
+            _ => None,
         })
         .max()
         .unwrap_or(0);
@@ -432,11 +436,12 @@ fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
         .map_err(|_| 500u16)
 }
 
-/// Map a posted comment to the event(s) it persists, in log mode. `move`/`resolve`/`rename`
-/// carry structural intent (and fold straight into the projection); anything else is a plain
-/// annotation. A `move` that displaces an occupant — the client sends `swapId`/`swapCol` — yields
-/// **two** `ElementMoved`s so the swap round-trips; without that the partner reverts on reload.
-/// Returns an empty vec if the comment names no element (the handler answers 400).
+/// Map a posted comment to the event(s) it persists, in log mode. `move`/`resolve`/`rename`/`drop`
+/// carry structural intent (and fold straight into the projection); `split`/`question`/`comment`
+/// stay advisory annotations for the next session. A `move` that displaces an occupant — the
+/// client sends `swapId`/`swapCol` — yields **two** `ElementMoved`s so the swap round-trips;
+/// without that the partner reverts on reload. `drop` ("never happened") removes the element (and
+/// its touching edges, via replay). Returns an empty vec if the comment names no element (400).
 fn comment_to_event(v: &json::Json) -> Vec<events::Event> {
     let Some(id) = v.get("elemId").and_then(|x| x.as_str()).map(str::to_string) else {
         return Vec::new();
@@ -469,6 +474,7 @@ fn comment_to_event(v: &json::Json) -> Vec<events::Event> {
             resolution: text,
         }],
         "rename" => vec![events::Event::ElementRenamed { id, label: text }],
+        "drop" => vec![events::Event::ElementRemoved { id }],
         _ => vec![events::Event::ElementAnnotated { id, text }],
     }
 }
@@ -645,16 +651,36 @@ mod tests {
     fn mint_id_picks_next_free_suffix_per_lane() {
         // H6: ids are type-prefixed and never renumbered — minting takes one past the
         // highest suffix already used under that prefix, independently per lane.
-        let model = events::replay(&[
+        let log = [
             added("E1", "event"),
             added("E3", "event"),
             added("C1", "command"),
-        ]);
-        assert_eq!(mint_id("event", &model), "E4"); // past the highest E, not filling the E2 gap
-        assert_eq!(mint_id("command", &model), "C2");
-        assert_eq!(mint_id("hotspot", &model), "H1"); // empty lane starts at 1
-        assert_eq!(mint_id("actor", &model), "X1"); // actor stamps X, not A
-        assert_eq!(mint_id("aggregate", &model), "A1");
+        ];
+        assert_eq!(mint_id("event", &log), "E4"); // past the highest E, not filling the E2 gap
+        assert_eq!(mint_id("command", &log), "C2");
+        assert_eq!(mint_id("hotspot", &log), "H1"); // empty lane starts at 1
+        assert_eq!(mint_id("actor", &log), "X1"); // actor stamps X, not A
+        assert_eq!(mint_id("aggregate", &log), "A1");
+    }
+
+    #[test]
+    fn mint_id_does_not_reuse_a_removed_id() {
+        // A dropped element's ElementAdded stays in the log (until compaction), so its id must
+        // stay reserved — re-minting it would alias leftover events (e.g. its annotations).
+        let log = [
+            added("E1", "event"),
+            added("E2", "event"),
+            events::Event::ElementRemoved { id: "E2".into() },
+        ];
+        assert_eq!(mint_id("event", &log), "E3");
+    }
+
+    #[test]
+    fn drop_maps_to_element_removed() {
+        let v = json::parse(r#"{"elemId":"E2","kind":"drop","text":"never happened"}"#).unwrap();
+        let evs = comment_to_event(&v);
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], events::Event::ElementRemoved { id } if id == "E2"));
     }
 
     #[test]

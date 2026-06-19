@@ -37,7 +37,7 @@ faceto board* — see [`../examples/faceto-event-sourced.model.json`](../example
 | --- | --- |
 | `src/events.rs` *(new)* | `Event` enum (10 variants); `parse_log`/`read_log`; `replay(&[Event]) -> Model`; `from_model(&Model) -> Vec<Event>` (genesis/migration); JSON (de)serialization. 7 in-file tests incl. a model→events→model round-trip. |
 | `src/main.rs` | `render`/`serve` accept a log by extension (`is_log_path`). New verb **`faceto genesis [MODEL]`** writes `event-log.jsonl` next to a model (refuses to clobber). |
-| `src/serve.rs` | `current()` replays in log mode (version hashes raw bytes → ring caches the projection). `POST /comment` **appends an event** (`move`→`ElementMoved`, `resolve`→`HotspotResolved`, `rename`→`ElementRenamed`, else `ElementAnnotated`). `GET /comments` projects feedback events back for the sidebar. |
+| `src/serve.rs` | `current()` replays in log mode (version hashes raw bytes → ring caches the projection). `POST /comment` **appends an event** (`move`→`ElementMoved` ×2 on a swap, `resolve`→`HotspotResolved`, `rename`→`ElementRenamed`, `drop`→`ElementRemoved`, else `ElementAnnotated`). `GET /comments` projects feedback events back for the sidebar. |
 
 The pipeline is now `event-log.jsonl → replay → Model → SVG → HTML`, with `model.json → Model`
 still supported for the legacy/genesis path.
@@ -76,12 +76,14 @@ skipped** (forward compatibility — partial answer to H3).
 A `POST /comment {kind:"add", type:<lane>, text:<label>, col?, detail?}` appends an
 `ElementAdded`. The server mints the id — **not** a client uuid — to preserve the board's
 human-readable, type-prefixed grammar (`actor`→`X`, `command`→`C`, `aggregate`→`A`,
-`event`→`E`, `policy`→`P`, `readmodel`→`R`, `external`→`G`, `hotspot`→`H`; see
-`id_prefix`/`mint_id` in `serve.rs`, kept in sync with `render.rs`'s `LANES`). The new id is
-`<PREFIX><N>` where `N` is **one past the highest suffix already used under that prefix** in the
-current projection — so ids are never renumbered, only added, and there is **no counter state
-outside the log**. `Ctx::append_add` does the replay *and* the write under the `appends` lock
-(H4), so two concurrent adds can never collide. Missing/empty `type` → `400`; append failure →
+`event`→`E`, `policy`→`P`, `readmodel`→`R`, `external`→`G`, `hotspot`→`H`; the prefixes live in
+`render::lane_prefix` next to `LANES`, and `serve::id_prefix`/`mint_id` read them). The new id is
+`<PREFIX><N>` where `N` is **one past the highest suffix ever added under that prefix in the log**
+— scanning every `ElementAdded`, including ids since removed but not yet compacted (so a removed
+id is never re-minted while leftover events still reference it). Ids are never renumbered, and
+there is **no counter state outside the log**. `Ctx::append_add` reads the log *and* writes under
+the `appends` lock (H4), so two concurrent adds can never collide. Missing/empty `type` or blank
+`label` → `400`; append failure →
 `500`. Covered by `mint_id_picks_next_free_suffix_per_lane` and
 `append_add_mints_persists_and_replays`. Verified live: against a genesis of `sample.model.json`
 (highest `E3`, `C2`), an `event` add minted `E4` and a `command` add minted `C3`.

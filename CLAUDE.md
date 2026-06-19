@@ -80,7 +80,8 @@ one stage:
   (re-rendered each request, `?base=<version>` produces a diff overlay), `GET /model-version`,
   `GET /comments`, `GET /health`, `POST /comment`. In **log mode** `POST /comment` appends an
   *event* (the comment's `kind` maps to `ElementAdded`/`ElementMoved`/`ElementRenamed`/
-  `HotspotResolved`/`ElementAnnotated`); `add` mints a server-side type-prefixed id. In legacy
+  `HotspotResolved`/`ElementRemoved` (`drop`)/`ElementAnnotated`); `add` mints a server-side
+  type-prefixed id. In legacy
   mode it appends to `comments.jsonl`. All appends serialize through one mutex so concurrent posts
   never interleave (H4).
 - **`src/template.html`** — the client, embedded into the binary via `include_str!` in
@@ -118,8 +119,9 @@ come from violating them:
   `Event` variants must extend `parse_event`/`to_json`/`replay` together (the compiler enforces the
   match), and unknown kinds must keep being skipped on read.
 - **Ids are minted server-side**, never by the client: `<PREFIX><N>`, one past the highest suffix
-  for that lane's prefix in the current projection, computed under the appends lock so concurrent
-  adds can't collide (`mint_id` in `serve.rs`, prefixes in sync with `LANES`).
+  ever added under that lane's prefix in the log (removed-but-not-compacted ids stay reserved),
+  computed under the appends lock so concurrent adds can't collide (`mint_id` in `serve.rs`;
+  prefixes from `render::lane_prefix`, the single source of truth alongside `LANES`).
 
 ## Server diff mechanism
 

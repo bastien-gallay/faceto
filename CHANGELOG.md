@@ -18,9 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   batch of the current projection, bounding replay length. Projection-preserving
   (history collapses; the prior log is saved to `<log>.bak`).
 - Live structural edits in log mode: `POST /comment {kind:"add", type, text, col?}`
-  appends an `ElementAdded` with a **server-minted, type-prefixed id**; moves, renames,
-  and hotspot resolutions persist as their own events. The board modal gained an
-  "add element" affordance for it.
+  appends an `ElementAdded` with a **server-minted, type-prefixed id**; moves (with
+  swap), renames, hotspot resolutions, and `drop` (→ `ElementRemoved`) persist as their
+  own events. The board modal gained an "add element" affordance for it.
 - A **serif nameplate** for the board title (system serif; HTML header + SVG), the one
   display face on an otherwise single-sans instrument.
 - Quality harness: `cargo fmt` / `clippy` config, pinned toolchain, and a GitHub
