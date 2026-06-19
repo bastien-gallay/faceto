@@ -100,17 +100,23 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, String> {
     parse_log(&text)
 }
 
+/// Iterate the meaningful records of JSONL text: each non-blank line, trimmed, paired with its
+/// 1-based line number. The single place the line grammar (skip blanks, trim) lives, shared by
+/// the log reader ([`parse_log`]) and the comments fold ([`from_comments`]) so the two never drift.
+fn jsonl_records(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    text.lines()
+        .enumerate()
+        .map(|(n, line)| (n + 1, line.trim()))
+        .filter(|(_, line)| !line.is_empty())
+}
+
 /// Parse JSONL text into events. Blank lines are skipped; a line that does not parse as
 /// JSON is a hard error (the log is the source of truth); a well-formed object whose
 /// `"event"` is unknown is skipped (forward compatibility across schema versions).
 pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
     let mut events = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let j = json::parse(line).map_err(|e| format!("event-log line {}: {}", n + 1, e))?;
+    for (n, line) in jsonl_records(text) {
+        let j = json::parse(line).map_err(|e| format!("event-log line {}: {}", n, e))?;
         if let Some(ev) = parse_event(&j) {
             events.push(ev);
         }
@@ -128,26 +134,26 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
 /// - The annotation event was once a first-class "comment" (see this module's history); a log or
 ///   external tool that still emits `CommentAdded` / `Comment` is read as `ElementAnnotated`.
 fn upcast(j: &Json) -> Cow<'_, Json> {
-    match j.get("event").and_then(Json::as_str) {
-        Some("CommentAdded") | Some("Comment") => {
-            Cow::Owned(with_event_kind(j, "ElementAnnotated"))
-        }
+    // Rewrite the `event` discriminator to `to`, preserving every other field in order. Only
+    // reached once a known legacy kind string has matched, so the slot is always present.
+    let rename = |pairs: &[(String, Json)], to: &str| {
+        Json::Obj(
+            pairs
+                .iter()
+                .map(|(k, v)| match k.as_str() {
+                    "event" => (k.clone(), Json::Str(to.to_string())),
+                    _ => (k.clone(), v.clone()),
+                })
+                .collect(),
+        )
+    };
+    match j {
+        Json::Obj(pairs) => match j.get("event").and_then(Json::as_str) {
+            Some("CommentAdded") | Some("Comment") => Cow::Owned(rename(pairs, "ElementAnnotated")),
+            _ => Cow::Borrowed(j),
+        },
         _ => Cow::Borrowed(j),
     }
-}
-
-/// Return a copy of an event object with its `"event"` discriminator set to `kind` (every other
-/// field preserved in order). Used by [`upcast`] to migrate a renamed event kind forward.
-fn with_event_kind(j: &Json, kind: &str) -> Json {
-    let Json::Obj(pairs) = j else {
-        return j.clone();
-    };
-    let mut pairs = pairs.clone();
-    match pairs.iter_mut().find(|(k, _)| k == "event") {
-        Some(slot) => slot.1 = Json::Str(kind.to_string()),
-        None => pairs.push(("event".to_string(), Json::Str(kind.to_string()))),
-    }
-    Json::Obj(pairs)
 }
 
 /// One JSON object → an `Event`, or `None` for an unknown/ill-shaped event kind. The object is
