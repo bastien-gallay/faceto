@@ -56,6 +56,10 @@ fn text_dark(kind: &str) -> bool {
 const RESOLVED_FILL: &str = "#D9DEE3";
 const EDGE_FLOW: &str = "#9AA7B0";
 const EDGE_HOTSPOT: &str = "#C39086";
+// Muted axis + phase-band labels. Darkened from the old #90a4ae (≈2.6:1, fails AA) to clear WCAG
+// 4.5:1 on the #fbfbfd board (≈5.3:1). These labels *name* the lane grammar — they are structure,
+// not decoration, so they must be readable.
+const AXIS_LABEL: &str = "#5b6b75";
 
 fn diff_colour(s: &str) -> &'static str {
     match s {
@@ -507,9 +511,10 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
             band_bot
         ));
         p.push(format!(
-            "<text x=\"{:.1}\" y=\"{}\" font-size=\"12\" font-weight=\"600\" fill=\"#90a4ae\">{}</text>",
+            "<text x=\"{:.1}\" y=\"{}\" font-size=\"12\" font-weight=\"600\" fill=\"{}\">{}</text>",
             x + 10.0,
             MARGIN_T - 32.0,
+            AXIS_LABEL,
             esc(&ph.label)
         ));
     }
@@ -558,8 +563,9 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
     for t in &present {
         let y = lane_top[*t] + lane_h[*t] / 2.0;
         p.push(format!(
-            "<text x=\"16\" y=\"{:.1}\" font-size=\"12\" font-weight=\"600\" fill=\"#90a4ae\">{}</text>",
+            "<text x=\"16\" y=\"{:.1}\" font-size=\"12\" font-weight=\"600\" fill=\"{}\">{}</text>",
             y + 4.0,
+            AXIS_LABEL,
             esc(t)
         ));
     }
@@ -644,13 +650,27 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
         if let Some(s) = status {
             cls.push_str(&format!(" diff-{}", s));
         }
+        // A sticky is the primary control: it must be reachable and operable without a mouse.
+        // `role=button` + `tabindex=0` put it in the tab order; the aria-label names it the way a
+        // sighted user reads it (id, label, lane). The client wires Enter/Space → comment dialog
+        // and ←/→ → move on the *focused* sticky (template.html).
+        let mut aria = format!("{}, {}", e.id, hero);
+        if !detail.is_empty() {
+            aria.push_str(&format!(", {}", detail));
+        }
+        aria.push_str(&format!(", {}", e.kind));
+        if resolved {
+            aria.push_str(", resolved");
+        }
         // data-kind / data-col / data-cx / data-cy let the client replay a move (translate the
         // group, recompute its edges) without a server round-trip — see template.html.
         p.push(format!(
-            "<g id=\"{}\" class=\"{}\" data-hero=\"{}\" data-detail=\"{}\" data-kind=\"{}\" \
+            "<g id=\"{}\" class=\"{}\" role=\"button\" tabindex=\"0\" aria-label=\"{}\" \
+             data-hero=\"{}\" data-detail=\"{}\" data-kind=\"{}\" \
              data-col=\"{}\" data-cx=\"{:.1}\" data-cy=\"{:.1}\" style=\"cursor:pointer\"{}>",
             esc(&e.id),
             cls,
+            esc(&aria),
             esc(&hero),
             esc(&detail),
             esc(&e.kind),
@@ -914,6 +934,16 @@ mod tests {
         assert!(svg.contains("data-col=\"2\""));
         assert!(svg.contains("data-cx="));
         assert!(svg.contains("data-cy="));
+    }
+
+    // A sticky is the primary control; it must stay keyboard-reachable and screen-reader-named.
+    // If these ever stop being emitted the board silently becomes mouse-only again — pin them.
+    #[test]
+    fn sticky_group_is_a_focusable_labelled_button() {
+        let svg = render_svg_packed(&one_event_at_col(2), Packing::default());
+        assert!(svg.contains("role=\"button\""));
+        assert!(svg.contains("tabindex=\"0\""));
+        assert!(svg.contains("aria-label=\"E1, L, event\""));
     }
 
     fn attr_values(svg: &str, attr: &str) -> Vec<String> {
