@@ -16,8 +16,10 @@ comments.jsonl
 # personal notes (not part of the project)
 /.personal/
 
-# Claude Code local (per-machine) settings — never shared
-.claude/settings.local.json
+# Claude Code per-machine state (worktrees, local settings) — never shared.
+# Keep a shared project settings.json trackable via the negation.
+/.claude/*
+!/.claude/settings.json
 
 # impeccable design-skill per-machine cache (design.json is shared, this is not)
 .impeccable/hook.cache.json
