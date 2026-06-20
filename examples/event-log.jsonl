@@ -1,0 +1,27 @@
+{"event":"BoardTitled","title":"faceto — sample board"}
+{"event":"PhaseAdded","label":"begin","fromCol":0,"toCol":1}
+{"event":"PhaseAdded","label":"work","fromCol":2,"toCol":4}
+{"event":"ElementAdded","id":"X1","type":"actor","label":"Operator","col":0}
+{"event":"ElementAdded","id":"C1","type":"command","label":"start the day","col":0}
+{"event":"ElementAdded","id":"A1","type":"aggregate","label":"DayPlan","col":1}
+{"event":"ElementAdded","id":"E1","type":"event","label":"DayStarted (DayPlan scaffolded)","col":1}
+{"event":"ElementAdded","id":"C2","type":"command","label":"add an item","col":2}
+{"event":"ElementAdded","id":"E2","type":"event","label":"ItemAdded","col":2}
+{"event":"ElementAdded","id":"P1","type":"policy","label":"when ItemAdded, project forward","col":3}
+{"event":"ElementAdded","id":"E3","type":"event","label":"UnfinishedWorkProjectedForward","col":3}
+{"event":"ElementAdded","id":"R1","type":"readmodel","label":"Today view","col":4}
+{"event":"ElementAdded","id":"H1","type":"hotspot","label":"TopicCreated (item added to a non-existent topic)","col":3}
+{"event":"ElementAdded","id":"H2","type":"hotspot","label":"resolved example","col":4}
+{"event":"HotspotResolved","id":"H2","resolution":""}
+{"event":"EdgeAdded","src":"X1","dst":"C1"}
+{"event":"EdgeAdded","src":"C1","dst":"E1"}
+{"event":"EdgeAdded","src":"E1","dst":"A1"}
+{"event":"EdgeAdded","src":"X1","dst":"C2"}
+{"event":"EdgeAdded","src":"C2","dst":"E2"}
+{"event":"EdgeAdded","src":"E2","dst":"P1"}
+{"event":"EdgeAdded","src":"P1","dst":"E3"}
+{"event":"EdgeAdded","src":"E3","dst":"R1"}
+{"event":"EdgeAdded","src":"H1","dst":"E2"}
+{"event":"ElementMoved","id":"G1","col":3}
+{"event":"ElementMoved","id":"H1","col":4}
+{"event":"ElementMoved","id":"H1","col":3}

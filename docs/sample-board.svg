@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="932" viewBox="0 0 1240 932" font-family="-apple-system,Segoe UI,Roboto,sans-serif">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/></marker></defs>
+<rect width="1240" height="932" fill="#fbfbfd"/>
+<text x="20" y="34" font-size="20" font-weight="700" fill="#222" font-family="'Iowan Old Style','Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif">faceto — sample board</text>
+<rect x="150.0" y="90" width="420.0" height="776" fill="#000" opacity="0.02"/>
+<line x1="150.0" y1="90" x2="150.0" y2="866" stroke="#e0e0e6"/>
+<text x="160.0" y="84" font-size="12" font-weight="600" fill="#90a4ae">begin</text>
+<rect x="570.0" y="90" width="630.0" height="776" fill="#000" opacity="0.02"/>
+<line x1="570.0" y1="90" x2="570.0" y2="866" stroke="#e0e0e6"/>
+<text x="580.0" y="84" font-size="12" font-weight="600" fill="#90a4ae">work</text>
+<line x1="12" y1="224.0" x2="1220" y2="224.0" stroke="#e0e0e6" opacity="0.55"/>
+<line x1="12" y1="332.0" x2="1220" y2="332.0" stroke="#e0e0e6" opacity="0.55"/>
+<line x1="12" y1="440.0" x2="1220" y2="440.0" stroke="#e0e0e6" opacity="0.55"/>
+<line x1="12" y1="548.0" x2="1220" y2="548.0" stroke="#e0e0e6" opacity="0.55"/>
+<line x1="12" y1="656.0" x2="1220" y2="656.0" stroke="#e0e0e6" opacity="0.55"/>
+<line x1="12" y1="764.0" x2="1220" y2="764.0" stroke="#e0e0e6" opacity="0.55"/>
+<text x="16" y="174.0" font-size="12" font-weight="600" fill="#90a4ae">actor</text>
+<text x="16" y="282.0" font-size="12" font-weight="600" fill="#90a4ae">command</text>
+<text x="16" y="390.0" font-size="12" font-weight="600" fill="#90a4ae">aggregate</text>
+<text x="16" y="498.0" font-size="12" font-weight="600" fill="#90a4ae">event</text>
+<text x="16" y="606.0" font-size="12" font-weight="600" fill="#90a4ae">policy</text>
+<text x="16" y="714.0" font-size="12" font-weight="600" fill="#90a4ae">readmodel</text>
+<text x="16" y="822.0" font-size="12" font-weight="600" fill="#90a4ae">hotspot</text>
+<path class="edge" data-src="X1" data-dst="C1" fill="none" d="M255.0,207.0 C255.0,224.0 255.0,224.0 255.0,241.0" stroke="#9AA7B0" stroke-width="1.5" marker-end="url(#arrow)" opacity="0.6"/>
+<path class="edge" data-src="C1" data-dst="E1" fill="none" d="M343.0,278.0 C360.0,278.0 360.0,494.0 377.0,494.0" stroke="#9AA7B0" stroke-width="1.5" marker-end="url(#arrow)" opacity="0.6"/>
+<path class="edge" data-src="E1" data-dst="A1" fill="none" d="M465.0,457.0 C465.0,440.0 465.0,440.0 465.0,423.0" stroke="#9AA7B0" stroke-width="1.5" marker-end="url(#arrow)" opacity="0.6"/>
+<path class="edge" data-src="X1" data-dst="C2" fill="none" d="M343.0,170.0 C465.0,170.0 465.0,278.0 587.0,278.0" stroke="#9AA7B0" stroke-width="1.5" marker-end="url(#arrow)" opacity="0.6"/>
+<path class="edge" data-src="C2" data-dst="E2" fill="none" d="M675.0,315.0 C675.0,386.0 675.0,386.0 675.0,457.0" stroke="#9AA7B0" stroke-width="1.5" marker-end="url(#arrow)" opacity="0.6"/>
+<path class="edge" data-src="E2" data-dst="P1" fill="none" d="M763.0,494.0 C780.0,494.0 780.0,602.0 797.0,602.0" stroke="#9AA7B0" stroke-width="1.5" marker-end="url(#arrow)" opacity="0.6"/>
+<path class="edge" data-src="P1" data-dst="E3" fill="none" d="M885.0,565.0 C885.0,548.0 885.0,548.0 885.0,531.0" stroke="#9AA7B0" stroke-width="1.5" marker-end="url(#arrow)" opacity="0.6"/>
+<path class="edge" data-src="E3" data-dst="R1" fill="none" d="M973.0,494.0 C990.0,494.0 990.0,710.0 1007.0,710.0" stroke="#9AA7B0" stroke-width="1.5" marker-end="url(#arrow)" opacity="0.6"/>
+<path class="edge hot" data-src="H1" data-dst="E2" fill="none" d="M797.0,818.0 C780.0,818.0 780.0,494.0 763.0,494.0" stroke="#C39086" stroke-width="1.4" stroke-dasharray="0.1 6" stroke-linecap="round" opacity="0.7"/>
+<g id="X1" class="sticky actor" data-hero="Operator" data-detail="" data-kind="actor" data-col="0" data-cx="255.0" data-cy="170.0" style="cursor:pointer">
+<rect class="card" x="167.0" y="133.0" width="176" height="74" rx="8" fill="#FCEFA1" stroke="#0003"/>
+<text x="175.0" y="148.0" font-size="9" font-weight="700" fill="#1a1a1a" opacity="0.6">X1</text>
+<text x="255.0" y="174.0" font-size="12" font-weight="600" text-anchor="middle" fill="#1a1a1a">Operator</text>
+</g>
+<g id="C1" class="sticky command" data-hero="start the day" data-detail="" data-kind="command" data-col="0" data-cx="255.0" data-cy="278.0" style="cursor:pointer">
+<rect class="card" x="167.0" y="241.0" width="176" height="74" rx="8" fill="#1A6FAE" stroke="#0003"/>
+<text x="175.0" y="256.0" font-size="9" font-weight="700" fill="#ffffff" opacity="0.6">C1</text>
+<text x="255.0" y="282.0" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">start the day</text>
+</g>
+<g id="A1" class="sticky aggregate" data-hero="DayPlan" data-detail="" data-kind="aggregate" data-col="1" data-cx="465.0" data-cy="386.0" style="cursor:pointer">
+<rect class="card" x="377.0" y="349.0" width="176" height="74" rx="8" fill="#FFD23F" stroke="#0003"/>
+<text x="385.0" y="364.0" font-size="9" font-weight="700" fill="#1a1a1a" opacity="0.6">A1</text>
+<text x="465.0" y="390.0" font-size="12" font-weight="600" text-anchor="middle" fill="#1a1a1a">DayPlan</text>
+</g>
+<g id="E1" class="sticky event" data-hero="DayStarted" data-detail="DayPlan scaffolded" data-kind="event" data-col="1" data-cx="465.0" data-cy="494.0" style="cursor:pointer">
+<rect class="card" x="377.0" y="457.0" width="176" height="74" rx="8" fill="#FF9F1C" stroke="#0003"/>
+<text x="385.0" y="472.0" font-size="9" font-weight="700" fill="#1a1a1a" opacity="0.6">E1</text>
+<text x="465.0" y="492.0" font-size="12" font-weight="600" text-anchor="middle" fill="#1a1a1a">DayStarted</text>
+<text x="465.0" y="506.0" font-size="9.5" text-anchor="middle" fill="#1a1a1a" opacity="0.6">DayPlan scaffolded</text>
+</g>
+<g id="C2" class="sticky command" data-hero="add an item" data-detail="" data-kind="command" data-col="2" data-cx="675.0" data-cy="278.0" style="cursor:pointer">
+<rect class="card" x="587.0" y="241.0" width="176" height="74" rx="8" fill="#1A6FAE" stroke="#0003"/>
+<text x="595.0" y="256.0" font-size="9" font-weight="700" fill="#ffffff" opacity="0.6">C2</text>
+<text x="675.0" y="282.0" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">add an item</text>
+</g>
+<g id="E2" class="sticky event" data-hero="ItemAdded" data-detail="" data-kind="event" data-col="2" data-cx="675.0" data-cy="494.0" style="cursor:pointer">
+<rect class="card" x="587.0" y="457.0" width="176" height="74" rx="8" fill="#FF9F1C" stroke="#0003"/>
+<text x="595.0" y="472.0" font-size="9" font-weight="700" fill="#1a1a1a" opacity="0.6">E2</text>
+<text x="675.0" y="498.0" font-size="12" font-weight="600" text-anchor="middle" fill="#1a1a1a">ItemAdded</text>
+</g>
+<g id="P1" class="sticky policy" data-hero="when ItemAdded, project forward" data-detail="" data-kind="policy" data-col="3" data-cx="885.0" data-cy="602.0" style="cursor:pointer">
+<rect class="card" x="797.0" y="565.0" width="176" height="74" rx="8" fill="#C39BD3" stroke="#0003"/>
+<text x="805.0" y="580.0" font-size="9" font-weight="700" fill="#1a1a1a" opacity="0.6">P1</text>
+<text x="885.0" y="599.0" font-size="12" font-weight="600" text-anchor="middle" fill="#1a1a1a">when ItemAdded,</text>
+<text x="885.0" y="613.0" font-size="12" font-weight="600" text-anchor="middle" fill="#1a1a1a">project forward</text>
+</g>
+<g id="E3" class="sticky event" data-hero="UnfinishedWorkProjectedForward" data-detail="" data-kind="event" data-col="3" data-cx="885.0" data-cy="494.0" style="cursor:pointer">
+<rect class="card" x="797.0" y="457.0" width="176" height="74" rx="8" fill="#FF9F1C" stroke="#0003"/>
+<text x="805.0" y="472.0" font-size="9" font-weight="700" fill="#1a1a1a" opacity="0.6">E3</text>
+<text x="885.0" y="491.0" font-size="12" font-weight="600" text-anchor="middle" fill="#1a1a1a">UnfinishedWork</text>
+<text x="885.0" y="505.0" font-size="12" font-weight="600" text-anchor="middle" fill="#1a1a1a">ProjectedForward</text>
+</g>
+<g id="R1" class="sticky readmodel" data-hero="Today view" data-detail="" data-kind="readmodel" data-col="4" data-cx="1095.0" data-cy="710.0" style="cursor:pointer">
+<rect class="card" x="1007.0" y="673.0" width="176" height="74" rx="8" fill="#6FCF97" stroke="#0003"/>
+<text x="1015.0" y="688.0" font-size="9" font-weight="700" fill="#1a1a1a" opacity="0.6">R1</text>
+<text x="1095.0" y="714.0" font-size="12" font-weight="600" text-anchor="middle" fill="#1a1a1a">Today view</text>
+</g>
+<g id="H1" class="sticky hotspot" data-hero="TopicCreated" data-detail="item added to a non-existent topic" data-kind="hotspot" data-col="3" data-cx="885.0" data-cy="818.0" style="cursor:pointer">
+<rect class="card" x="797.0" y="781.0" width="176" height="74" rx="2" fill="#C0392B" stroke="#0003"/>
+<text x="805.0" y="796.0" font-size="9" font-weight="700" fill="#ffffff" opacity="0.6">H1</text>
+<text x="885.0" y="816.0" font-size="12" font-weight="600" text-anchor="middle" fill="#ffffff">TopicCreated</text>
+<text x="885.0" y="830.0" font-size="9.5" text-anchor="middle" fill="#ffffff" opacity="0.6">item added to a non-existent…</text>
+</g>
+<g id="H2" class="sticky hotspot resolved" data-hero="resolved example" data-detail="" data-kind="hotspot" data-col="4" data-cx="1095.0" data-cy="818.0" style="cursor:pointer">
+<rect class="card" x="1007.0" y="781.0" width="176" height="74" rx="2" fill="#D9DEE3" stroke="#0003"/>
+<text x="1015.0" y="796.0" font-size="9" font-weight="700" fill="#1a1a1a" opacity="0.6">H2</text>
+<text x="1095.0" y="822.0" font-size="12" font-weight="600" text-anchor="middle" fill="#1a1a1a">resolved example</text>
+<circle cx="1180.0" cy="784.0" r="8" fill="#6FAE7E"/>
+<path d="M1176.0,784.0 l2.4,2.6 l4,-5.2" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+<rect x="20" y="904" width="14" height="14" rx="3" fill="#FCEFA1" stroke="#0003"/>
+<text x="39" y="915" font-size="11" fill="#555">actor</text>
+<rect x="95" y="904" width="14" height="14" rx="3" fill="#1A6FAE" stroke="#0003"/>
+<text x="114" y="915" font-size="11" fill="#555">command</text>
+<rect x="184" y="904" width="14" height="14" rx="3" fill="#FFD23F" stroke="#0003"/>
+<text x="203" y="915" font-size="11" fill="#555">aggregate</text>
+<rect x="287" y="904" width="14" height="14" rx="3" fill="#FF9F1C" stroke="#0003"/>
+<text x="306" y="915" font-size="11" fill="#555">event</text>
+<rect x="362" y="904" width="14" height="14" rx="3" fill="#C39BD3" stroke="#0003"/>
+<text x="381" y="915" font-size="11" fill="#555">policy</text>
+<rect x="444" y="904" width="14" height="14" rx="3" fill="#6FCF97" stroke="#0003"/>
+<text x="463" y="915" font-size="11" fill="#555">readmodel</text>
+<rect x="547" y="904" width="14" height="14" rx="3" fill="#C0392B" stroke="#0003"/>
+<text x="566" y="915" font-size="11" fill="#555">hotspot</text>
+<line x1="648" y1="911" x2="674" y2="911" stroke="#9AA7B0" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="681" y="915" font-size="11" fill="#555">triggers / leads to</text>
+<line x1="832" y1="911" x2="858" y2="911" stroke="#C39086" stroke-width="1.4" stroke-dasharray="0.1 6" stroke-linecap="round"/>
+<text x="865" y="915" font-size="11" fill="#555">open question (hotspot)</text>
+</svg>
