@@ -30,8 +30,7 @@ pub struct Element {
     pub col: Option<i64>,
     pub detail: Option<String>,
     pub resolved: bool,
-    // runtime / diff annotations (not in the file)
-    pub x: f64,
+    // diff annotations (not in the file)
     pub diff: Option<String>,
     pub was: Option<Was>,
 }
@@ -104,7 +103,6 @@ fn element_from(j: &Json) -> Option<Element> {
         col: j.get("col").and_then(|v| v.as_f64()).map(|n| n as i64),
         detail: j.get("detail").and_then(|v| v.as_str()).map(String::from),
         resolved: j.get("resolved").and_then(|v| v.as_bool()).unwrap_or(false),
-        x: 0.0,
         diff: None,
         was: None,
     })

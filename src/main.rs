@@ -22,12 +22,12 @@ fn main() {
     let cmd = args.get(1).map(String::as_str).unwrap_or("help");
     match cmd {
         "render" => {
-            let model = args.get(2).map(String::as_str).unwrap_or("model.json");
-            cmd_render(model);
+            let (model, pack) = parse_render(&args[2..]);
+            cmd_render(&model, pack);
         }
         "serve" => {
-            let (model, port) = parse_serve(&args[2..]);
-            if let Err(e) = serve::serve(Path::new(&model), port) {
+            let (model, port, pack) = parse_serve(&args[2..]);
+            if let Err(e) = serve::serve(Path::new(&model), port, pack) {
                 eprintln!("error: {e}");
                 exit(1);
             }
@@ -66,7 +66,7 @@ fn dir_of(path: &Path) -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
-fn cmd_render(model_path: &str) {
+fn cmd_render(model_path: &str, pack: render::Packing) {
     let path = Path::new(model_path);
     let model = match load_source(path) {
         Ok(m) => m,
@@ -75,8 +75,8 @@ fn cmd_render(model_path: &str) {
             exit(1);
         }
     };
-    let svg = render::render_svg(&model);
-    let html = render::render_html(&svg, &model.title);
+    let svg = render::render_svg_packed(&model, pack);
+    let html = render::render_html(&svg, &model.title, pack);
     let dir = dir_of(path);
     if let Err(e) = std::fs::write(dir.join("board.svg"), format!("{svg}\n")) {
         eprintln!("error writing board.svg: {e}");
@@ -87,8 +87,9 @@ fn cmd_render(model_path: &str) {
         exit(1);
     }
     println!(
-        "rendered {} elements → {} + {}",
+        "rendered {} elements ({} packing) → {} + {}",
         model.elements.len(),
+        pack.as_str(),
         dir.join("board.svg").display(),
         dir.join("index.html").display()
     );
@@ -204,25 +205,54 @@ fn cmd_compact(log_path: &str) {
     );
 }
 
-fn parse_serve(args: &[String]) -> (String, u16) {
+/// The shared `--pack M` flag: if `args[i]` selects packing, return the parsed mode (its value is
+/// `args[i+1]`). The single source of the flag's aliases, so `render` and `serve` can't drift.
+fn pack_flag(args: &[String], i: usize) -> Option<render::Packing> {
+    matches!(args[i].as_str(), "--pack" | "-k").then(|| {
+        args.get(i + 1)
+            .map(|v| render::Packing::parse(v))
+            .unwrap_or_default()
+    })
+}
+
+/// `render [SOURCE] [--pack rows|columns|grid]`. The positional is the source; `--pack` chooses how
+/// crowded cells unpack (default rows).
+fn parse_render(args: &[String]) -> (String, render::Packing) {
     let mut model = "model.json".to_string();
-    let mut port: u16 = 8753;
+    let mut pack = render::Packing::default();
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
-            "-p" | "--port" => {
-                if let Some(v) = args.get(i + 1).and_then(|s| s.parse().ok()) {
-                    port = v;
-                }
-                i += 2;
-            }
-            other => {
-                model = other.to_string();
-                i += 1;
-            }
+        if let Some(p) = pack_flag(args, i) {
+            pack = p;
+            i += 2;
+        } else {
+            model = args[i].clone();
+            i += 1;
         }
     }
-    (model, port)
+    (model, pack)
+}
+
+fn parse_serve(args: &[String]) -> (String, u16, render::Packing) {
+    let mut model = "model.json".to_string();
+    let mut port: u16 = 8753;
+    let mut pack = render::Packing::default();
+    let mut i = 0;
+    while i < args.len() {
+        if let Some(p) = pack_flag(args, i) {
+            pack = p;
+            i += 2;
+        } else if matches!(args[i].as_str(), "-p" | "--port") {
+            if let Some(v) = args.get(i + 1).and_then(|s| s.parse().ok()) {
+                port = v;
+            }
+            i += 2;
+        } else {
+            model = args[i].clone();
+            i += 1;
+        }
+    }
+    (model, port, pack)
 }
 
 fn print_help() {
@@ -230,13 +260,14 @@ fn print_help() {
         "faceto {} — a typed file → a visual workshop board you think through with an LLM\n\
          \n\
          USAGE:\n\
-         \x20 faceto render  [SOURCE]            write board.svg + index.html next to SOURCE\n\
-         \x20 faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar (default :8753)\n\
+         \x20 faceto render  [SOURCE] [--pack M]  write board.svg + index.html next to SOURCE\n\
+         \x20 faceto serve   [SOURCE] [-p PORT] [--pack M]  serve the live board + comment sidecar (default :8753)\n\
          \x20 faceto genesis [MODEL]             migrate a model.json into an event-log.jsonl\n\
          \x20 faceto compact [LOG]               fold a log to a snapshot, bounding replay (default event-log.jsonl)\n\
          \x20 faceto help | version\n\
          \n\
-         SOURCE is a model.json or an event log (*.jsonl / *.log); it defaults to ./model.json.",
+         SOURCE is a model.json or an event log (*.jsonl / *.log); it defaults to ./model.json.\n\
+         M (--pack) is how crowded cells unpack: rows (taller, default) | columns (wider) | grid (both).",
         env!("CARGO_PKG_VERSION")
     );
 }

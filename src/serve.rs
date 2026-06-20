@@ -25,6 +25,8 @@ struct Ctx {
     /// When the source is an event log, the model is a projection replayed from it and
     /// comments are appended to the log as events rather than to `comments.jsonl`.
     log_mode: bool,
+    /// Default packing for crowded cells; a `?pack=` query overrides it per request.
+    packing: render::Packing,
     cache: Mutex<Cache>,
     /// Serializes appends to the log (H4): concurrent `POST /comment` handlers run on
     /// separate threads, so without this two events could interleave mid-line. Holding
@@ -141,7 +143,7 @@ fn mint_id(kind: &str, log: &[events::Event]) -> String {
     format!("{}{}", prefix, max.saturating_add(1))
 }
 
-pub fn serve(model_path: &Path, port: u16) -> Result<(), String> {
+pub fn serve(model_path: &Path, port: u16, packing: render::Packing) -> Result<(), String> {
     let dir = model_path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -152,6 +154,7 @@ pub fn serve(model_path: &Path, port: u16) -> Result<(), String> {
         model_path: model_path.to_path_buf(),
         comments_path: dir.join("comments.jsonl"),
         log_mode,
+        packing,
         cache: Mutex::new(Cache {
             map: HashMap::new(),
             order: VecDeque::new(),
@@ -229,7 +232,8 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
     match (method, path) {
         ("GET", "/") | ("GET", "/index.html") => match ctx.current() {
             Ok((_v, model)) => {
-                let html = render::render_html(&render::render_svg(&model), &model.title);
+                let svg = render::render_svg_packed(&model, ctx.packing);
+                let html = render::render_html(&svg, &model.title, ctx.packing);
                 send(
                     &mut out,
                     200,
@@ -248,6 +252,9 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
         },
         ("GET", "/board.svg") => match ctx.current() {
             Ok((version, model)) => {
+                let pack = query_get(query, "pack")
+                    .map(|p| render::Packing::parse(&p))
+                    .unwrap_or(ctx.packing);
                 let base = query_get(query, "base");
                 let old = base
                     .as_deref()
@@ -256,7 +263,7 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                 if let (Some(old), Some(base)) = (old, &base) {
                     let merged =
                         model::diff_models(&old, &model, ("last seen".into(), "now".into()));
-                    let svg = render::render_svg(&merged) + "\n";
+                    let svg = render::render_svg_packed(&merged, pack) + "\n";
                     send(
                         &mut out,
                         200,
@@ -265,7 +272,7 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                         &[("X-Diff-Base", base.as_str())],
                     )
                 } else {
-                    let svg = render::render_svg(&model) + "\n";
+                    let svg = render::render_svg_packed(&model, pack) + "\n";
                     send(&mut out, 200, "image/svg+xml", svg.as_bytes(), &[])
                 }
             }
@@ -562,6 +569,7 @@ mod tests {
             model_path: path.clone(),
             comments_path: path.clone(),
             log_mode: true,
+            packing: render::Packing::default(),
             cache: Mutex::new(Cache {
                 map: HashMap::new(),
                 order: VecDeque::new(),
@@ -700,6 +708,7 @@ mod tests {
             model_path: path.clone(),
             comments_path: path.clone(),
             log_mode: true,
+            packing: render::Packing::default(),
             cache: Mutex::new(Cache {
                 map: HashMap::new(),
                 order: VecDeque::new(),
@@ -758,6 +767,7 @@ mod tests {
             model_path: path.clone(),
             comments_path: path.clone(),
             log_mode: true,
+            packing: render::Packing::default(),
             cache: Mutex::new(Cache {
                 map: HashMap::new(),
                 order: VecDeque::new(),
@@ -776,6 +786,7 @@ mod tests {
             model_path: std::env::temp_dir().join("faceto-nonexistent.jsonl"),
             comments_path: std::env::temp_dir().join("faceto-nonexistent.jsonl"),
             log_mode: true,
+            packing: render::Packing::default(),
             cache: Mutex::new(Cache {
                 map: HashMap::new(),
                 order: VecDeque::new(),

@@ -17,6 +17,14 @@
   button { font: inherit; padding: 5px 11px; border: 1px solid #cfcfda; border-radius: 7px;
            background: #fff; cursor: pointer; }
   button:hover { background: #f2f2f7; }
+  /* Packing control: how crowded time-slots unpack (rows / columns / grid). A connected
+     segmented control — one standard affordance, the active mode carries the accent. */
+  .seg { display: inline-flex; border: 1px solid #cfcfda; border-radius: 7px; overflow: hidden; }
+  .seg button { border: none; border-radius: 0; border-left: 1px solid #e6e6ee; padding: 5px 10px;
+                color: #557; background: #fff; }
+  .seg button:first-child { border-left: none; }
+  .seg button[aria-pressed="true"] { background: #1A6FAE; color: #fff; }
+  .seg button[aria-pressed="true"]:hover { background: #1A6FAE; }
   #status { font-size: 11px; padding: 3px 9px; border-radius: 999px; background: #eef; color: #557; }
   #status.live { background: #e6f7ec; color: #1b7a3d; }
   #note { font-size: 11px; color: #1b7a3d; }
@@ -56,6 +64,11 @@
   <span id="status">checking…</span>
   <span id="note"></span>
   <span class="spacer"></span>
+  <span class="seg" id="pack" role="group" aria-label="how overlapping stickies unpack">
+    <button data-pack="rows" aria-pressed="true" title="stack overlapping stickies into rows — taller board">Rows</button>
+    <button data-pack="columns" aria-pressed="false" title="fan overlapping stickies into columns — wider board">Columns</button>
+    <button data-pack="grid" aria-pressed="false" title="pack overlapping stickies into a grid — balanced">Grid</button>
+  </span>
   <span id="count" class="prior"></span>
   <button id="plain" style="display:none" title="clear the diff overlay and show the current board">Plain</button>
   <button id="export">Export comments</button>
@@ -107,7 +120,7 @@
 
 <script>
 const LS_KEY = "facetoComments";
-const CFG = __CONFIG__;   // { colW, stickyW, stickyH } — geometry, injected from render.rs
+const CFG = __CONFIG__;   // { colW, stickyW, stickyH, pack } — geometry + default packing, from render.rs
 // Structural ops change the board itself, not feedback on a box — kept out of the note badges,
 // counts and prior-comment list (and never resynced offline; the log is the truth).
 const STRUCTURAL_KINDS = new Set(["move", "add", "drop"]);
@@ -115,6 +128,12 @@ let serverLive = false;
 let comments = [];        // {elemId, kind, text, ts}  (kind:"move" carries col/prevCol/swap…)
 let shownVersion = null;  // model hash the board currently displays — the diff baseline
 let diffing = false;
+let diffBase = null;      // baseline hash the current diff overlay is drawn against (if diffing)
+// How crowded time-slots unpack: rows (taller) | columns (wider) | grid (balanced). The board the
+// server first sent is CFG.pack; a saved preference wins. Every /board.svg request carries it.
+let pack = localStorage.getItem("facetoPack") || CFG.pack || "rows";
+const boardSrc = (extra = {}) =>
+  "/board.svg?" + new URLSearchParams({ pack, ...extra }).toString();
 
 const $ = (s) => document.querySelector(s);
 const lsGet = () => { try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); } catch { return []; } };
@@ -158,7 +177,13 @@ function edgePath([x1, y1], [x2, y2]) {
 }
 
 // Translate every sticky to its current column and redraw the connectors that touch it.
+// The optimistic nudge assumes a uniform column pitch (CFG.colW); that only holds in Rows packing —
+// in Columns/Grid a column's width varies with its busiest cell, so the local delta would misplace
+// the sticky. When live we skip it and let the authoritative re-render (the move posts, then load()
+// diffs) place it correctly; offline there is no re-render, so we keep the approximate nudge as the
+// only feedback.
 function applyLayout() {
+  if (pack !== "rows" && serverLive) return;
   document.querySelectorAll(".sticky").forEach((g) => {
     if (colOf[g.id] === undefined) return;
     const dx = (colOf[g.id] - baseCol[g.id]) * CFG.colW;
@@ -242,12 +267,13 @@ async function load() {
 // Replace the board with one diffed against `base`; advance the baseline to `live`.
 async function showDiff(base, live) {
   try {
-    const r = await fetch("/board.svg?base=" + encodeURIComponent(base), { cache: "no-store" });
+    const r = await fetch(boardSrc({ base }), { cache: "no-store" });
     if (!r.ok) return;
     $("#board").innerHTML = await r.text();
     bindStickies();
     if (r.headers.get("X-Diff-Base")) {
       diffing = true;
+      diffBase = base;
       $("#plain").style.display = "";
       note("showing what changed since you last looked — Plain to clear");
     } else {
@@ -260,10 +286,11 @@ async function showDiff(base, live) {
 // Clear the diff overlay: redraw the plain current board and re-baseline to it.
 async function showPlain() {
   try {
-    const r = await fetch("/board.svg", { cache: "no-store" });
+    const r = await fetch(boardSrc(), { cache: "no-store" });
     if (r.ok) { $("#board").innerHTML = await r.text(); bindStickies(); replayMoves(); }
   } catch {}
   diffing = false;
+  diffBase = null;
   $("#plain").style.display = "none";
   note("");
   shownVersion = await liveVersion();
@@ -355,7 +382,10 @@ function openModal(g) {
 }
 
 $("#m-kind").addEventListener("change", setKind);
+syncPackUI();
 bindStickies();
+// The server first rendered CFG.pack; if a saved preference differs, switch to it before loading.
+if (pack !== CFG.pack) renderPack();
 
 $("#modal").addEventListener("close", () => {
   if ($("#modal").returnValue !== "save") return;
@@ -386,6 +416,31 @@ document.addEventListener("keydown", (e) => {
   if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
   e.preventDefault();
   doMove(hoverId, e.key === "ArrowLeft" ? "left" : "right");
+});
+
+// ---- packing control (rows / columns / grid) ------------------------------
+function syncPackUI() {
+  document.querySelectorAll("#pack button").forEach((b) =>
+    b.setAttribute("aria-pressed", b.dataset.pack === pack ? "true" : "false"));
+}
+// Re-render at the current packing, keeping the diff overlay if one is showing (same baseline).
+async function renderPack() {
+  try {
+    const r = await fetch(boardSrc(diffing && diffBase ? { base: diffBase } : {}), { cache: "no-store" });
+    if (!r.ok) return;
+    $("#board").innerHTML = await r.text();
+    bindStickies();
+    if (!diffing) replayMoves();
+    paint();
+  } catch {}
+}
+$("#pack").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-pack]");
+  if (!b || b.dataset.pack === pack) return;
+  pack = b.dataset.pack;
+  localStorage.setItem("facetoPack", pack);
+  syncPackUI();
+  renderPack();
 });
 
 $("#refresh").addEventListener("click", load);

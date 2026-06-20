@@ -245,7 +245,6 @@ pub fn replay(events: &[Event]) -> Model {
                         col: *col,
                         detail: detail.clone(),
                         resolved: false,
-                        x: 0.0,
                         diff: None,
                         was: None,
                     });
