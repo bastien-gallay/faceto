@@ -49,7 +49,16 @@
                  padding: 2px 6px; border: 2px solid #1A6FAE; border-radius: 6px;
                  background: #fff; color: #222; box-shadow: 0 4px 14px #1a6fae33; }
   #rename-edit:focus { outline: none; }
-  @media (prefers-reduced-motion: reduce) { .edge, .sticky { transition: none; } }
+  /* Inline add: a ghost ink-blue + that fades in when you hover a sticky (its right edge) or a lane
+     title (prepend). DESIGN: the accent marks where you act; calmest form — a bare glyph, no chrome
+     at rest. Click opens the same inline editor as rename to type the new label. */
+  #add-plus { position: fixed; display: none; z-index: 19; width: 22px; height: 22px; padding: 0;
+              border: none; background: none; cursor: pointer; color: #1A6FAE;
+              font: 600 20px -apple-system, Segoe UI, Roboto, sans-serif; line-height: 22px;
+              text-align: center; opacity: 0; transition: opacity .15s ease-out; }
+  #add-plus.show { display: block; opacity: 1; }
+  #add-plus:focus-visible { outline: 2px solid #1A6FAE; outline-offset: 1px; border-radius: 3px; opacity: 1; display: block; }
+  @media (prefers-reduced-motion: reduce) { .edge, .sticky, #add-plus { transition: none; } }
   /* Narrow widths: let the header wrap instead of clipping. Without this the packing control
      (Rows / Columns / Grid) and the Reload button slide off-screen and become unreachable. */
   @media (max-width: 680px) {
@@ -96,6 +105,7 @@
 </header>
 <div id="board" role="group" aria-label="event-storming board — each sticky is a button: double-click or F2 to rename, Delete to remove, arrow keys to move, Enter to comment">__SVG__</div>
 <input id="rename-edit" aria-label="rename this element" autocomplete="off" spellcheck="false">
+<button id="add-plus" type="button" aria-label="add an element here" title="add an element">+</button>
 
 <dialog id="modal">
   <form method="dialog">
@@ -109,23 +119,12 @@
       <div class="prior" id="m-prior"></div>
       <select id="m-kind">
         <option value="comment">comment</option>
-        <option value="add">add — a new element, just after this one</option>
         <option value="split">split — this is more than one element</option>
         <option value="rename">rename / reword</option>
         <option value="drop">drop — never happened</option>
         <option value="move">move — wrong lane / position</option>
         <option value="question">open question</option>
         <option value="resolve">resolve a hotspot</option>
-      </select>
-      <select id="m-type" style="display:none" title="which lane the new element belongs to">
-        <option value="event">event</option>
-        <option value="command">command</option>
-        <option value="aggregate">aggregate</option>
-        <option value="policy">policy</option>
-        <option value="readmodel">read model</option>
-        <option value="actor">actor</option>
-        <option value="external">external system</option>
-        <option value="hotspot">hotspot</option>
       </select>
       <textarea id="m-text" placeholder="short note — the next session reads this and adjusts the model"></textarea>
     </div>
@@ -256,7 +255,8 @@ function replayMoves() {
 function doMove(id, dir) {
   if (colOf[id] === undefined) return;
   const from = colOf[id], target = from + (dir === "left" ? -1 : 1);
-  if (target < 0) { note("already at the left edge"); return; }
+  // No fixed left edge: `col` is a global coordinate and the lane-title `+` (prepend) mints
+  // negative cols, which the renderer draws on-board. Move-left grows the board left the same way.
   let swapId = null;
   for (const oid in colOf) {
     if (oid !== id && kindOf[oid] === kindOf[id] && colOf[oid] === target) { swapId = oid; break; }
@@ -310,6 +310,63 @@ function doRemove(id) {
   if (!window.confirm(`Remove "${g.dataset.hero || id}" from the board?`)) return;
   note(`removed ${id}`);
   postComment({ elemId: id, kind: "drop", text: "removed inline", ts: new Date().toISOString(), status: "open" });
+}
+
+// ---- inline add (the + affordance) ----------------------------------------
+// A ghost ink-blue + fades in on sticky hover (its right edge → add-after, same lane, col+1) and on
+// lane-title hover (→ prepend; the server derives the left-edge col). Clicking it opens the *same*
+// inline editor as rename to type the new label — Enter posts kind:"add", Escape cancels. The id is
+// minted server-side and the non-blank guard is mirrored here, so a blank slip never posts.
+let adding = null;       // { type, col?, prepend?, sx, sy } while typing the new label, else null
+let plusHideT = null;
+const plusBtn = $("#add-plus");
+function showPlus(x, y, action) {
+  clearTimeout(plusHideT);
+  plusBtn._action = action;
+  plusBtn.style.left = `${x}px`;
+  plusBtn.style.top = `${y}px`;
+  plusBtn.classList.add("show");
+}
+// A short grace on leave lets the cursor travel from the sticky/label onto the + without it
+// vanishing; the + cancels the timer on its own mouseenter.
+function hidePlusSoon() { plusHideT = setTimeout(() => plusBtn.classList.remove("show"), 140); }
+plusBtn.addEventListener("mouseenter", () => clearTimeout(plusHideT));
+plusBtn.addEventListener("mouseleave", hidePlusSoon);
+plusBtn.addEventListener("click", () => { if (plusBtn._action) startAdd(plusBtn._action); });
+function startAdd(action) {
+  if (renaming || adding) return;
+  plusBtn.classList.remove("show");
+  const input = $("#rename-edit");
+  Object.assign(input.style,
+    { left: `${action.sx}px`, top: `${action.sy}px`, width: `${CFG.stickyW}px`, height: `${CFG.stickyH}px`, display: "block" });
+  input.value = "";
+  adding = action;
+  input.focus();
+}
+function endAdd(commit) {
+  if (!adding) return;
+  const a = adding, text = $("#rename-edit").value.trim();
+  adding = null;
+  $("#rename-edit").style.display = "none";
+  if (!commit) { note("add cancelled"); return; }
+  if (!text) { note("add needs a label — nothing added"); return; }   // mirrors the server guard
+  note("element added");
+  const c = { kind: "add", type: a.type, text, ts: new Date().toISOString(), status: "open" };
+  if (a.prepend) c.prepend = true; else c.col = a.col;
+  postComment(c);
+}
+// Lane titles are always rendered (R), so the prepend + reaches even an empty board. Re-bound after
+// every board swap, alongside the stickies.
+function bindLaneAdders() {
+  document.querySelectorAll(".lane-label").forEach((t) => {
+    t.style.cursor = "pointer";
+    t.onmouseenter = () => {
+      const r = t.getBoundingClientRect();
+      showPlus(r.right + 6, r.top + r.height / 2 - 11,
+        { type: t.dataset.lane, prepend: true, sx: r.right + 14, sy: r.top - 6 });
+    };
+    t.onmouseleave = hidePlusSoon;
+  });
 }
 
 // Persist a comment (move or feedback): POST when live, else stash in localStorage. Offline
@@ -409,8 +466,13 @@ function bindStickies() {
     let clickT = null;
     g.onclick = () => { if (clickT) return; clickT = setTimeout(() => { clickT = null; openModal(g); }, 200); };
     g.ondblclick = () => { clearTimeout(clickT); clickT = null; startRename(g); };
-    g.onmouseenter = () => { hoverId = g.id; hoverOn(g.id); };
-    g.onmouseleave = () => { if (hoverId === g.id) hoverId = null; hoverOff(); };
+    g.onmouseenter = () => {
+      hoverId = g.id; hoverOn(g.id);
+      const r = g.getBoundingClientRect();
+      showPlus(r.right + 4, r.top + r.height / 2 - 11,
+        { type: g.dataset.kind, col: +g.dataset.col + 1, sx: r.right + 12, sy: r.top });
+    };
+    g.onmouseleave = () => { if (hoverId === g.id) hoverId = null; hoverOff(); hidePlusSoon(); };
     // Keyboard parity with the mouse: focusing a sticky makes it the ← / → move target (same as
     // hover) and spotlights its connectors; Enter / Space opens its comment dialog.
     g.onfocus = () => { hoverId = g.id; hoverOn(g.id); };
@@ -419,6 +481,7 @@ function bindStickies() {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openModal(g); }
     };
   });
+  bindLaneAdders();
 }
 
 function paint() {
@@ -439,18 +502,6 @@ function paint() {
   window._byEl = byEl;
 }
 
-const PLACEHOLDERS = {
-  add: "label for the new element — e.g. ItemDeleted",
-};
-// `add` mints a real element (it needs a lane + a label), so reveal the type select and
-// retitle the save button; every other kind is a note on the element under the cursor.
-function setKind() {
-  const adding = $("#m-kind").value === "add";
-  $("#m-type").style.display = adding ? "" : "none";
-  $("#m-save").textContent = adding ? "Add element" : "Save comment";
-  $("#m-text").placeholder = PLACEHOLDERS[$("#m-kind").value] || "short note — the next session reads this and adjusts the model";
-}
-
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 function openModal(g) {
   const id = g.id;
@@ -465,17 +516,13 @@ function openModal(g) {
   $("#m-rel").innerHTML = rel ? "connected to: " + rel : "";
   $("#m-text").value = "";
   $("#m-kind").value = "comment";
-  $("#m-type").value = "event";
-  setKind();
   const prior = (window._byEl?.[id] || []).map((c) => `<div>[${esc(c.kind)}] ${esc(c.text)}</div>`).join("");
   $("#m-prior").innerHTML = prior ? "<b>prior:</b>" + prior : "";
   $("#modal").returnValue = "cancel";
   $("#modal").showModal();
   window._activeId = id;
-  window._activeCol = +g.dataset.col;   // a new element added "from this one" lands just after it
 }
 
-$("#m-kind").addEventListener("change", setKind);
 syncPackUI();
 bindStickies();
 // The server first rendered CFG.pack; if a saved preference differs, switch to it before loading.
@@ -486,15 +533,6 @@ $("#modal").addEventListener("close", () => {
   const text = $("#m-text").value.trim();
   if (!text) return;
   const ts = new Date().toISOString();
-  // `add` is a structural command: the server mints the id and folds it into the board, so it
-  // carries a lane (`type`) and `col` instead of an `elemId`. Everything else annotates the box.
-  if ($("#m-kind").value === "add") {
-    // `??` only guards null/undefined, not NaN (a sticky with no numeric data-col), so test
-    // finiteness explicitly — otherwise col would serialize to JSON null and misplace the element.
-    const base = Number.isFinite(window._activeCol) ? window._activeCol : 0;
-    postComment({ kind: "add", type: $("#m-type").value, text, col: base + 1, ts, status: "open" });
-    return;
-  }
   postComment({ elemId: window._activeId, kind: $("#m-kind").value, text, ts, status: "open" });
 });
 
@@ -505,14 +543,15 @@ $("#m-right").addEventListener("click", () => { const id = window._activeId; $("
 // Hover or focus a sticky and act on it from the keyboard — the keyboard-fast path, parity with
 // the mouse: ← / → nudge a column, F2 renames in place, Delete / Backspace removes. Skipped while
 // the modal or an inline rename owns the keyboard, or while typing in a field.
+// One inline editor, two modes: `adding` posts kind:"add", otherwise it commits a rename.
 $("#rename-edit").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); endRename(true); }
-  else if (e.key === "Escape") { e.preventDefault(); endRename(false); }
+  if (e.key === "Enter") { e.preventDefault(); adding ? endAdd(true) : endRename(true); }
+  else if (e.key === "Escape") { e.preventDefault(); adding ? endAdd(false) : endRename(false); }
   e.stopPropagation();   // keep edit keystrokes from reaching the board-level handler below
 });
-$("#rename-edit").addEventListener("blur", () => endRename(true));
+$("#rename-edit").addEventListener("blur", () => { adding ? endAdd(true) : endRename(true); });
 document.addEventListener("keydown", (e) => {
-  if ($("#modal").open || renaming || !hoverId) return;
+  if ($("#modal").open || renaming || adding || !hoverId) return;
   const ae = document.activeElement;
   if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
