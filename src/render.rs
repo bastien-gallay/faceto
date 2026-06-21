@@ -318,11 +318,10 @@ impl Packing {
 pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
     let mut elements = model.elements.clone();
 
-    let present: Vec<&str> = LANES
-        .iter()
-        .cloned()
-        .filter(|t| elements.iter().any(|e| e.kind == *t))
-        .collect();
+    // R: the 8-lane scaffold is the board's structure, not a function of its contents. Every lane
+    // always renders, so an empty board shows the full grammar (onboarding) and every lane title is
+    // a hoverable add-target. (Previously this filtered to lanes that held an element.)
+    let present: Vec<&str> = LANES.to_vec();
 
     // Auto-assign a column to any element missing `col`, preserving file order.
     let mut auto: i64 = 0;
@@ -927,6 +926,30 @@ mod tests {
         }
     }
 
+    fn empty_board() -> Model {
+        Model {
+            title: "t".into(),
+            phases: vec![],
+            elements: vec![],
+            edges: vec![],
+            diff_meta: None,
+        }
+    }
+
+    // R: the lane scaffold is the board's structure, not a function of its contents — every lane
+    // renders even when empty, so an empty board shows all 8 lanes (onboarding) and every lane
+    // title is a hoverable add-target. Pin all 8 labels on a zero-element board.
+    #[test]
+    fn every_lane_renders_even_on_an_empty_board() {
+        let svg = render_svg_packed(&empty_board(), Packing::default());
+        for lane in LANES {
+            assert!(
+                svg.contains(&format!(">{lane}</text>")),
+                "empty board is missing the `{lane}` lane label"
+            );
+        }
+    }
+
     #[test]
     fn sticky_group_exposes_layout_data_attributes() {
         let svg = render_svg_packed(&one_event_at_col(2), Packing::default());
@@ -1052,11 +1075,13 @@ mod tests {
     }
 
     // A lone sticky keeps its classic position: centred on a single-row lane, no horizontal fan.
+    // Under R every lane always renders, so `event` is the 4th lane (actor/command/aggregate sit
+    // above it), each an empty single-row band of height ROW_PITCH + LANE_VPAD = 108.
     #[test]
     fn a_lone_sticky_stays_on_the_lane_mid_line() {
         let svg = render_svg_packed(&events_at_col(0, 1), Packing::default());
-        // lane_top (MARGIN_T) + LANE_VPAD/2 + ROW_PITCH/2 = 116 + 8 + 46.
-        assert_eq!(attr_values(&svg, "data-cy"), vec!["170.0".to_string()]);
+        // lane_top(event) = MARGIN_T + 3*108 = 440; + LANE_VPAD/2 + ROW_PITCH/2 = 440 + 8 + 46.
+        assert_eq!(attr_values(&svg, "data-cy"), vec!["494.0".to_string()]);
         // col 0 centre, no stagger: MARGIN_L + COL_W/2 = 150 + 105.
         assert_eq!(attr_values(&svg, "data-cx"), vec!["255.0".to_string()]);
     }

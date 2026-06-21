@@ -120,6 +120,17 @@ fn edge_from(j: &Json) -> Option<Edge> {
 /// Merge two models into one annotated model: every element/edge tagged
 /// added / removed / changed / moved / unchanged, keyed on stable `id` (never text or
 /// position). Layout follows the *new* side (`b`); removed elements keep their old slot.
+/// The `col` for a "prepend to the board's left edge" add (the lane-title `+` gesture).
+/// Strictly left of every current element so it sorts first, and repeat-safe (each successive
+/// prepend marches one column further left); falls back to 0 on an empty board.
+pub fn prepend_col(m: &Model) -> i64 {
+    m.elements
+        .iter()
+        .filter_map(|e| e.col)
+        .min()
+        .map_or(0, |lo| lo - 1)
+}
+
 pub fn diff_models(a: &Model, b: &Model, meta: (String, String)) -> Model {
     let ea: HashMap<&str, &Element> = a.elements.iter().map(|e| (e.id.as_str(), e)).collect();
     let eb_ids: HashSet<&str> = b.elements.iter().map(|e| e.id.as_str()).collect();
@@ -216,6 +227,27 @@ mod tests {
 
     fn model_of(src: &str) -> Model {
         from_json(&json::parse(src).unwrap())
+    }
+
+    // The lane-title `+` mints at the board's left edge: strictly before everything (so it sorts
+    // first under the renderer's col-min indexing) and repeat-safe — two prepends in a row land at
+    // min-1 then min-2, never colliding. Empty board falls back to 0.
+    #[test]
+    fn prepend_col_lands_strictly_left_and_repeats_safely() {
+        assert_eq!(prepend_col(&Model::default()), 0, "empty board");
+        let m = model_of(
+            r#"{"elements":[
+                {"id":"E1","type":"event","label":"A","col":3},
+                {"id":"E2","type":"event","label":"B","col":5}]}"#,
+        );
+        assert_eq!(prepend_col(&m), 2, "lowest col 3 → 2");
+        // after one prepend the lowest col is 2; the next must march to 1, not back to 3.
+        let m2 = model_of(
+            r#"{"elements":[
+                {"id":"E1","type":"event","label":"A","col":2},
+                {"id":"E2","type":"event","label":"B","col":3}]}"#,
+        );
+        assert_eq!(prepend_col(&m2), 1, "repeat marches left");
     }
 
     fn tag<'a>(m: &'a Model, id: &str) -> Option<&'a str> {

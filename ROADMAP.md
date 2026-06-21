@@ -12,8 +12,8 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 
 | ID | Direction | Status | Horizon | Summary |
 | --- | --- | --- | --- | --- |
-| F-inline-edit | UI · direct edit | ☐ | **Now** | Rename / move / remove elements directly on the board; the comment box becomes optional, not the only path. Wires client gestures to the existing `ElementRenamed/Moved/Removed` events + server-side minting — high impact, low effort. |
-| F-inline-add | UI · direct edit | ☐ | **Now** | Finish the inline add-element affordance → `ElementAdded` + server mint. Same low-effort substrate as F-inline-edit. |
+| F-inline-edit | UI · direct edit | ✅ | **Now** | Rename / move / remove elements directly on the board; the comment box becomes optional, not the only path. Wires client gestures to the existing `ElementRenamed/Moved/Removed` events + server-side minting — high impact, low effort. Shipped PR #4. |
+| F-inline-add | UI · direct edit | 🚧 | **Now** | Direct on-board element creation (the `add` substrate already exists end-to-end via the modal). Hover-element `+` and an empty-board affordance replace the modal dropdown's `add` option. Lane-only, client-only. |
 | F-edge-routing | UI · legibility | ☐ | **Next** | Reduce edge crossings via a layout heuristic in `render.rs`. Self-contained, no model-spine change. Lower ceiling than grouping but cheap and immediate. |
 | F-container | model · grouping | ☐ | Later | Add the missing bounded-context / container primitive as a readability device. The single brick that also unlocks F-model-smells and F-ddd-process. Build when grouping-legibility or linting becomes the felt pain. |
 | F-mcp-narrative | AI · participant | ☐ | Later | MCP server (stdio JSON-RPC, std-only) + a reverse-narrative / discovery skill so an LLM reads the log and proposes events. On product-thesis; the real answer to "solo & stuck". Revisit when momentum, not legibility, ends sessions. |
@@ -23,6 +23,7 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | F-ddd-process | DDD process | ☐ | Parked | Adjacent capabilities from the ddd-crew starter modelling process. Depends on F-container; open after it lands. |
 | F-new-diagrams | new formats | ☐ | Parked | New diagram types: C4, User Story Mapping, BPMN. The long-term PRODUCT.md ambition; deferred until the event-storming board is excellent. |
 | F-model-smells | linting | ☐ | Parked | Detect model smells — orphans, loops, heavy bounded-contexts. Needs the F-container primitive and a graph pass; open once grouping exists. |
+| F-board-gestures | UI · direct edit | ☐ | Later | Richer on-element gestures layered over F-inline-add: hover opens a small tool-button set on the element, click-on-centre is an in-place rename, drag-n-drop moves left/right. The modal then carries only prose actions, and `resolve` shows only on hotspots / open questions. Open after F-inline-add lands and the bare `+` gesture has been dogfooded. |
 
 ## Working note — F-inline-edit (2026-06-20, branch `feat/F-inline-edit`)
 
@@ -41,6 +42,41 @@ The fix keeps the *non-blank-label* invariant in the Rust domain seam (not only 
   blank label via the comment seam; move/annotate preserve element cardinality & identity.
 - Integration: a blank rename appends nothing to the log; a real one persists one `ElementRenamed`.
 - Non-regression: move/swap, server-side mint, and `add`'s blank-guard stay green.
+
+## Working note — F-inline-add (2026-06-21, paired)
+
+**Scope (hardened, ratified).** `add` already works end-to-end through the comment modal's
+dropdown: `serve.rs` `append_add` + server-side `mint_id` + the non-blank-label guard, all
+tested. This slice makes add a **direct on-board gesture** and strips the modal's `add` option.
+**Lane-only, client-only** — domains / bounded-contexts are explicitly *not* in scope (that is
+**F-container**, which stays parked at Later; F-inline-add must not touch the model spine).
+
+**Gesture (ratified, two affordances — `+left` dropped).**
+
+- *Add after:* hover an element → a `+` appears on its **right** edge → mints in the **same lane**
+  (`type`) at `anchorCol + 1`. This is byte-identical to today's modal `add` payload, so the whole
+  server path is already written and tested.
+- *Prepend / first element / empty board:* hover a **lane title** → a `+` → mints at the **left of
+  that lane** (`col` = the lane's current minimum − 1; the renderer already draws negative/sparse
+  `col` on-board). Because the lane title is always present (see the render change below), this one
+  affordance covers prepend-into-a-lane, the first element of a lane, **and** the empty-board
+  bootstrap the modal cannot reach.
+- *Modal:* remove the `add` option (and its now-dead `<select id="m-type">` lane picker). Modal
+  stays prose-only — comment, hotspot resolve, rename, open question. No reshape.
+
+**Render change (R, deliberate, accepted).** `render_svg_packed` currently builds `present` by
+filtering `LANES` to lanes that *have* an element, so empty lanes — and the whole empty board —
+draw no row or title. R makes all 8 lanes always render, so an empty board shows the lane scaffold
+(onboarding for an event-storming beginner) and every lane title is hoverable. This is the one
+non-client change in the slice. Regression surface: absolute-y render tests on sparse models
+(e.g. `a_lone_sticky_stays_on_the_lane_mid_line`) shift and must be re-pinned; the dead lane-picker
+test (`the_add_element_picker_offers_every_lane`) is removed with the `<select>`.
+
+**`col` wrinkle — resolved by design, not by code.** Dropping `+left` removes the file-order
+tie-break problem entirely; prepend uses a strict lane-minimum − 1, which sorts left unambiguously.
+
+**Out of scope / parked:** F-container (domains) and the F-board-gestures future set (hover
+tool-buttons, click-centre rename, drag-to-move).
 
 ## Why this slice
 

@@ -94,6 +94,7 @@ impl Ctx {
         label: String,
         col: Option<i64>,
         detail: Option<String>,
+        prepend: bool,
     ) -> Result<events::Event, String> {
         let _guard = self.appends.lock().unwrap();
         // Mint from the *real* log. A corrupt/unreadable log must fail the add, not silently
@@ -101,6 +102,14 @@ impl Ctx {
         let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
         let text = String::from_utf8_lossy(&raw);
         let log = events::parse_log(&text)?;
+        // A prepend (lane-title `+`) derives its col from the live projection *under this lock*, so
+        // two prepends in a row march left (min-1, min-2) instead of colliding — the same reason
+        // the id is minted under the lock.
+        let col = if prepend {
+            Some(model::prepend_col(&events::replay(&log)))
+        } else {
+            col
+        };
         let ev = events::Event::ElementAdded {
             id: mint_id(kind, &log),
             kind: kind.to_string(),
@@ -431,11 +440,17 @@ fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
     // `nonblank` rule the `rename` guard uses, so add and rename can't diverge.
     let label = v.get_str("text").and_then(events::nonblank).ok_or(400u16)?;
     let col = v.get_i64("col");
+    // The lane-title `+` posts `prepend:true` (no col); the server derives the left-edge col so the
+    // rule lives in one place and stays consistent under concurrent adds.
+    let prepend = v
+        .get("prepend")
+        .and_then(json::Json::as_bool)
+        .unwrap_or(false);
     let detail = v
         .get_str("detail")
         .filter(|s| !s.is_empty())
         .map(String::from);
-    ctx.append_add(&kind, label, col, detail)
+    ctx.append_add(&kind, label, col, detail, prepend)
         .map_err(|_| 500u16)
 }
 
@@ -713,11 +728,11 @@ mod tests {
         };
 
         let ev = ctx
-            .append_add("event", "DayStarted".into(), Some(2), None)
+            .append_add("event", "DayStarted".into(), Some(2), None, false)
             .unwrap();
         assert!(matches!(&ev, events::Event::ElementAdded { id, .. } if id == "E2"));
         let ev2 = ctx
-            .append_add("command", "start".into(), None, None)
+            .append_add("command", "start".into(), None, None, false)
             .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
@@ -770,7 +785,7 @@ mod tests {
             }),
             appends: Mutex::new(()),
         };
-        let r = ctx.append_add("event", "X".into(), None, None);
+        let r = ctx.append_add("event", "X".into(), None, None, false);
         let _ = std::fs::remove_file(&path);
         assert!(r.is_err());
     }
