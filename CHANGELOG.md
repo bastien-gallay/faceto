@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Direct on-board editing** (F-inline-edit): rename a sticky in place (double-click
+  or **F2** → an inline field; Enter commits, Escape cancels) and remove one with
+  **Delete / Backspace** (with a confirm). Move was already direct (← / →), so the
+  comment modal is now an optional path, not the only one. Both gestures reuse the
+  existing `rename` / `drop` events and the log-mode append path.
+- A `rename` now obeys the same non-blank-label rule as `add` (new shared
+  `events::nonblank`): a blank or whitespace-only rename persists nothing, so direct
+  editing can't blank a label into a permanent, never-renumbered empty box.
 - **Event-sourced spine** (`src/events.rs`): an append-only `event-log.jsonl` is the
   durable record; the `Model` is a projection replayed from it. `render` and `serve`
   accept a log by extension. Comments become first-class events.

@@ -346,14 +346,24 @@ pub fn from_model(m: &Model) -> Vec<Event> {
     ev
 }
 
+/// A label with content: the string trimmed, or `None` when it is blank. The one place the
+/// "a label must carry content" rule lives — a blank one would mint or rename into a permanent,
+/// never-renumbered empty box. Shared by the `add` guard (`serve.rs`) and the `rename` guard in
+/// [`comment_to_events`], so direct on-board editing and a raw POST obey the same invariant.
+pub fn nonblank(s: &str) -> Option<String> {
+    let trimmed = s.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 /// Map one posted/stored comment object to the event(s) it persists — the single source of
 /// truth for the comment→event translation, shared by the live server (`POST /comment` in log
 /// mode) and the `comments.jsonl` migration ([`from_comments`]). `move`/`resolve`/`rename`/`drop`
 /// carry structural intent and fold straight into the projection; `split`/`question`/`comment`
 /// stay advisory annotations. A `move` that displaces an occupant — the client sends
 /// `swapId`/`swapCol` — yields **two** `ElementMoved`s so the swap round-trips. Returns an empty
-/// vec when the comment names no element, or when a `move` carries no target col (both would
-/// replay as no-ops): the caller treats that as "nothing to persist".
+/// vec when the comment names no element, when a `move` carries no target col, or when a `rename`
+/// carries a blank label (all would replay as no-ops or corrupt the board): the caller treats that
+/// as "nothing to persist".
 pub fn comment_to_events(v: &Json) -> Vec<Event> {
     let Some(id) = v.get_str("elemId").map(str::to_string) else {
         return Vec::new();
@@ -389,7 +399,10 @@ pub fn comment_to_events(v: &Json) -> Vec<Event> {
             id,
             resolution: text,
         }],
-        "rename" => vec![Event::ElementRenamed { id, label: text }],
+        "rename" => match nonblank(&text) {
+            Some(label) => vec![Event::ElementRenamed { id, label }],
+            None => Vec::new(),
+        },
         "drop" => vec![Event::ElementRemoved { id }],
         _ => vec![Event::ElementAnnotated { id, text }],
     }
@@ -546,6 +559,175 @@ mod tests {
 
     fn ev(line: &str) -> Event {
         parse_event(&json::parse(line).unwrap()).unwrap()
+    }
+
+    // ---- F-inline-edit: a direct rename must not be able to blank a label -----------------
+    // Inline editing makes "select-all → delete → Enter" a one-gesture mistake. A blank rename
+    // must persist nothing (an empty label would replay into a never-renumbered empty box — the
+    // exact failure the `add` path already guards). These name the contract before it exists.
+
+    #[test]
+    fn rename_with_a_blank_label_is_rejected() {
+        for blank in ["", "   ", "\t", "\n  "] {
+            let v = json::parse(&format!(
+                r#"{{"elemId":"E1","kind":"rename","text":{:?}}}"#,
+                blank
+            ))
+            .unwrap();
+            assert!(
+                comment_to_events(&v).is_empty(),
+                "blank rename {:?} should persist nothing",
+                blank
+            );
+        }
+    }
+
+    #[test]
+    fn rename_trims_surrounding_whitespace() {
+        let v =
+            json::parse(r#"{"elemId":"E1","kind":"rename","text":"  PaymentTaken  "}"#).unwrap();
+        let evs = comment_to_events(&v);
+        assert!(
+            matches!(&evs[..], [Event::ElementRenamed { id, label }] if id == "E1" && label == "PaymentTaken"),
+            "got {:?}",
+            evs
+        );
+    }
+
+    #[test]
+    fn rename_with_real_text_still_renames() {
+        // Non-regression: a genuine rename is unchanged by the new guard.
+        let v = json::parse(r#"{"elemId":"E1","kind":"rename","text":"Reborn"}"#).unwrap();
+        let evs = comment_to_events(&v);
+        assert!(matches!(&evs[..], [Event::ElementRenamed { id, label }]
+            if id == "E1" && label == "Reborn"));
+    }
+
+    // ---- Property-based tests (std-only, hand-rolled) -------------------------------------
+    // faceto takes no crates (CLAUDE.md: zero dependencies), so there is no proptest/quickcheck.
+    // A tiny deterministic LCG drives reproducible random scenarios — each seed is one case, and
+    // a failure prints the seed + the offending comment sequence so it replays exactly.
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next_u64(&mut self) -> u64 {
+            // Knuth MMIX LCG constants — full-period over u64.
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next_u64() % n as u64) as usize
+        }
+    }
+
+    // A mix of real strings and blanks: the no-blank-label invariant is precisely that a blank
+    // rename can never empty a box, so the generator must reach for blanks on purpose.
+    const TEXTS: [&str; 6] = ["Paid", "ItemAdded", "  spaced  ", "", "   ", "\t"];
+    const KINDS: [&str; 5] = ["rename", "move", "drop", "comment", "resolve"];
+
+    // One random comment over the given element ids, plus a textual form for failure reports.
+    fn gen_comment(rng: &mut Lcg, ids: &[&str]) -> (Json, String) {
+        let id = ids[rng.below(ids.len())];
+        let kind = KINDS[rng.below(KINDS.len())];
+        let text = TEXTS[rng.below(TEXTS.len())];
+        let mut o = vec![
+            ("elemId".to_string(), Json::Str(id.to_string())),
+            ("kind".to_string(), Json::Str(kind.to_string())),
+            ("text".to_string(), Json::Str(text.to_string())),
+        ];
+        if kind == "move" {
+            o.push(("col".to_string(), Json::Num(rng.below(6) as f64)));
+        }
+        let v = Json::Obj(o);
+        (v.clone(), json::to_string(&v))
+    }
+
+    // A small fixed board of non-blank elements, one per lane id-prefix used here.
+    fn genesis() -> (Vec<Event>, Vec<&'static str>) {
+        let ids = vec!["E1", "E2", "C1", "A1", "H1"];
+        let kinds = ["event", "event", "command", "aggregate", "hotspot"];
+        let evs = ids
+            .iter()
+            .zip(kinds)
+            .map(|(id, k)| Event::ElementAdded {
+                id: (*id).to_string(),
+                kind: k.to_string(),
+                label: format!("seed-{id}"),
+                col: Some(0),
+                detail: None,
+            })
+            .collect();
+        (evs, ids)
+    }
+
+    #[test]
+    fn pbt_no_comment_sequence_ever_leaves_a_blank_label() {
+        // Property: folding any sequence of comment objects through `comment_to_events` and
+        // replaying never yields an element whose label is blank. RED today — a blank rename
+        // overwrites the label with "".
+        for seed in 0..500u64 {
+            let mut rng = Lcg(seed.wrapping_mul(2_654_435_761).wrapping_add(1));
+            let (mut log, ids) = genesis();
+            let n = 1 + rng.below(8);
+            let mut trace = Vec::new();
+            for _ in 0..n {
+                let (v, shown) = gen_comment(&mut rng, &ids);
+                trace.push(shown);
+                log.extend(comment_to_events(&v));
+            }
+            let model = replay(&log);
+            for e in &model.elements {
+                assert!(
+                    !e.label.trim().is_empty(),
+                    "seed {seed}: element {} got a blank label after:\n  {}",
+                    e.id,
+                    trace.join("\n  ")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pbt_comments_never_invent_an_element_and_only_drop_removes() {
+        // Non-regression over the adjacent move/rename/annotate/resolve arms: none of them may
+        // create or destroy an element — only `drop` removes, and nothing adds. Guards the move
+        // path this feature sits next to.
+        for seed in 0..500u64 {
+            let mut rng = Lcg(seed.wrapping_mul(40_503).wrapping_add(7));
+            let (mut log, ids) = genesis();
+            let mut dropped = std::collections::HashSet::new();
+            let n = 1 + rng.below(8);
+            for _ in 0..n {
+                let (v, _) = gen_comment(&mut rng, &ids);
+                if v.get_str("kind") == Some("drop") {
+                    if let Some(id) = v.get_str("elemId") {
+                        dropped.insert(id.to_string());
+                    }
+                }
+                log.extend(comment_to_events(&v));
+            }
+            let model = replay(&log);
+            let present: std::collections::HashSet<&str> =
+                model.elements.iter().map(|e| e.id.as_str()).collect();
+            // No phantom creation: every surviving id was a genesis id.
+            for id in &present {
+                assert!(ids.contains(id), "seed {seed}: invented element {id}");
+            }
+            // Exactly the non-dropped genesis ids survive.
+            for id in &ids {
+                let want = !dropped.contains(*id);
+                assert_eq!(
+                    present.contains(id),
+                    want,
+                    "seed {seed}: element {id} present={} but dropped={}",
+                    present.contains(id),
+                    dropped.contains(*id)
+                );
+            }
+        }
     }
 
     #[test]

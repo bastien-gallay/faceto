@@ -26,3 +26,9 @@ comments.jsonl
 
 # local serve log
 /serve.log
+
+# cargo-mutants run output (transient)
+/mutants.out/
+
+# typst briefs are tracked as .typ source; the rendered PDF is derived
+docs/*.pdf

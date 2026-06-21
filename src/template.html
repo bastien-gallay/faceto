@@ -41,6 +41,14 @@
   #board.dim .edge:not(.hl) { opacity: .07; }
   #board.dim .sticky:not(.adj) { opacity: .32; }
   .sticky.resolved { filter: grayscale(.85); opacity: .6; }  /* live resolve-comment feedback */
+  /* Inline rename: an HTML input floated over the sticky's screen rect — the live pen writes
+     directly on the box (DESIGN: the accent is used only where you are acting). Double-click or
+     F2 a sticky to edit its label in place; Enter commits, Escape cancels. */
+  #rename-edit { position: fixed; display: none; z-index: 20; box-sizing: border-box;
+                 font: 600 13px -apple-system, Segoe UI, Roboto, sans-serif; text-align: center;
+                 padding: 2px 6px; border: 2px solid #1A6FAE; border-radius: 6px;
+                 background: #fff; color: #222; box-shadow: 0 4px 14px #1a6fae33; }
+  #rename-edit:focus { outline: none; }
   @media (prefers-reduced-motion: reduce) { .edge, .sticky { transition: none; } }
   /* Narrow widths: let the header wrap instead of clipping. Without this the packing control
      (Rows / Columns / Grid) and the Reload button slide off-screen and become unreachable. */
@@ -86,7 +94,8 @@
   <button id="export">Export comments</button>
   <button id="refresh" title="re-pull comments and show what changed in the board since you last looked">Reload</button>
 </header>
-<div id="board" role="group" aria-label="event-storming board — each sticky is a button: Enter to comment, arrow keys to move it">__SVG__</div>
+<div id="board" role="group" aria-label="event-storming board — each sticky is a button: double-click or F2 to rename, Delete to remove, arrow keys to move, Enter to comment">__SVG__</div>
+<input id="rename-edit" aria-label="rename this element" autocomplete="off" spellcheck="false">
 
 <dialog id="modal">
   <form method="dialog">
@@ -262,6 +271,47 @@ function doMove(id, dir) {
   postComment(c);
 }
 
+// ---- inline rename --------------------------------------------------------
+// Edit a label where it sits: an input floats over the sticky's screen rect — the live pen
+// writing directly on the box (DESIGN: the accent marks where you are acting). Double-click or
+// F2 opens it; Enter commits a kind:"rename", Escape cancels. The same non-blank rule the server
+// enforces (events::nonblank) is applied here, and an unchanged label is a no-op, so a slip never
+// posts a dead event. `renaming` holds the open edit (and silences the board's move/remove keys).
+let renaming = null;   // { id, original } while editing, else null
+function startRename(g) {
+  if (!g || renaming) return;
+  const input = $("#rename-edit"), r = g.getBoundingClientRect();
+  Object.assign(input.style,
+    { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, display: "block" });
+  input.value = g.dataset.hero || "";
+  renaming = { id: g.id, original: input.value };
+  input.focus();
+  input.select();
+}
+function endRename(commit) {
+  if (!renaming) return;
+  const { id, original } = renaming, text = $("#rename-edit").value.trim();
+  renaming = null;
+  $("#rename-edit").style.display = "none";
+  if (!commit) { note("rename cancelled"); document.getElementById(id)?.focus(); return; }
+  if (!text) { note("rename needs a label — left unchanged"); return; }   // mirrors the server guard
+  if (text === original.trim()) { note("no change"); return; }
+  note("renamed");
+  postComment({ elemId: id, kind: "rename", text, ts: new Date().toISOString(), status: "open" });
+}
+
+// ---- inline remove --------------------------------------------------------
+// Delete / Backspace on the hovered or focused sticky drops it. Destructive, so confirm first;
+// then persist kind:"drop" — in log mode the server folds ElementRemoved and the reload shows the
+// box gone (offline it is stashed, not applied — see postComment).
+function doRemove(id) {
+  const g = document.getElementById(id);
+  if (!g) return;
+  if (!window.confirm(`Remove "${g.dataset.hero || id}" from the board?`)) return;
+  note(`removed ${id}`);
+  postComment({ elemId: id, kind: "drop", text: "removed inline", ts: new Date().toISOString(), status: "open" });
+}
+
 // Persist a comment (move or feedback): POST when live, else stash in localStorage. Offline
 // stash is best-effort and one-way — it is NOT replayed to the server on reconnect (the next
 // live `load()` replaces `comments` with the server's), so structural ops made offline (`add`,
@@ -353,7 +403,12 @@ function bindStickies() {
   buildGraph();
   readLayout();
   document.querySelectorAll(".sticky").forEach((g) => {
-    g.onclick = () => openModal(g);
+    // Single click → comment (the signature sidecar); double click → rename in place. A short
+    // timer disambiguates the two so a double click never flashes the modal first; the keyboard
+    // comment path (focus + Enter) stays instant.
+    let clickT = null;
+    g.onclick = () => { if (clickT) return; clickT = setTimeout(() => { clickT = null; openModal(g); }, 200); };
+    g.ondblclick = () => { clearTimeout(clickT); clickT = null; startRename(g); };
     g.onmouseenter = () => { hoverId = g.id; hoverOn(g.id); };
     g.onmouseleave = () => { if (hoverId === g.id) hoverId = null; hoverOff(); };
     // Keyboard parity with the mouse: focusing a sticky makes it the ← / → move target (same as
@@ -447,14 +502,29 @@ $("#modal").addEventListener("close", () => {
 $("#m-left").addEventListener("click", () => { const id = window._activeId; $("#modal").close("move"); doMove(id, "left"); });
 $("#m-right").addEventListener("click", () => { const id = window._activeId; $("#modal").close("move"); doMove(id, "right"); });
 
-// Hover a sticky and press ← / → to nudge it a column — the keyboard-fast path.
+// Hover or focus a sticky and act on it from the keyboard — the keyboard-fast path, parity with
+// the mouse: ← / → nudge a column, F2 renames in place, Delete / Backspace removes. Skipped while
+// the modal or an inline rename owns the keyboard, or while typing in a field.
+$("#rename-edit").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); endRename(true); }
+  else if (e.key === "Escape") { e.preventDefault(); endRename(false); }
+  e.stopPropagation();   // keep edit keystrokes from reaching the board-level handler below
+});
+$("#rename-edit").addEventListener("blur", () => endRename(true));
 document.addEventListener("keydown", (e) => {
-  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-  if ($("#modal").open || !hoverId) return;
+  if ($("#modal").open || renaming || !hoverId) return;
   const ae = document.activeElement;
   if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
-  e.preventDefault();
-  doMove(hoverId, e.key === "ArrowLeft" ? "left" : "right");
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    e.preventDefault();
+    doMove(hoverId, e.key === "ArrowLeft" ? "left" : "right");
+  } else if (e.key === "F2") {
+    e.preventDefault();
+    startRename(document.getElementById(hoverId));
+  } else if (e.key === "Delete" || e.key === "Backspace") {
+    e.preventDefault();
+    doRemove(hoverId);
+  }
 });
 
 // ---- packing control (rows / columns / grid) ------------------------------

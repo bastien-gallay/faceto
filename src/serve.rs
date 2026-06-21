@@ -427,13 +427,9 @@ fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
         .ok_or(400u16)?
         .to_string();
     // A blank label would mint a permanent, never-renumbered empty element — refuse it here
-    // (the client modal already guards it, but a direct POST must not slip a blank box in).
-    let label = v
-        .get_str("text")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or(400u16)?
-        .to_string();
+    // (the client modal already guards it, but a direct POST must not slip a blank box in). Same
+    // `nonblank` rule the `rename` guard uses, so add and rename can't diverge.
+    let label = v.get_str("text").and_then(events::nonblank).ok_or(400u16)?;
     let col = v.get_i64("col");
     let detail = v
         .get_str("detail")
@@ -799,6 +795,54 @@ mod tests {
         // An off-grammar type would mint into a real lane's id space — reject it too.
         let off = json::parse(r#"{"kind":"add","type":"epic","text":"Saga"}"#).unwrap();
         assert_eq!(add_from_comment(&ctx, &off), Err(400));
+    }
+
+    #[test]
+    fn blank_rename_appends_nothing_but_a_real_one_persists() {
+        // Integration over the log-mode POST /comment path: a comment is mapped to events exactly
+        // as `handle` does, and only a non-empty block is appended. A blank inline rename must
+        // leave the log byte-for-byte unchanged; a real one appends one ElementRenamed that
+        // replays into the new label.
+        let path = std::env::temp_dir().join(format!("faceto-rn-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, events::line(&added("E1", "event")) + "\n").unwrap();
+        let ctx = Ctx {
+            model_path: path.clone(),
+            comments_path: path.clone(),
+            log_mode: true,
+            packing: render::Packing::default(),
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        };
+        let before = std::fs::read_to_string(&path).unwrap();
+
+        // Blank rename → empty event vec → the handler appends nothing.
+        let blank = json::parse(r#"{"elemId":"E1","kind":"rename","text":"   "}"#).unwrap();
+        let evs = events::comment_to_events(&blank);
+        if !evs.is_empty() {
+            let block = evs.iter().map(events::line).collect::<Vec<_>>().join("\n");
+            ctx.append_line(&ctx.model_path, &block).unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            before,
+            "a blank inline rename must not touch the log"
+        );
+
+        // Real rename → one ElementRenamed → replays to the new label.
+        let real = json::parse(r#"{"elemId":"E1","kind":"rename","text":"Reborn"}"#).unwrap();
+        let evs = events::comment_to_events(&real);
+        let block = evs.iter().map(events::line).collect::<Vec<_>>().join("\n");
+        ctx.append_line(&ctx.model_path, &block).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        let model = events::replay(&events::parse_log(&text).unwrap());
+        let e1 = model.elements.iter().find(|e| e.id == "E1").unwrap();
+        assert_eq!(e1.label, "Reborn");
     }
 
     #[test]
