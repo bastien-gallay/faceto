@@ -102,11 +102,11 @@ impl Ctx {
         let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
         let text = String::from_utf8_lossy(&raw);
         let log = events::parse_log(&text)?;
-        // A prepend (lane-title `+`) derives its col from the live projection *under this lock*, so
-        // two prepends in a row march left (min-1, min-2) instead of colliding — the same reason
-        // the id is minted under the lock.
+        // A lane-title `+` (prepend) derives its col from the live projection *under this lock* —
+        // a first-in-lane add aligns to the board's left column, a prepend into a non-empty lane
+        // marches left — so concurrent adds can't race the min, the same reason id is minted here.
         let col = if prepend {
-            Some(model::prepend_col(&events::replay(&log)))
+            Some(model::lane_left_col(&events::replay(&log), kind))
         } else {
             col
         };

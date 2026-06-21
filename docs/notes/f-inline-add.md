@@ -46,3 +46,23 @@ F-container spins off as its own future session; the richer per-element gestures
 
 - Absolute-y render tests on sparse models shift under R (e.g. `a_lone_sticky_stays_on_the_lane_mid_line`).
 - `the_add_element_picker_offers_every_lane` is removed with the `<select>`.
+
+## As-built refinements (Phase 4 verify → reopened Phase 2)
+
+Two issues surfaced in browser verification and were fixed test-first:
+
+- **Prepend col rule.** The first `min − 1` rule shoved every lane right when the *first* element
+  of an empty lane was added. Refined to `lane_left_col(model, kind)`: an **empty target lane**
+  aligns to the board's existing first column (no shift); a **non-empty lane** still prepends at
+  `min − 1` (a "confusing-but-acceptable" case the user chose to defer). Empty board → 0.
+- **Move-left guard.** `doMove` rejected any `target < 0` as "already at the left edge". Obsolete
+  once prepend mints negative cols (the renderer draws them); the guard was removed, so move-left
+  grows the board left symmetrically with prepend.
+
+## Known gaps (deferred, not silently dropped)
+
+- **No keyboard path to add.** The `+` is hover-only (`display:none` at rest), and removing the
+  modal `add` deleted the only keyboard add-path. A focused-sticky key (e.g. a `+`/Insert →
+  add-after) belongs in **F-board-gestures**. Flagged, not fixed in this slice.
+- **Non-empty-lane prepend** still feels confusing (deferred by the user).
+- **Ghost `+` doesn't follow board scroll** after it appears (it re-positions on hover only). Minor.

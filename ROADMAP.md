@@ -57,10 +57,12 @@ tested. This slice makes add a **direct on-board gesture** and strips the modal'
   (`type`) at `anchorCol + 1`. This is byte-identical to today's modal `add` payload, so the whole
   server path is already written and tested.
 - *Prepend / first element / empty board:* hover a **lane title** → a `+` → mints at the **left of
-  that lane** (`col` = the lane's current minimum − 1; the renderer already draws negative/sparse
-  `col` on-board). Because the lane title is always present (see the render change below), this one
+  that lane** via `model::lane_left_col(model, kind)`: a **first element of an empty lane** aligns
+  to the board's existing first column (no rightward shift of the other lanes); a **prepend into a
+  non-empty lane** marches one column further left (the renderer draws negative/sparse `col`
+  on-board). Because the lane title is always present (see the render change below), this one
   affordance covers prepend-into-a-lane, the first element of a lane, **and** the empty-board
-  bootstrap the modal cannot reach.
+  bootstrap the modal cannot reach. (The non-empty-lane prepend feel is deferred for later.)
 - *Modal:* remove the `add` option (and its now-dead `<select id="m-type">` lane picker). Modal
   stays prose-only — comment, hotspot resolve, rename, open question. No reshape.
 

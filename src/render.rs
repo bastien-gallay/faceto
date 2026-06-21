@@ -561,8 +561,12 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
     // Lane labels — centred on each lane's (possibly multi-row) band.
     for t in &present {
         let y = lane_top[*t] + lane_h[*t] / 2.0;
+        // `class`/`data-lane` let the client hang the lane-title `+` (inline-add prepend) on each
+        // label; the rendered text content is unchanged.
         p.push(format!(
-            "<text x=\"16\" y=\"{:.1}\" font-size=\"12\" font-weight=\"600\" fill=\"{}\">{}</text>",
+            "<text class=\"lane-label\" data-lane=\"{}\" x=\"16\" y=\"{:.1}\" font-size=\"12\" \
+             font-weight=\"600\" fill=\"{}\">{}</text>",
+            esc(t),
             y + 4.0,
             AXIS_LABEL,
             esc(t)
@@ -912,18 +916,6 @@ mod tests {
         assert_eq!(lane_prefix("aggregate"), Some('A'));
         assert_eq!(lane_prefix("hotspot"), Some('H'));
         assert_eq!(lane_prefix("not-a-lane"), None);
-    }
-
-    #[test]
-    fn the_add_element_picker_offers_every_lane() {
-        // The client's <select id="m-type"> is a hand-written copy of the lane grammar; pin it to
-        // LANES so a new/renamed lane can't silently drop out of the "add element" picker.
-        for lane in LANES {
-            assert!(
-                HTML_TEMPLATE.contains(&format!("<option value=\"{lane}\"")),
-                "template.html #m-type is missing lane `{lane}`"
-            );
-        }
     }
 
     fn empty_board() -> Model {
