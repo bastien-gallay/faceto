@@ -24,6 +24,24 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | F-new-diagrams | new formats | ☐ | Parked | New diagram types: C4, User Story Mapping, BPMN. The long-term PRODUCT.md ambition; deferred until the event-storming board is excellent. |
 | F-model-smells | linting | ☐ | Parked | Detect model smells — orphans, loops, heavy bounded-contexts. Needs the F-container primitive and a graph pass; open once grouping exists. |
 
+## Working note — F-inline-edit (2026-06-20, branch `feat/F-inline-edit`)
+
+**Root cause / scope.** Editing is *modal-only*: every rename/remove routes through the
+comment dropdown. Move is already direct (← / →, Move ←/→). So this slice adds **direct
+rename + direct remove** gestures and demotes the modal to "optional, not the only path".
+Wiring a direct rename surfaces a latent defect: the `rename` arm of `comment_to_events`
+(and `replay`) accepts a **blank label**, persisting a never-renumbered empty box — the exact
+failure the `add` path already guards. Select-all → delete → Enter would trip it in one gesture.
+The fix keeps the *non-blank-label* invariant in the Rust domain seam (not only in JS).
+
+**Tests to done** (red first, then green):
+
+- UT: `rename` rejects a blank/whitespace label (→ nothing to persist); trims surrounding space.
+- PBT (std-only, hand-rolled): over random comment sequences, no element ever ends with a
+  blank label via the comment seam; move/annotate preserve element cardinality & identity.
+- Integration: a blank rename appends nothing to the log; a real one persists one `ElementRenamed`.
+- Non-regression: move/swap, server-side mint, and `add`'s blank-guard stay green.
+
 ## Why this slice
 
 Chosen by filtering all eight directions through felt dogfood pain. The three live
