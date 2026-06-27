@@ -207,15 +207,56 @@ function colCenter(col) {
 // exact in Rows, correct under the variable widths of Columns/Grid.
 const centerOf = (id) => [baseCx[id] + (colCenter(colOf[id]) - colCenter(baseCol[id])), cyOf[id]];
 
-// Port of render.rs `edge_path`: a smooth connector anchored on the boxes' facing edges.
-function edgePath([x1, y1], [x2, y2]) {
+// Port of render.rs `edge_path`: a smooth connector anchored on the boxes' facing edges. `o1`/`o2`
+// slide each anchor along its facing edge (Lever B fan-out) — Y for a left/right face, X for a
+// top/bottom face — so siblings meeting one box on the same side spread out. o1=o2=0 is the classic
+// centre-to-centre path.
+function edgePath([x1, y1], [x2, y2], o1 = 0, o2 = 0) {
   const W = CFG.stickyW, H = CFG.stickyH, f = (n) => n.toFixed(1);
   if (Math.abs(x2 - x1) < W) {
-    const s = y2 >= y1 ? 1 : -1, ay1 = y1 + s * H / 2, ay2 = y2 - s * H / 2, my = (ay1 + ay2) / 2;
-    return `M${f(x1)},${f(ay1)} C${f(x1)},${f(my)} ${f(x2)},${f(my)} ${f(x2)},${f(ay2)}`;
+    const s = y2 >= y1 ? 1 : -1, ax1 = x1 + o1, ax2 = x2 + o2,
+      ay1 = y1 + s * H / 2, ay2 = y2 - s * H / 2, my = (ay1 + ay2) / 2;
+    return `M${f(ax1)},${f(ay1)} C${f(ax1)},${f(my)} ${f(ax2)},${f(my)} ${f(ax2)},${f(ay2)}`;
   }
-  const s = x2 >= x1 ? 1 : -1, ax1 = x1 + s * W / 2, ax2 = x2 - s * W / 2, mx = (ax1 + ax2) / 2;
-  return `M${f(ax1)},${f(y1)} C${f(mx)},${f(y1)} ${f(mx)},${f(y2)} ${f(ax2)},${f(y2)}`;
+  const s = x2 >= x1 ? 1 : -1, ax1 = x1 + s * W / 2, ax2 = x2 - s * W / 2,
+    ay1 = y1 + o1, ay2 = y2 + o2, mx = (ax1 + ax2) / 2;
+  return `M${f(ax1)},${f(ay1)} C${f(mx)},${f(ay1)} ${f(mx)},${f(ay2)} ${f(ax2)},${f(ay2)}`;
+}
+
+// Port of render.rs Lever B fan-out: group each connector's two endpoints by (box, facing side),
+// then fan a side's members apart, ordered by the far end's cross position. Returns the live edge
+// list (skipping any whose endpoints aren't placed) and, per edge, the [srcOffset, dstOffset] the
+// server applied — so the in-page move-nudge redraws connectors exactly as the authoritative render.
+const FAN_SPREAD = 12;
+function fanOffsets() {
+  const edges = [...document.querySelectorAll(".edge")].filter(
+    (p) => colOf[p.dataset.src] !== undefined && colOf[p.dataset.dst] !== undefined);
+  const off = edges.map(() => [0, 0]);
+  const groups = new Map();
+  const push = (node, face, member) => {
+    const k = node + ":" + face;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(member);
+  };
+  edges.forEach((p, ei) => {
+    const [sx, sy] = centerOf(p.dataset.src), [dx, dy] = centerOf(p.dataset.dst);
+    if (Math.abs(dx - sx) >= CFG.stickyW) {
+      push(p.dataset.src, dx > sx ? 0 : 1, [ei, true, dy]);
+      push(p.dataset.dst, sx > dx ? 0 : 1, [ei, false, sy]);
+    } else {
+      push(p.dataset.src, dy > sy ? 2 : 3, [ei, true, dx]);
+      push(p.dataset.dst, sy > dy ? 2 : 3, [ei, false, sx]);
+    }
+  });
+  for (const members of groups.values()) {
+    const k = members.length;
+    if (k < 2) continue;
+    members.sort((a, b) => a[2] - b[2] || a[0] - b[0]);
+    members.forEach(([ei, isSrc], slot) => {
+      off[ei][isSrc ? 0 : 1] = FAN_SPREAD * (slot - (k - 1) / 2);
+    });
+  }
+  return { edges, off };
 }
 
 // Translate every sticky to its current column and redraw the connectors that touch it. The shift
@@ -229,10 +270,9 @@ function applyLayout() {
     const dx = colCenter(colOf[g.id]) - colCenter(baseCol[g.id]);
     g.setAttribute("transform", dx ? `translate(${dx.toFixed(1)},0)` : "");
   });
-  document.querySelectorAll(".edge").forEach((p) => {
-    const s = p.dataset.src, d = p.dataset.dst;
-    if (colOf[s] === undefined || colOf[d] === undefined) return;
-    p.setAttribute("d", edgePath(centerOf(s), centerOf(d)));
+  const { edges, off } = fanOffsets();
+  edges.forEach((p, ei) => {
+    p.setAttribute("d", edgePath(centerOf(p.dataset.src), centerOf(p.dataset.dst), off[ei][0], off[ei][1]));
   });
 }
 
