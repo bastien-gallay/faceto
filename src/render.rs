@@ -3,8 +3,8 @@
 //! Deterministic, pure std. The colour grammar (one type → one colour → one lane) and the
 //! whole visual language are ported faithfully from the original Python harness.
 
-use crate::model::{Edge, Element, Model};
-use std::collections::HashMap;
+use crate::model::{is_pivotal, Edge, Element, Model};
+use std::collections::{HashMap, HashSet};
 
 // Canonical lane order (top → bottom). `command` and `hotspot` are deepened from their classic
 // event-storming swatches so white label text clears WCAG 4.5:1.
@@ -83,6 +83,19 @@ fn diff_badge(s: &str) -> Option<&'static str> {
         "removed" => Some("\u{2013}"), // en dash
         "changed" => Some("\u{2260}"), // ≠
         "moved" => Some("\u{2192}"),   // →
+        _ => None,
+    }
+}
+
+/// Map a region's diff verdict (added / removed / renamed / resized) onto the element-diff colour +
+/// badge vocabulary, so a changed region speaks the same visual language as a changed sticky: a
+/// rename reads like a relabel (`≠`), a resize like a relocation (`→`). `None` ⇒ no diff styling.
+fn phase_diff_kind(diff: Option<&str>) -> Option<&'static str> {
+    match diff {
+        Some("added") => Some("added"),
+        Some("removed") => Some("removed"),
+        Some("renamed") => Some("changed"),
+        Some("resized") => Some("moved"),
         _ => None,
     }
 }
@@ -624,42 +637,145 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
         }
     }
 
-    // Phase bands (soft vertical zones behind the timeline).
+    // Regions (a.k.a. phases) — a region is a *thin labelled outline*, never a filled block
+    // (DESIGN.md calm-instrument register; anti-reference: Miro maximalism). It reads as an open
+    // "⊓": a top rule + two grabbable vertical edges, plus the faintest tonal wash (the only fill
+    // DESIGN.md §4 sanctions for a band). The lanes flow through it; it frames, it does not box in.
+    //
+    // Geometry comes from the region's own stored bounds `[from_col, to_col]` (the single source of
+    // truth — F-container scope D2), not from where elements happen to land, so an empty or removed
+    // region still renders. Bounds are clamped into the present column range so an out-of-view band
+    // collapses to the edge instead of indexing past `col_left`.
+    let band_top = MARGIN_T - 26.0;
     let band_bot = lanes_bottom - 6.0;
+    let ncols_i = ncols as i64;
+    let clamp_idx = |c: i64| (c - min_col).clamp(0, ncols_i - 1) as usize;
+    // Pivotal events sit *on the border line*, in the event lane (derived via `is_pivotal`; scope
+    // D3 — no stored flag). `present` always carries the full 8-lane grammar, so "event" is here.
+    let event_cy = lane_top.get("event").map(|t| t + lane_h["event"] / 2.0);
+    // A pivotal node belongs to the *boundary*, not a region: two regions sharing a gutter
+    // (`A.to_col` == `B.from_col`) collapse to one node. So gather the cols that carry a pivotal
+    // event once (O(elements·phases), via `is_pivotal`), accumulate each boundary's x while drawing
+    // the regions, then emit one deduped node per position after the loop.
+    let pivotal_cols: HashSet<i64> = elements
+        .iter()
+        .filter(|e| is_pivotal(model, e))
+        .filter_map(|e| e.col)
+        .collect();
+    let mut pivot_node_x: Vec<i64> = Vec::new(); // x·10 rounded, deduped before emit
     for ph in &model.phases {
-        let cols: Vec<i64> = elements
-            .iter()
-            .map(|e| e.col.unwrap())
-            .filter(|c| ph.from_col <= *c && *c <= ph.to_col)
-            .collect();
-        if cols.is_empty() {
-            continue;
+        let a = clamp_idx(ph.from_col);
+        let b = clamp_idx(ph.to_col);
+        let (lo, hi) = (a.min(b), a.max(b));
+        let x = col_left[lo];
+        let right = col_left[hi] + col_width[hi];
+        let w = right - x;
+
+        // Diff verdict mapped onto the element-diff vocabulary (Review #4: read `Phase.diff` or a
+        // *removed* region — now fed into `model.phases` by `diff_phases` — paints as a phantom
+        // unstyled band). A removed region is ghosted; the rest pick up the dashed diff stroke.
+        let dk = phase_diff_kind(ph.diff.as_deref());
+        let removed = ph.diff.as_deref() == Some("removed");
+        let diff_col = dk.map(diff_colour); // computed once; each use picks its own bench fallback
+        let stroke = diff_col.unwrap_or("#cfcfda");
+        let top_stroke = diff_col.unwrap_or("#e0e0e6");
+        let dash = if dk.is_some() {
+            " stroke-dasharray=\"4 3\""
+        } else {
+            ""
+        };
+
+        if removed {
+            p.push("<g opacity=\"0.45\">".to_string());
         }
-        let minc = (*cols.iter().min().unwrap() - min_col) as usize;
-        let maxc = (*cols.iter().max().unwrap() - min_col) as usize;
-        let x = col_left[minc];
-        let w = col_left[maxc] + col_width[maxc] - x;
+
+        // Tonal wash (the lone sanctioned region fill, #000 @ 0.02) + the open "⊓" outline.
         p.push(format!(
             "<rect x=\"{:.1}\" y=\"{}\" width=\"{:.1}\" height=\"{}\" fill=\"#000\" opacity=\"0.02\"/>",
             x,
-            MARGIN_T - 26.0,
+            band_top,
             w,
-            band_bot - MARGIN_T + 26.0
+            band_bot - band_top
         ));
         p.push(format!(
-            "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"#e0e0e6\"/>",
-            x,
-            MARGIN_T - 26.0,
-            x,
-            band_bot
+            "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1\"{}/>",
+            x, band_top, right, band_top, top_stroke, dash
+        ));
+        for (edge_x, edge) in [(x, "from"), (right, "to")] {
+            p.push(format!(
+                "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1.5\"{}/>",
+                edge_x, band_top, edge_x, band_bot, stroke, dash
+            ));
+            // A wide transparent hit-region carries the resize affordance for the Stage-6 client to
+            // grab (the *visual* half of D5: grab target = the band border, not a sticky). A removed
+            // region is gone on the new side — there is nothing to resize, so no handle.
+            if !removed {
+                p.push(format!(
+                    "<line class=\"region-edge\" data-region=\"{}\" data-edge=\"{}\" x1=\"{:.1}\" \
+                     y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"transparent\" stroke-width=\"8\"/>",
+                    esc(&ph.id),
+                    edge,
+                    edge_x,
+                    band_top,
+                    edge_x,
+                    band_bot
+                ));
+            }
+        }
+
+        // Label tab — the region's identity handle, a quiet folder tab straddling the top-left
+        // corner (instrument grey, no domain colour: the Bench-Is-Grey Rule). Carries the diff badge
+        // when the region changed.
+        let badge = dk.and_then(diff_badge);
+        let label = match badge {
+            Some(b) => format!("{b} {}", ph.label),
+            None => ph.label.clone(),
+        };
+        let tab_h = 19.0;
+        let tab_w = label.chars().count() as f64 * 6.6 + 18.0;
+        let tab_y = band_top - tab_h + 1.0;
+        p.push(format!(
+            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"6\" \
+             fill=\"#ffffff\" stroke=\"{}\" stroke-width=\"1\"{}/>",
+            x, tab_y, tab_w, tab_h, stroke, dash
         ));
         p.push(format!(
-            "<text x=\"{:.1}\" y=\"{}\" font-size=\"12\" font-weight=\"600\" fill=\"{}\">{}</text>",
-            x + 10.0,
-            MARGIN_T - 32.0,
-            AXIS_LABEL,
-            esc(&ph.label)
+            "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"11\" font-weight=\"600\" fill=\"{}\">{}</text>",
+            x + 9.0,
+            tab_y + 13.5,
+            diff_col.unwrap_or("#555555"),
+            esc(&label)
         ));
+
+        // Note each edge that carries a pivotal event (an `event` sitting on this region's
+        // boundary col). A removed region is gone on the new side, so its borders mark nothing.
+        if event_cy.is_some() && !removed {
+            if pivotal_cols.contains(&ph.from_col) {
+                pivot_node_x.push((x * 10.0).round() as i64);
+            }
+            if pivotal_cols.contains(&ph.to_col) {
+                pivot_node_x.push((right * 10.0).round() as i64);
+            }
+        }
+
+        if removed {
+            p.push("</g>".to_string());
+        }
+    }
+
+    // One pivotal node per unique boundary position (sorted for deterministic output; a node shared
+    // by two adjacent regions is drawn once). It rides the border line at the event-lane centre.
+    if let Some(cy) = event_cy {
+        pivot_node_x.sort_unstable();
+        pivot_node_x.dedup();
+        for kx in &pivot_node_x {
+            p.push(format!(
+                "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"4\" fill=\"#555555\" \
+                 stroke=\"#fbfbfd\" stroke-width=\"1.5\"/>",
+                *kx as f64 / 10.0,
+                cy
+            ));
+        }
     }
 
     // Time-slot trays — a faint rounded backing hugging every cell that holds more than one sticky,
@@ -1017,6 +1133,7 @@ const HTML_TEMPLATE: &str = include_str!("template.html");
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Phase;
 
     #[test]
     fn hump_split_breaks_camelcase_and_acronym_runs() {
@@ -1235,6 +1352,64 @@ mod tests {
         assert_eq!(attr_values(&svg, "data-cy"), vec!["494.0".to_string()]);
         // col 0 centre, no stagger: MARGIN_L + COL_W/2 = 150 + 105.
         assert_eq!(attr_values(&svg, "data-cx"), vec!["255.0".to_string()]);
+    }
+
+    fn phase(id: &str, label: &str, from: i64, to: i64, diff: Option<&str>) -> Phase {
+        Phase {
+            id: id.into(),
+            label: label.into(),
+            from_col: from,
+            to_col: to,
+            diff: diff.map(Into::into),
+        }
+    }
+
+    // A region renders as a thin labelled outline (scope D1, calm instrument): a label tab carrying
+    // its name, two grabbable border edges keyed by region id + side (the visual half of D5), and a
+    // pivotal node where an event sits on a boundary col (derived, scope D3).
+    #[test]
+    fn region_renders_as_a_labelled_outline_with_grab_handles_and_pivotal_node() {
+        let m = Model {
+            title: "t".into(),
+            phases: vec![phase("K1", "Context A", 0, 2, None)],
+            elements: vec![el("E1", "event", 0), el("E2", "event", 1)],
+            edges: vec![],
+            diff_meta: None,
+        };
+        let svg = render_svg_packed(&m, Packing::Rows);
+        assert!(svg.contains(">Context A<"), "region label tab is missing");
+        // Both border edges carry the resize affordance, addressed by region id + side.
+        assert!(svg.contains("class=\"region-edge\" data-region=\"K1\" data-edge=\"from\""));
+        assert!(svg.contains("class=\"region-edge\" data-region=\"K1\" data-edge=\"to\""));
+        // E1 sits on the region's from-edge → a pivotal node; E2 (interior) does not add a third.
+        assert_eq!(
+            svg.matches("<circle").count(),
+            1,
+            "expected one pivotal node"
+        );
+    }
+
+    // Review #4: `diff_phases` feeds *removed* regions into `model.phases`. Render must read
+    // `Phase.diff` and ghost them — otherwise a removed band paints as a phantom unstyled region,
+    // and offers a resize handle for something that no longer exists.
+    #[test]
+    fn removed_region_is_ghosted_and_drops_its_grab_handle() {
+        let m = Model {
+            title: "t".into(),
+            phases: vec![phase("K9", "Gone", 0, 1, Some("removed"))],
+            elements: vec![el("E1", "event", 0)],
+            edges: vec![],
+            diff_meta: Some(("v1".into(), "v2".into())),
+        };
+        let svg = render_svg_packed(&m, Packing::Rows);
+        assert!(
+            svg.contains("<g opacity=\"0.45\">"),
+            "removed region is not ghosted"
+        );
+        assert!(
+            !svg.contains("data-region=\"K9\""),
+            "a removed region must not offer a resize handle"
+        );
     }
 
     // Read the data-cy a given element group carries, so a test can correlate id → centre.
