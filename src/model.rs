@@ -73,9 +73,9 @@ pub fn from_json(j: &Json) -> Model {
         .get("phases")
         .and_then(|v| v.as_array())
         .map(|arr| {
+            let mut max_region = 0u32;
             arr.iter()
-                .enumerate()
-                .filter_map(|(i, p)| phase_from(p, i))
+                .filter_map(|p| phase_from(p, &mut max_region))
                 .collect()
         })
         .unwrap_or_default();
@@ -98,20 +98,35 @@ pub fn from_json(j: &Json) -> Model {
     }
 }
 
-fn phase_from(j: &Json, idx: usize) -> Option<Phase> {
+fn phase_from(j: &Json, max_region: &mut u32) -> Option<Phase> {
+    // Resolve the id only after the required fields parse, so a malformed band that gets dropped
+    // does not advance the synthetic counter (keeps minted ids gap-free and never reused).
+    let label = j.get("label")?.as_str()?.to_string();
+    let from_col = j.get("fromCol")?.as_f64()? as i64;
+    let to_col = j.get("toCol")?.as_f64()? as i64;
+    let id = resolve_region_id(j.get("id").and_then(|v| v.as_str()), max_region);
     Some(Phase {
-        // A region carries an id when present; a legacy `model.json` band has none, so we mint a
-        // deterministic positional `K<n>` — stable across reloads of the same file.
-        id: j
-            .get("id")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| format!("K{}", idx + 1)),
-        label: j.get("label")?.as_str()?.to_string(),
-        from_col: j.get("fromCol")?.as_f64()? as i64,
-        to_col: j.get("toCol")?.as_f64()? as i64,
+        id,
+        label,
+        from_col,
+        to_col,
         diff: None,
     })
+}
+
+/// Resolve a region's id: an explicit id used as-is, otherwise the next free `K<n>` one past the
+/// **highest `K` suffix ever seen** (`max_region`, which the caller threads across a band sequence
+/// and never decrements). This mirrors `serve::mint_id`'s reservation rule — a synthetic id never
+/// reuses a suffix freed by a `PhaseRemoved` or already taken by an explicit id. The single source
+/// of truth for region-id minting, shared by `from_json` (model.json) and `replay` (the log).
+pub fn resolve_region_id(explicit: Option<&str>, max_region: &mut u32) -> String {
+    let id = explicit
+        .map(String::from)
+        .unwrap_or_else(|| format!("K{}", *max_region + 1));
+    if let Some(n) = id.strip_prefix('K').and_then(|r| r.parse::<u32>().ok()) {
+        *max_region = (*max_region).max(n);
+    }
+    id
 }
 
 fn element_from(j: &Json) -> Option<Element> {

@@ -95,6 +95,12 @@ anti-reference for a calm instrument.
   (or evolve `PhaseAdded`). Membership and pivotal need **zero** events — they fall out of geometry.
 - Region ids get their own **mint namespace** (e.g. `K<N>`, outside the eight lane prefixes),
   minted under the appends lock like every other id.
+  - ⚠️ **Stage 5 server mint must share the namespace with replay's synthetic ids.** Stage 1 already
+    mints synthetic `K<n>` for legacy (id-less) bands at replay time (`model::resolve_region_id`,
+    "one past the highest `K` suffix ever seen"). The Stage 5 server mint must therefore scan
+    `PhaseAdded` ids (not just `ElementAdded`) and reserve removed-but-not-compacted suffixes, exactly
+    like `serve::mint_id` does for lanes — otherwise a server-minted `K2` could collide with a
+    synthetic `K2` already in a legacy log.
 - `diff_models` gains region diffing (added / removed / renamed / resized, keyed on `id`).
 
 ## v1 boundary

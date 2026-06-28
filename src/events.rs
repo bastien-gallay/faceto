@@ -23,7 +23,7 @@
 //!   kind (additive) and upcast the old one; never redefine an existing kind in place.
 
 use crate::json::{self, Json};
-use crate::model::{Edge, Element, Model, Phase};
+use crate::model::{resolve_region_id, Edge, Element, Model, Phase};
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -245,6 +245,10 @@ pub fn parse_event(j: &Json) -> Option<Event> {
 /// deterministic: same log → same `Model`.
 pub fn replay(events: &[Event]) -> Model {
     let mut m = Model::default();
+    // Highest `K` region suffix seen so far — threaded across the fold so a synthetic id for a
+    // legacy (id-less) band never reuses a suffix freed by `PhaseRemoved` or taken by an explicit
+    // id. Mirrors `serve::mint_id`'s "highest ever added" rule (see `resolve_region_id`).
+    let mut max_region = 0u32;
     for ev in events {
         match ev {
             Event::BoardTitled { title } => m.title = title.clone(),
@@ -254,11 +258,9 @@ pub fn replay(events: &[Event]) -> Model {
                 from_col,
                 to_col,
             } => {
-                // A legacy band carries no id; mint a deterministic positional `K<n>` so the same
-                // log always replays to the same region ids (resize/rename/remove can then target).
-                let id = id
-                    .clone()
-                    .unwrap_or_else(|| format!("K{}", m.phases.len() + 1));
+                // A legacy band carries no id; mint the next free `K<n>` past the highest ever
+                // seen so resize/rename/remove can target it and no suffix is ever reused.
+                let id = resolve_region_id(id.as_deref(), &mut max_region);
                 m.phases.push(Phase {
                     id,
                     label: label.clone(),
@@ -683,6 +685,40 @@ mod tests {
         assert_eq!(
             (k1.id.as_str(), k1.label.as_str(), k1.from_col, k1.to_col),
             ("K1", "New", 0, 5)
+        );
+    }
+
+    #[test]
+    fn synthetic_region_ids_never_reuse_a_freed_suffix() {
+        // Regression: deriving the synthetic id from the live phase *count* would re-mint `K2`
+        // after a removal. The id must come from the highest suffix ever seen, never reused —
+        // the same reservation rule serve::mint_id uses for elements.
+        let evs = vec![
+            ev(r#"{"event":"PhaseAdded","label":"A","fromCol":0,"toCol":1}"#),
+            ev(r#"{"event":"PhaseAdded","label":"B","fromCol":2,"toCol":3}"#),
+            ev(r#"{"event":"PhaseRemoved","id":"K1"}"#),
+            ev(r#"{"event":"PhaseAdded","label":"C","fromCol":4,"toCol":5}"#),
+        ];
+        let m = replay(&evs);
+        let ids: Vec<_> = m.phases.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["K2", "K3"],
+            "the third add must be K3, not a reused K2"
+        );
+    }
+
+    #[test]
+    fn a_synthetic_id_skips_past_an_explicit_one() {
+        // An explicit id raises the watermark, so a following legacy band mints past it.
+        let evs = vec![
+            ev(r#"{"event":"PhaseAdded","id":"K5","label":"Explicit","fromCol":0,"toCol":1}"#),
+            ev(r#"{"event":"PhaseAdded","label":"Legacy","fromCol":2,"toCol":3}"#),
+        ];
+        let m = replay(&evs);
+        assert_eq!(
+            m.phases[1].id, "K6",
+            "synthetic id mints one past the highest seen"
         );
     }
 
