@@ -17,6 +17,8 @@ pub struct Phase {
     pub label: String,
     pub from_col: i64,
     pub to_col: i64,
+    // diff annotation (not in the file): added / removed / renamed / resized / unchanged.
+    pub diff: Option<String>,
 }
 
 #[derive(Clone)]
@@ -108,6 +110,7 @@ fn phase_from(j: &Json, idx: usize) -> Option<Phase> {
         label: j.get("label")?.as_str()?.to_string(),
         from_col: j.get("fromCol")?.as_f64()? as i64,
         to_col: j.get("toCol")?.as_f64()? as i64,
+        diff: None,
     })
 }
 
@@ -251,15 +254,42 @@ pub fn diff_models(a: &Model, b: &Model, meta: (String, String)) -> Model {
         } else {
             a.title.clone()
         },
-        phases: if !b.phases.is_empty() {
-            b.phases.clone()
-        } else {
-            a.phases.clone()
-        },
+        phases: diff_phases(a, b),
         elements,
         edges,
         diff_meta: Some(meta),
     }
+}
+
+/// Diff the regions of two boards, keyed on stable `id` (mirroring the element diff): each tagged
+/// added / removed / renamed (label differs) / resized (bounds differ) / unchanged. Layout follows
+/// the **new** side (`b`); a region only in the old side keeps its slot, tagged removed and appended.
+fn diff_phases(a: &Model, b: &Model) -> Vec<Phase> {
+    let old: HashMap<&str, &Phase> = a.phases.iter().map(|p| (p.id.as_str(), p)).collect();
+    let new_ids: HashSet<&str> = b.phases.iter().map(|p| p.id.as_str()).collect();
+
+    let mut phases: Vec<Phase> = Vec::new();
+    for p in &b.phases {
+        let mut ph = p.clone();
+        ph.diff = Some(
+            match old.get(p.id.as_str()) {
+                None => "added",
+                Some(o) if o.label != p.label => "renamed",
+                Some(o) if o.from_col != p.from_col || o.to_col != p.to_col => "resized",
+                Some(_) => "unchanged",
+            }
+            .into(),
+        );
+        phases.push(ph);
+    }
+    for p in &a.phases {
+        if !new_ids.contains(p.id.as_str()) {
+            let mut ph = p.clone();
+            ph.diff = Some("removed".into());
+            phases.push(ph);
+        }
+    }
+    phases
 }
 
 #[cfg(test)]
@@ -324,6 +354,36 @@ mod tests {
             !is_pivotal(&m, by("C1")),
             "type-gated: a command on the edge is not pivotal"
         );
+    }
+
+    #[test]
+    fn diff_tags_regions_by_stable_id() {
+        let a = model_of(
+            r#"{"phases":[
+                {"id":"K1","label":"Same","fromCol":0,"toCol":2},
+                {"id":"K2","label":"Old","fromCol":3,"toCol":4},
+                {"id":"K3","label":"Grows","fromCol":5,"toCol":6},
+                {"id":"K4","label":"GoneSoon","fromCol":7,"toCol":8}]}"#,
+        );
+        let b = model_of(
+            r#"{"phases":[
+                {"id":"K1","label":"Same","fromCol":0,"toCol":2},
+                {"id":"K2","label":"New","fromCol":3,"toCol":4},
+                {"id":"K3","label":"Grows","fromCol":5,"toCol":9},
+                {"id":"K5","label":"BrandNew","fromCol":10,"toCol":11}]}"#,
+        );
+        let d = diff_models(&a, &b, ("old".into(), "new".into()));
+        let tag = |id: &str| {
+            d.phases
+                .iter()
+                .find(|p| p.id == id)
+                .and_then(|p| p.diff.as_deref())
+        };
+        assert_eq!(tag("K1"), Some("unchanged"));
+        assert_eq!(tag("K2"), Some("renamed"), "label differs");
+        assert_eq!(tag("K3"), Some("resized"), "bounds differ");
+        assert_eq!(tag("K4"), Some("removed"));
+        assert_eq!(tag("K5"), Some("added"));
     }
 
     // The lane-title `+` aligns a lane's *first* element to the board's existing left column (no

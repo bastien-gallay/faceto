@@ -264,6 +264,7 @@ pub fn replay(events: &[Event]) -> Model {
                     label: label.clone(),
                     from_col: *from_col,
                     to_col: *to_col,
+                    diff: None,
                 });
             }
             Event::PhaseResized {
