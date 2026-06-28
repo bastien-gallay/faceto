@@ -100,8 +100,9 @@ const MARGIN_T: f64 = 116.0;
 const STICKY_W: f64 = 176.0;
 const STICKY_H: f64 = 74.0;
 // How far apart sibling connectors fan when several meet a box on the same face (F-edge-routing
-// Lever B). Deliberately small — the calm-instrument register wants a gentle spread, not a starburst
-// (the extreme slot of a k-edge fan rides ±FAN_SPREAD·(k−1)/2, well within a face's half-extent).
+// Lever B). Deliberately small — the calm-instrument register wants a gentle spread, not a starburst.
+// `fan_offsets` caps the per-slot step below this when a face is crowded, so the extreme anchor
+// always stays on the box (a high-degree node packs tighter rather than spilling off the edge).
 const FAN_SPREAD: f64 = 12.0;
 
 fn is_upper(c: char) -> bool {
@@ -391,7 +392,7 @@ fn fan_offsets(ends: &[Option<(usize, usize)>], centers: &[(f64, f64)]) -> (Vec<
     }
     let mut off_src = vec![0.0_f64; ends.len()];
     let mut off_dst = vec![0.0_f64; ends.len()];
-    for members in face_groups.values_mut() {
+    for (&(_, face), members) in face_groups.iter_mut() {
         let k = members.len();
         if k < 2 {
             continue;
@@ -402,8 +403,14 @@ fn fan_offsets(ends: &[Option<(usize, usize)>], centers: &[(f64, f64)]) -> (Vec<
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(a.0.cmp(&b.0))
         });
+        // Clamp the per-slot step so the extreme anchor stays on the box face: a horizontal face
+        // (0/1) fans in Y across STICKY_H, a vertical face (2/3) in X across STICKY_W. The extreme
+        // slot rides step·(k−1)/2, so step ≤ half-extent·2/(k−1) keeps it on the box. For a small
+        // k the cap exceeds FAN_SPREAD, so the common case is unchanged (byte-identical).
+        let half = if face <= 1 { STICKY_H } else { STICKY_W } / 2.0;
+        let step = FAN_SPREAD.min(2.0 * half / (k as f64 - 1.0));
         for (slot, &(ei, is_src, _)) in members.iter().enumerate() {
-            let off = FAN_SPREAD * (slot as f64 - (k as f64 - 1.0) / 2.0);
+            let off = step * (slot as f64 - (k as f64 - 1.0) / 2.0);
             if is_src {
                 off_src[ei] = off;
             } else {
@@ -1366,6 +1373,46 @@ mod tests {
             (starts[0] - starts[1]).abs() > 1.0,
             "sibling edges share an anchor Y: {starts:?}"
         );
+    }
+
+    // Lever B clamp (F-edge-routing): one actor wired to 9 commands on its right → 9 connectors
+    // share the actor's right face. Unclamped, the extreme fan offset (FAN_SPREAD·(9-1)/2 = 48)
+    // exceeds the face half-extent (STICKY_H/2 = 37) and would start a connector off the box; the
+    // clamp must tighten the step so every anchor stays on the actor.
+    #[test]
+    fn fan_clamp_keeps_anchors_on_the_box_for_a_high_degree_face() {
+        let mut elements = vec![el("X1", "actor", 0)];
+        let mut edges = vec![];
+        for k in 0..9 {
+            elements.push(el(&format!("C{k}"), "command", 1));
+            edges.push(Edge {
+                src: "X1".into(),
+                dst: format!("C{k}"),
+                status: None,
+            });
+        }
+        let m = Model {
+            title: "t".into(),
+            phases: vec![],
+            elements,
+            edges,
+            diff_meta: None,
+        };
+        let svg = render_svg_packed(&m, Packing::Rows);
+        let cy = cy_of(&svg, "X1");
+        let mut count = 0;
+        for (i, _) in svg.match_indices("data-src=\"X1\"") {
+            let after = &svg[i + svg[i..].find('M').unwrap() + 1..];
+            let comma = after.find(',').unwrap();
+            let end = after.find(' ').unwrap();
+            let y: f64 = after[comma + 1..end].parse().unwrap();
+            assert!(
+                (y - cy).abs() <= STICKY_H / 2.0 + 0.05,
+                "anchor slid off the box: y={y}, cy={cy}"
+            );
+            count += 1;
+        }
+        assert_eq!(count, 9, "expected 9 fanned connectors");
     }
 
     #[test]

@@ -248,12 +248,17 @@ function fanOffsets() {
       push(p.dataset.dst, sy > dy ? 2 : 3, [ei, false, sx]);
     }
   });
-  for (const members of groups.values()) {
+  for (const [key, members] of groups) {
     const k = members.length;
     if (k < 2) continue;
     members.sort((a, b) => a[2] - b[2] || a[0] - b[0]);
+    // Clamp the step so the extreme anchor stays on the box face (mirrors render.rs fan_offsets):
+    // a horizontal face (0/1) fans in Y over stickyH, a vertical face (2/3) in X over stickyW.
+    const face = +key.slice(key.lastIndexOf(":") + 1);
+    const half = (face <= 1 ? CFG.stickyH : CFG.stickyW) / 2;
+    const step = Math.min(FAN_SPREAD, 2 * half / (k - 1));
     members.forEach(([ei, isSrc], slot) => {
-      off[ei][isSrc ? 0 : 1] = FAN_SPREAD * (slot - (k - 1) / 2);
+      off[ei][isSrc ? 0 : 1] = step * (slot - (k - 1) / 2);
     });
   }
   return { edges, off };
