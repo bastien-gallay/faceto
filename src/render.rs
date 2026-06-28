@@ -3,7 +3,7 @@
 //! Deterministic, pure std. The colour grammar (one type → one colour → one lane) and the
 //! whole visual language are ported faithfully from the original Python harness.
 
-use crate::model::{Element, Model};
+use crate::model::{Edge, Element, Model};
 use std::collections::HashMap;
 
 // Canonical lane order (top → bottom). `command` and `hotspot` are deepened from their classic
@@ -292,6 +292,128 @@ fn edge_path(p1: (f64, f64), p2: (f64, f64), off1: f64, off2: f64) -> String {
     }
 }
 
+/// Lever A (F-edge-routing): order each `(lane, col)` cell's simultaneous members by the mean band
+/// of their edge neighbours — a neighbour's lane (Rows/Grid) or its col (Columns), both fixed, so
+/// one deterministic pass with no layered iteration — and return `(sub_ord, cell_total)`. A member
+/// with no edges falls back to its own (shared) band, so an edge-free cell keeps file order through
+/// the stable sort. Output is independent of `HashMap` iteration order (each cell writes disjoint
+/// `sub_ord` indices), so the render stays deterministic.
+fn cell_sub_order(
+    elements: &[Element],
+    edges: &[Edge],
+    idx_of: &HashMap<&str, usize>,
+    packing: Packing,
+) -> (Vec<i64>, HashMap<(String, i64), i64>) {
+    let band = |j: usize| match packing {
+        Packing::Columns => elements[j].col.unwrap() as f64,
+        _ => lane_index(&elements[j].kind) as f64,
+    };
+    // Running barycenter: a sum of neighbour bands and a count per node — no per-node Vec allocated.
+    let mut bsum = vec![0.0_f64; elements.len()];
+    let mut bcnt = vec![0u32; elements.len()];
+    for e in edges {
+        if let (Some(&s), Some(&d)) = (idx_of.get(e.src.as_str()), idx_of.get(e.dst.as_str())) {
+            bsum[s] += band(d);
+            bcnt[s] += 1;
+            bsum[d] += band(s);
+            bcnt[d] += 1;
+        }
+    }
+    let bary = |i: usize| {
+        if bcnt[i] == 0 {
+            band(i)
+        } else {
+            bsum[i] / bcnt[i] as f64
+        }
+    };
+
+    let mut cell_members: HashMap<(String, i64), Vec<usize>> = HashMap::new();
+    for (i, e) in elements.iter().enumerate() {
+        cell_members
+            .entry((e.kind.clone(), e.col.unwrap()))
+            .or_default()
+            .push(i);
+    }
+    let mut sub_ord = vec![0i64; elements.len()];
+    for members in cell_members.values_mut() {
+        // Members enter in file order; the stable sort keeps that order for equal barycenters.
+        members.sort_by(|&a, &b| {
+            bary(a)
+                .partial_cmp(&bary(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for (rank, &i) in members.iter().enumerate() {
+            sub_ord[i] = rank as i64;
+        }
+    }
+    // `cell_total` is just each cell's count — derive it by consuming `cell_members` (no key clones).
+    let cell_total = cell_members
+        .into_iter()
+        .map(|(k, v)| (k, v.len() as i64))
+        .collect();
+    (sub_ord, cell_total)
+}
+
+/// Lever B (F-edge-routing): per-edge fan offsets `(off_src, off_dst)` so several connectors meeting
+/// one box on the same face spread along it instead of collapsing onto one anchor. `ends[ei]` is
+/// edge `ei`'s `(src, dst)` element indices (`None` if an endpoint is unplaced); `centers` are the
+/// resolved box centres. The face test mirrors `edge_path`'s facing rule, so the offset always rides
+/// the free axis. A lone edge on a face keeps offset 0 (the classic centre anchor). Order-independent
+/// (each endpoint writes its own `off_*[ei]` exactly once), so the render stays deterministic.
+fn fan_offsets(ends: &[Option<(usize, usize)>], centers: &[(f64, f64)]) -> (Vec<f64>, Vec<f64>) {
+    // face: 0 right / 1 left (horizontal facing, fan in Y) · 2 bottom / 3 top (vertical, fan in X).
+    // A face's members are `(edge index, is the box this edge's src?, far-end cross position)`.
+    let mut face_groups: HashMap<(usize, u8), Vec<FaceMember>> = HashMap::new();
+    for (ei, end) in ends.iter().enumerate() {
+        let (s, d) = match end {
+            Some(p) => *p,
+            None => continue,
+        };
+        let (cs, cd) = (centers[s], centers[d]);
+        let horizontal = (cd.0 - cs.0).abs() >= STICKY_W;
+        let (face_s, cross_s, face_d, cross_d) = if horizontal {
+            let fs = if cd.0 > cs.0 { 0 } else { 1 };
+            let fd = if cs.0 > cd.0 { 0 } else { 1 };
+            (fs, cd.1, fd, cs.1)
+        } else {
+            let fs = if cd.1 > cs.1 { 2 } else { 3 };
+            let fd = if cs.1 > cd.1 { 2 } else { 3 };
+            (fs, cd.0, fd, cs.0)
+        };
+        face_groups
+            .entry((s, face_s))
+            .or_default()
+            .push((ei, true, cross_s));
+        face_groups
+            .entry((d, face_d))
+            .or_default()
+            .push((ei, false, cross_d));
+    }
+    let mut off_src = vec![0.0_f64; ends.len()];
+    let mut off_dst = vec![0.0_f64; ends.len()];
+    for members in face_groups.values_mut() {
+        let k = members.len();
+        if k < 2 {
+            continue;
+        }
+        // Sort by the far end's cross position; tie-break on edge index so the fan is deterministic.
+        members.sort_by(|a, b| {
+            a.2.partial_cmp(&b.2)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
+        for (slot, &(ei, is_src, _)) in members.iter().enumerate() {
+            let off = FAN_SPREAD * (slot as f64 - (k as f64 - 1.0) / 2.0);
+            if is_src {
+                off_src[ei] = off;
+            } else {
+                off_dst[ei] = off;
+            }
+        }
+    }
+    (off_src, off_dst)
+}
+
 /// How a cell of several *simultaneous* stickies (same lane + col) is unpacked so none hide. `col`
 /// stays the timeline — we never spread members across fake columns — only their pixels move.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -363,63 +485,15 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
     // Two or more elements sharing a (lane, col) cell are *simultaneous* — `col` is the timeline,
     // not a per-lane slot — so we never spread them across fake columns (that would lie about when
     // they happen). Instead each cell unpacks into a sub-grid (`Packing`): `sub_ord[i]` is element
-    // i's slot within its cell, `cell_total` the cell's count.
-    //
-    // Lever A (F-edge-routing): a crowded cell stacks its members not in file order but by the mean
-    // position of their edge neighbours, so connected stickies sit near each other and fewer
-    // connectors cross. Because node positions are locked (`type` = lane, `col` = timeline), a
-    // neighbour's band is fixed — its lane (Rows/Grid) or its col (Columns) — so the barycenter
-    // needs a single deterministic pass, no layered iteration. A member with no edges falls back to
-    // its own (shared) band, so an edge-free cell keeps file order unchanged via the stable sort.
+    // i's slot within its cell, `cell_total` the cell's count. Lever A (F-edge-routing) orders a
+    // crowded cell by its members' edge-neighbour barycenter — see `cell_sub_order`. `idx_of` (the
+    // id→index map) is reused below to resolve edge endpoints, so it is built once here.
     let idx_of: HashMap<&str, usize> = elements
         .iter()
         .enumerate()
         .map(|(i, e)| (e.id.as_str(), i))
         .collect();
-    let mut neighbours: Vec<Vec<usize>> = vec![Vec::new(); elements.len()];
-    for edge in &model.edges {
-        if let (Some(&s), Some(&d)) = (idx_of.get(edge.src.as_str()), idx_of.get(edge.dst.as_str()))
-        {
-            neighbours[s].push(d);
-            neighbours[d].push(s);
-        }
-    }
-    let band = |j: usize| -> f64 {
-        match packing {
-            Packing::Columns => elements[j].col.unwrap() as f64,
-            _ => lane_index(&elements[j].kind) as f64,
-        }
-    };
-    let bary = |i: usize| -> f64 {
-        let ns = &neighbours[i];
-        if ns.is_empty() {
-            band(i)
-        } else {
-            ns.iter().map(|&j| band(j)).sum::<f64>() / ns.len() as f64
-        }
-    };
-
-    let mut cell_members: HashMap<(String, i64), Vec<usize>> = HashMap::new();
-    for (i, e) in elements.iter().enumerate() {
-        cell_members
-            .entry((e.kind.clone(), e.col.unwrap()))
-            .or_default()
-            .push(i);
-    }
-    let mut sub_ord: Vec<i64> = vec![0; elements.len()];
-    let mut cell_total: HashMap<(String, i64), i64> = HashMap::new();
-    for (key, members) in &cell_members {
-        let mut ordered = members.clone(); // members are already in file order
-        ordered.sort_by(|&a, &b| {
-            bary(a)
-                .partial_cmp(&bary(b))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        for (rank, &i) in ordered.iter().enumerate() {
-            sub_ord[i] = rank as i64;
-        }
-        cell_total.insert(key.clone(), members.len() as i64);
-    }
+    let (sub_ord, cell_total) = cell_sub_order(&elements, &model.edges, &idx_of, packing);
 
     // Each timeline column is as wide as its busiest cell's sub-columns demand; each lane as tall
     // as its deepest cell's sub-rows. The chosen packing decides how a cell's count splits between
@@ -483,12 +557,6 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
 
     let width = (board_right + 40.0) as i64;
     let height = (lanes_bottom + 60.0) as i64;
-
-    let by_id: HashMap<String, usize> = elements
-        .iter()
-        .enumerate()
-        .map(|(i, e)| (e.id.clone(), i))
-        .collect();
 
     let diff_meta = model.diff_meta.clone();
     let mut p: Vec<String> = Vec::new();
@@ -642,70 +710,20 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
         ));
     }
 
-    // Lever B (F-edge-routing): where several connectors meet one box on the same face they would
-    // collapse onto a single anchor and read as one fat line. Group each edge-endpoint by (box,
-    // face), then fan a face's members apart along that face — ordered by the far end's cross
-    // position so the spread fans out without the anchors themselves crossing. The face test mirrors
-    // `edge_path`'s facing rule exactly, so the offset always rides the free axis. `off_*[ei]` is the
-    // anchor slide for edge `ei` at its src / dst; a lone edge on a face stays at 0 (classic centre).
+    // Lever B (F-edge-routing): fan connectors that share a box face apart so they don't collapse
+    // onto one anchor — see `fan_offsets`. `ends[ei]` resolves each edge's endpoints once (reusing
+    // `idx_of`); the edge loop below reuses it to skip edges with an unplaced endpoint.
     let ends: Vec<Option<(usize, usize)>> = model
         .edges
         .iter()
-        .map(|e| match (by_id.get(&e.src), by_id.get(&e.dst)) {
-            (Some(&s), Some(&d)) => Some((s, d)),
-            _ => None,
-        })
+        .map(
+            |e| match (idx_of.get(e.src.as_str()), idx_of.get(e.dst.as_str())) {
+                (Some(&s), Some(&d)) => Some((s, d)),
+                _ => None,
+            },
+        )
         .collect();
-    // face: 0 right / 1 left (horizontal facing, fan in Y) · 2 bottom / 3 top (vertical, fan in X).
-    // A face's members are `(edge index, is the box this edge's src?, far-end cross position)`.
-    let mut face_groups: HashMap<(usize, u8), Vec<FaceMember>> = HashMap::new();
-    for (ei, end) in ends.iter().enumerate() {
-        let (s, d) = match end {
-            Some(p) => *p,
-            None => continue,
-        };
-        let (cs, cd) = (centers[s], centers[d]);
-        let horizontal = (cd.0 - cs.0).abs() >= STICKY_W;
-        let (face_s, cross_s, face_d, cross_d) = if horizontal {
-            let fs = if cd.0 > cs.0 { 0 } else { 1 };
-            let fd = if cs.0 > cd.0 { 0 } else { 1 };
-            (fs, cd.1, fd, cs.1)
-        } else {
-            let fs = if cd.1 > cs.1 { 2 } else { 3 };
-            let fd = if cs.1 > cd.1 { 2 } else { 3 };
-            (fs, cd.0, fd, cs.0)
-        };
-        face_groups
-            .entry((s, face_s))
-            .or_default()
-            .push((ei, true, cross_s));
-        face_groups
-            .entry((d, face_d))
-            .or_default()
-            .push((ei, false, cross_d));
-    }
-    let mut off_src = vec![0.0_f64; model.edges.len()];
-    let mut off_dst = vec![0.0_f64; model.edges.len()];
-    for members in face_groups.values_mut() {
-        let k = members.len();
-        if k < 2 {
-            continue;
-        }
-        // Sort by the far end's cross position; tie-break on edge index so the fan is deterministic.
-        members.sort_by(|a, b| {
-            a.2.partial_cmp(&b.2)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.0.cmp(&b.0))
-        });
-        for (slot, &(ei, is_src, _)) in members.iter().enumerate() {
-            let off = FAN_SPREAD * (slot as f64 - (k as f64 - 1.0) / 2.0);
-            if is_src {
-                off_src[ei] = off;
-            } else {
-                off_dst[ei] = off;
-            }
-        }
-    }
+    let (off_src, off_dst) = fan_offsets(&ends, &centers);
 
     // Edges (under the stickies). A hotspot connector is a concern, not a flow: dotted, arrow-less.
     for (ei, edge) in model.edges.iter().enumerate() {
@@ -992,7 +1010,6 @@ const HTML_TEMPLATE: &str = include_str!("template.html");
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Edge;
 
     #[test]
     fn hump_split_breaks_camelcase_and_acronym_runs() {
