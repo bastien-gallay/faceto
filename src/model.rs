@@ -10,6 +10,10 @@ use std::path::Path;
 
 #[derive(Clone)]
 pub struct Phase {
+    /// Stable identity (the diff join key and the target of resize/rename/remove). A region is a
+    /// labelled vertical band; an element belongs to it spatially (its `col` falls inside the
+    /// band) — there is no membership field. See `docs/F-container-scope.md` (D1/D2).
+    pub id: String,
     pub label: String,
     pub from_col: i64,
     pub to_col: i64,
@@ -66,7 +70,12 @@ pub fn from_json(j: &Json) -> Model {
     let phases = j
         .get("phases")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(phase_from).collect())
+        .map(|arr| {
+            arr.iter()
+                .enumerate()
+                .filter_map(|(i, p)| phase_from(p, i))
+                .collect()
+        })
         .unwrap_or_default();
     let elements = j
         .get("elements")
@@ -87,8 +96,15 @@ pub fn from_json(j: &Json) -> Model {
     }
 }
 
-fn phase_from(j: &Json) -> Option<Phase> {
+fn phase_from(j: &Json, idx: usize) -> Option<Phase> {
     Some(Phase {
+        // A region carries an id when present; a legacy `model.json` band has none, so we mint a
+        // deterministic positional `K<n>` — stable across reloads of the same file.
+        id: j
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| format!("K{}", idx + 1)),
         label: j.get("label")?.as_str()?.to_string(),
         from_col: j.get("fromCol")?.as_f64()? as i64,
         to_col: j.get("toCol")?.as_f64()? as i64,
