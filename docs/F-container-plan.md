@@ -2,7 +2,7 @@
 
 # F-container — build plan
 
-Status: **model brick merged (S1–S3); resume at Stage 4** · Companion:
+Status: **model brick merged (S1–S3); render landed (S4, branch `feat/F-container-render`); resume at Stage 5 (serve mint + append)** · Companion:
 [`F-container-scope.md`](./F-container-scope.md)
 
 Build order is **model-first**: the pure brick (replay + diff) is testable with zero UI, and the
@@ -80,7 +80,7 @@ reviewer; flip to a `Region` rename only if the team prefers it.
 - Tests: each verdict pinned by id; a bounds-only change reads `resized`, a label-only change
   `renamed`.
 
-## Stage 4 — Render outline (`render.rs`) · behavioural · ⬜ NEXT · ⚠️ read DESIGN.md + PRODUCT.md first
+## Stage 4 — Render outline (`render.rs`) · behavioural · ✅ done (branch `feat/F-container-render`)
 
 - Evolve the decorative phase-band block (≈`render.rs:627`) into a **thin labelled region outline**
   with a label tab — *not* a filled block competing with the 8-lane colour grammar (calm
@@ -94,6 +94,17 @@ reviewer; flip to a `Region` rename only if the team prefers it.
     band would render as a **phantom unstyled band** in a diff overlay until this stage styles it.
     Latent today (no version produces region-differing models until Stage 5 UI), but this stage must
     read `Phase.diff` and style/omit removed bands explicitly.
+
+**As built (S4):** the band is an open "⊓" — a top rule + two grabbable vertical edges + the lone
+DESIGN-sanctioned 2% tonal wash, with a quiet folder-tab carrying the name (Bench-Is-Grey: no domain
+colour). Region geometry now reads the region's own `[from_col, to_col]` (clamped into the visible
+column range), *not* element positions, so empty/removed regions still render. Each edge emits a wide
+transparent `class="region-edge" data-region data-edge` hit-line for the Stage-6 resize grab (removed
+regions omit it). Pivotal nodes are `●` on the edge line at the event-lane centre, gated by
+`is_pivotal`. Diff maps onto the element vocab via `phase_diff_kind` (renamed→`≠`, resized→`→`);
+removed regions render inside a `<g opacity="0.45">` ghost. `is_pivotal` lost its `#[allow(dead_code)]`
+(now consumed); **`region_of` keeps its `#[allow(dead_code)]`** — render derives membership from
+geometry directly, so `region_of`'s first real caller is Stage 5/6 (serve/client), not render.
 
 ## Stage 5 — Mint + append (`serve.rs`) · behavioural
 

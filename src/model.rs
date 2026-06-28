@@ -167,7 +167,8 @@ pub fn lane_left_col(m: &Model, kind: &str) -> i64 {
 /// is **spatial**: there is no membership field, the band's stored bounds are the single source of
 /// truth (F-container scope D2). On overlap the **innermost** (smallest span) band wins, so a
 /// nested context takes precedence over the one it sits inside. Pure; `None` when no band covers it.
-// Allowed dead-code until Stage 4 (render) consumes it — F-container is staged model-first.
+// Allowed dead-code until Stage 5/6 (serve/client) consume it — render derives pivotal/membership
+// from geometry directly, so this convenience accessor lands with its first caller there.
 #[allow(dead_code)]
 pub fn region_of(m: &Model, col: i64) -> Option<&Phase> {
     m.phases
@@ -180,8 +181,6 @@ pub fn region_of(m: &Model, col: i64) -> Option<&Phase> {
 /// (F-container scope D3). The rule is type-gated and positional: an `event`-lane element whose
 /// `col` sits on a region edge (`from_col` or `to_col` of any band). A pivotal event is the hinge
 /// between two contexts; a command / read-model / actor on a border is not pivotal.
-// Allowed dead-code until Stage 4 (render) consumes it — F-container is staged model-first.
-#[allow(dead_code)]
 pub fn is_pivotal(m: &Model, e: &Element) -> bool {
     e.kind == "event"
         && e.col
