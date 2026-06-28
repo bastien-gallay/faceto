@@ -145,6 +145,31 @@ pub fn lane_left_col(m: &Model, kind: &str) -> i64 {
     }
 }
 
+/// The region a column belongs to — the band whose `[from_col, to_col]` contains `col`. Membership
+/// is **spatial**: there is no membership field, the band's stored bounds are the single source of
+/// truth (F-container scope D2). On overlap the **innermost** (smallest span) band wins, so a
+/// nested context takes precedence over the one it sits inside. Pure; `None` when no band covers it.
+// Allowed dead-code until Stage 4 (render) consumes it — F-container is staged model-first.
+#[allow(dead_code)]
+pub fn region_of(m: &Model, col: i64) -> Option<&Phase> {
+    m.phases
+        .iter()
+        .filter(|p| p.from_col <= col && col <= p.to_col)
+        .min_by_key(|p| p.to_col - p.from_col)
+}
+
+/// Whether an element is a **pivotal event** — derived from geometry, never a stored flag
+/// (F-container scope D3). The rule is type-gated and positional: an `event`-lane element whose
+/// `col` sits on a region edge (`from_col` or `to_col` of any band). A pivotal event is the hinge
+/// between two contexts; a command / read-model / actor on a border is not pivotal.
+// Allowed dead-code until Stage 4 (render) consumes it — F-container is staged model-first.
+#[allow(dead_code)]
+pub fn is_pivotal(m: &Model, e: &Element) -> bool {
+    e.kind == "event"
+        && e.col
+            .is_some_and(|c| m.phases.iter().any(|p| c == p.from_col || c == p.to_col))
+}
+
 /// Merge two models into one annotated model: every element/edge tagged
 /// added / removed / changed / moved / unchanged, keyed on stable `id` (never text or
 /// position). Layout follows the *new* side (`b`); removed elements keep their old slot.
@@ -244,6 +269,61 @@ mod tests {
 
     fn model_of(src: &str) -> Model {
         from_json(&json::parse(src).unwrap())
+    }
+
+    // ---- F-container Stage 2: spatial membership + derived pivotal -------------------------
+    // Membership and pivotal are read from geometry, not stored. These pin the two rules the
+    // later render/UI stages lean on: which band a col is in, and whether an event sits on a border.
+
+    #[test]
+    fn region_of_picks_the_band_covering_a_col_innermost_on_overlap() {
+        let m = model_of(
+            r#"{"phases":[
+                {"id":"K1","label":"Outer","fromCol":0,"toCol":9},
+                {"id":"K2","label":"Inner","fromCol":3,"toCol":5}]}"#,
+        );
+        assert_eq!(
+            region_of(&m, 1).map(|p| p.id.as_str()),
+            Some("K1"),
+            "only outer covers 1"
+        );
+        assert_eq!(
+            region_of(&m, 4).map(|p| p.id.as_str()),
+            Some("K2"),
+            "innermost wins on overlap"
+        );
+        assert_eq!(
+            region_of(&m, 12).map(|p| p.id.as_str()),
+            None,
+            "no band covers 12"
+        );
+        assert_eq!(
+            region_of(&Model::default(), 0).map(|p| p.id.as_str()),
+            None,
+            "no bands"
+        );
+    }
+
+    #[test]
+    fn is_pivotal_is_an_event_on_a_band_edge_only() {
+        // K1 spans cols 0..=3. An event ON an edge (0 or 3) is pivotal; one inside is not.
+        let m = model_of(
+            r#"{"phases":[{"id":"K1","label":"A","fromCol":0,"toCol":3}],
+                "elements":[
+                    {"id":"E1","type":"event","label":"OnEdge","col":3},
+                    {"id":"E2","type":"event","label":"Inside","col":1},
+                    {"id":"C1","type":"command","label":"AlsoOnEdge","col":3}]}"#,
+        );
+        let by = |id: &str| m.elements.iter().find(|e| e.id == id).unwrap();
+        assert!(
+            is_pivotal(&m, by("E1")),
+            "event on the band edge is pivotal"
+        );
+        assert!(!is_pivotal(&m, by("E2")), "event inside the band is not");
+        assert!(
+            !is_pivotal(&m, by("C1")),
+            "type-gated: a command on the edge is not pivotal"
+        );
     }
 
     // The lane-title `+` aligns a lane's *first* element to the board's existing left column (no
