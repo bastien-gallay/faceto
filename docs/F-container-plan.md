@@ -2,7 +2,7 @@
 
 # F-container — build plan
 
-Status: **plan (not started)** · Branch: `feat/F-container` · Companion:
+Status: **model brick merged (S1–S3); resume at Stage 4** · Companion:
 [`F-container-scope.md`](./F-container-scope.md)
 
 Build order is **model-first**: the pure brick (replay + diff) is testable with zero UI, and the
@@ -13,6 +13,36 @@ event) land separately from behavioural ones.
 Membership and pivotal are **derived from geometry** (scope D2/D3) — so they cost **zero new
 events** and **zero new fields**. That is the cheap part the plan leans on hard.
 
+## Session handoff — resume at Stage 4
+
+**Done & merged to `main` (PR #8):** Stages 1–3, the pure model brick.
+
+- **S1** `events.rs` — `Phase.id` + additive `PhaseResized`/`PhaseRenamed`/`PhaseRemoved`, wired
+  through `parse_event`/`replay`/`from_model`/`to_json`. Legacy id-less bands replay to a synthetic
+  `K<n>`.
+- **S2** `model.rs` — `region_of(col)` (spatial membership, innermost wins) and `is_pivotal(el)`
+  (event on a band edge). Both `pub`, both `#[allow(dead_code)]` **until Stage 4 consumes them**.
+- **S3** `model.rs` — `Phase.diff` field + `diff_phases` (added/removed/renamed/resized by id).
+- **Review (medium) ran on the brick — all 4 findings resolved:** id-mint now reserves the
+  highest-ever `K` suffix via `model::resolve_region_id` (single source of truth, shared by replay +
+  `from_json`); 78 tests green; `fmt`/`clippy` clean.
+
+**Resume here — Stage 4 (render). First moves, in order:**
+
+1. Branch fresh off `main` (e.g. `feat/F-container-render`); the old `feat/F-container` is merged.
+2. **Read `DESIGN.md` + `PRODUCT.md` first** — calm-instrument register; a region is a *thin
+   labelled outline*, never a filled block.
+3. Touch `render.rs` ≈`:629` (the phase-band block). Consume the ready-made helpers `region_of` /
+   `is_pivotal` and the `Phase.diff` field; **drop the two `#[allow(dead_code)]` attributes** in
+   `model.rs` once a non-test caller exists.
+
+**Two carry-over review items (already pinned below):**
+
+- **#3** Stage 5's server mint must share the `K<n>` namespace with replay's synthetic ids
+  (reserve removed/synthetic suffixes) — see `F-container-scope.md`.
+- **#4** Stage 4 must read `Phase.diff` or a removed region renders as a phantom unstyled band —
+  pinned in Stage 4 below.
+
 ## Naming sub-decision (resolve at Stage 1)
 
 D1 collapses *temporal phase* and *bounded context* into one band. The code already has a `Phase`
@@ -20,7 +50,7 @@ type. Recommendation: **keep the `Phase` type name internally, add an `id`, surf
 context" only in UI copy** — avoids a large mechanical rename diff while honouring D1. Flag for the
 reviewer; flip to a `Region` rename only if the team prefers it.
 
-## Stage 1 — Event spine (`events.rs`) · structural
+## Stage 1 — Event spine (`events.rs`) · structural · ✅ merged (PR #8)
 
 - Add `id: String` to `PhaseAdded`. On read, `id` is **optional** (additive field path): replay
   assigns a synthetic stable `K<index>` when a legacy `PhaseAdded` carries none — old logs stay
@@ -32,7 +62,7 @@ reviewer; flip to a `Region` rename only if the team prefers it.
 - Tests: log → replay → `to_json` round-trip carries region id; resize/rename/remove fold correctly;
   legacy `PhaseAdded` (no id) replays with a stable synthetic id.
 
-## Stage 2 — Region model + derivation (`model.rs`) · structural + behavioural
+## Stage 2 — Region model + derivation (`model.rs`) · structural + behavioural · ✅ merged (PR #8)
 
 - `Phase` gains `id: String` (and the diff annotations it will need: `diff: Option<String>`).
 - Two pure helpers (no clocks/IO):
@@ -43,14 +73,14 @@ reviewer; flip to a `Region` rename only if the team prefers it.
 - Tests: membership by col incl. overlap tie-break; pivotal true only for boundary-col events;
   non-event on a boundary is not pivotal.
 
-## Stage 3 — Region diff (`model.rs::diff_models`) · behavioural
+## Stage 3 — Region diff (`model.rs::diff_models`) · behavioural · ✅ merged (PR #8)
 
 - Diff regions by stable `id`: `added` / `removed` / `renamed` / `resized` (bounds differ). Layout
   follows the **new** side, mirroring the element diff. Removed regions keep their old slot.
 - Tests: each verdict pinned by id; a bounds-only change reads `resized`, a label-only change
   `renamed`.
 
-## Stage 4 — Render outline (`render.rs`) · behavioural · ⚠️ read DESIGN.md + PRODUCT.md first
+## Stage 4 — Render outline (`render.rs`) · behavioural · ⬜ NEXT · ⚠️ read DESIGN.md + PRODUCT.md first
 
 - Evolve the decorative phase-band block (≈`render.rs:627`) into a **thin labelled region outline**
   with a label tab — *not* a filled block competing with the 8-lane colour grammar (calm
