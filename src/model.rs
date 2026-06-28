@@ -10,9 +10,15 @@ use std::path::Path;
 
 #[derive(Clone)]
 pub struct Phase {
+    /// Stable identity (the diff join key and the target of resize/rename/remove). A region is a
+    /// labelled vertical band; an element belongs to it spatially (its `col` falls inside the
+    /// band) — there is no membership field. See `docs/F-container-scope.md` (D1/D2).
+    pub id: String,
     pub label: String,
     pub from_col: i64,
     pub to_col: i64,
+    // diff annotation (not in the file): added / removed / renamed / resized / unchanged.
+    pub diff: Option<String>,
 }
 
 #[derive(Clone)]
@@ -66,7 +72,12 @@ pub fn from_json(j: &Json) -> Model {
     let phases = j
         .get("phases")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(phase_from).collect())
+        .map(|arr| {
+            let mut max_region = 0u32;
+            arr.iter()
+                .filter_map(|p| phase_from(p, &mut max_region))
+                .collect()
+        })
         .unwrap_or_default();
     let elements = j
         .get("elements")
@@ -87,12 +98,35 @@ pub fn from_json(j: &Json) -> Model {
     }
 }
 
-fn phase_from(j: &Json) -> Option<Phase> {
+fn phase_from(j: &Json, max_region: &mut u32) -> Option<Phase> {
+    // Resolve the id only after the required fields parse, so a malformed band that gets dropped
+    // does not advance the synthetic counter (keeps minted ids gap-free and never reused).
+    let label = j.get("label")?.as_str()?.to_string();
+    let from_col = j.get("fromCol")?.as_f64()? as i64;
+    let to_col = j.get("toCol")?.as_f64()? as i64;
+    let id = resolve_region_id(j.get("id").and_then(|v| v.as_str()), max_region);
     Some(Phase {
-        label: j.get("label")?.as_str()?.to_string(),
-        from_col: j.get("fromCol")?.as_f64()? as i64,
-        to_col: j.get("toCol")?.as_f64()? as i64,
+        id,
+        label,
+        from_col,
+        to_col,
+        diff: None,
     })
+}
+
+/// Resolve a region's id: an explicit id used as-is, otherwise the next free `K<n>` one past the
+/// **highest `K` suffix ever seen** (`max_region`, which the caller threads across a band sequence
+/// and never decrements). This mirrors `serve::mint_id`'s reservation rule — a synthetic id never
+/// reuses a suffix freed by a `PhaseRemoved` or already taken by an explicit id. The single source
+/// of truth for region-id minting, shared by `from_json` (model.json) and `replay` (the log).
+pub fn resolve_region_id(explicit: Option<&str>, max_region: &mut u32) -> String {
+    let id = explicit
+        .map(String::from)
+        .unwrap_or_else(|| format!("K{}", *max_region + 1));
+    if let Some(n) = id.strip_prefix('K').and_then(|r| r.parse::<u32>().ok()) {
+        *max_region = (*max_region).max(n);
+    }
+    id
 }
 
 fn element_from(j: &Json) -> Option<Element> {
@@ -127,6 +161,31 @@ pub fn lane_left_col(m: &Model, kind: &str) -> i64 {
         Some(first) if m.elements.iter().any(|e| e.kind == kind) => first - 1,
         Some(first) => first,
     }
+}
+
+/// The region a column belongs to — the band whose `[from_col, to_col]` contains `col`. Membership
+/// is **spatial**: there is no membership field, the band's stored bounds are the single source of
+/// truth (F-container scope D2). On overlap the **innermost** (smallest span) band wins, so a
+/// nested context takes precedence over the one it sits inside. Pure; `None` when no band covers it.
+// Allowed dead-code until Stage 4 (render) consumes it — F-container is staged model-first.
+#[allow(dead_code)]
+pub fn region_of(m: &Model, col: i64) -> Option<&Phase> {
+    m.phases
+        .iter()
+        .filter(|p| p.from_col <= col && col <= p.to_col)
+        .min_by_key(|p| p.to_col - p.from_col)
+}
+
+/// Whether an element is a **pivotal event** — derived from geometry, never a stored flag
+/// (F-container scope D3). The rule is type-gated and positional: an `event`-lane element whose
+/// `col` sits on a region edge (`from_col` or `to_col` of any band). A pivotal event is the hinge
+/// between two contexts; a command / read-model / actor on a border is not pivotal.
+// Allowed dead-code until Stage 4 (render) consumes it — F-container is staged model-first.
+#[allow(dead_code)]
+pub fn is_pivotal(m: &Model, e: &Element) -> bool {
+    e.kind == "event"
+        && e.col
+            .is_some_and(|c| m.phases.iter().any(|p| c == p.from_col || c == p.to_col))
 }
 
 /// Merge two models into one annotated model: every element/edge tagged
@@ -210,15 +269,42 @@ pub fn diff_models(a: &Model, b: &Model, meta: (String, String)) -> Model {
         } else {
             a.title.clone()
         },
-        phases: if !b.phases.is_empty() {
-            b.phases.clone()
-        } else {
-            a.phases.clone()
-        },
+        phases: diff_phases(a, b),
         elements,
         edges,
         diff_meta: Some(meta),
     }
+}
+
+/// Diff the regions of two boards, keyed on stable `id` (mirroring the element diff): each tagged
+/// added / removed / renamed (label differs) / resized (bounds differ) / unchanged. Layout follows
+/// the **new** side (`b`); a region only in the old side keeps its slot, tagged removed and appended.
+fn diff_phases(a: &Model, b: &Model) -> Vec<Phase> {
+    let old: HashMap<&str, &Phase> = a.phases.iter().map(|p| (p.id.as_str(), p)).collect();
+    let new_ids: HashSet<&str> = b.phases.iter().map(|p| p.id.as_str()).collect();
+
+    let mut phases: Vec<Phase> = Vec::new();
+    for p in &b.phases {
+        let mut ph = p.clone();
+        ph.diff = Some(
+            match old.get(p.id.as_str()) {
+                None => "added",
+                Some(o) if o.label != p.label => "renamed",
+                Some(o) if o.from_col != p.from_col || o.to_col != p.to_col => "resized",
+                Some(_) => "unchanged",
+            }
+            .into(),
+        );
+        phases.push(ph);
+    }
+    for p in &a.phases {
+        if !new_ids.contains(p.id.as_str()) {
+            let mut ph = p.clone();
+            ph.diff = Some("removed".into());
+            phases.push(ph);
+        }
+    }
+    phases
 }
 
 #[cfg(test)]
@@ -228,6 +314,91 @@ mod tests {
 
     fn model_of(src: &str) -> Model {
         from_json(&json::parse(src).unwrap())
+    }
+
+    // ---- F-container Stage 2: spatial membership + derived pivotal -------------------------
+    // Membership and pivotal are read from geometry, not stored. These pin the two rules the
+    // later render/UI stages lean on: which band a col is in, and whether an event sits on a border.
+
+    #[test]
+    fn region_of_picks_the_band_covering_a_col_innermost_on_overlap() {
+        let m = model_of(
+            r#"{"phases":[
+                {"id":"K1","label":"Outer","fromCol":0,"toCol":9},
+                {"id":"K2","label":"Inner","fromCol":3,"toCol":5}]}"#,
+        );
+        assert_eq!(
+            region_of(&m, 1).map(|p| p.id.as_str()),
+            Some("K1"),
+            "only outer covers 1"
+        );
+        assert_eq!(
+            region_of(&m, 4).map(|p| p.id.as_str()),
+            Some("K2"),
+            "innermost wins on overlap"
+        );
+        assert_eq!(
+            region_of(&m, 12).map(|p| p.id.as_str()),
+            None,
+            "no band covers 12"
+        );
+        assert_eq!(
+            region_of(&Model::default(), 0).map(|p| p.id.as_str()),
+            None,
+            "no bands"
+        );
+    }
+
+    #[test]
+    fn is_pivotal_is_an_event_on_a_band_edge_only() {
+        // K1 spans cols 0..=3. An event ON an edge (0 or 3) is pivotal; one inside is not.
+        let m = model_of(
+            r#"{"phases":[{"id":"K1","label":"A","fromCol":0,"toCol":3}],
+                "elements":[
+                    {"id":"E1","type":"event","label":"OnEdge","col":3},
+                    {"id":"E2","type":"event","label":"Inside","col":1},
+                    {"id":"C1","type":"command","label":"AlsoOnEdge","col":3}]}"#,
+        );
+        let by = |id: &str| m.elements.iter().find(|e| e.id == id).unwrap();
+        assert!(
+            is_pivotal(&m, by("E1")),
+            "event on the band edge is pivotal"
+        );
+        assert!(!is_pivotal(&m, by("E2")), "event inside the band is not");
+        assert!(
+            !is_pivotal(&m, by("C1")),
+            "type-gated: a command on the edge is not pivotal"
+        );
+    }
+
+    #[test]
+    fn diff_tags_regions_by_stable_id() {
+        let a = model_of(
+            r#"{"phases":[
+                {"id":"K1","label":"Same","fromCol":0,"toCol":2},
+                {"id":"K2","label":"Old","fromCol":3,"toCol":4},
+                {"id":"K3","label":"Grows","fromCol":5,"toCol":6},
+                {"id":"K4","label":"GoneSoon","fromCol":7,"toCol":8}]}"#,
+        );
+        let b = model_of(
+            r#"{"phases":[
+                {"id":"K1","label":"Same","fromCol":0,"toCol":2},
+                {"id":"K2","label":"New","fromCol":3,"toCol":4},
+                {"id":"K3","label":"Grows","fromCol":5,"toCol":9},
+                {"id":"K5","label":"BrandNew","fromCol":10,"toCol":11}]}"#,
+        );
+        let d = diff_models(&a, &b, ("old".into(), "new".into()));
+        let tag = |id: &str| {
+            d.phases
+                .iter()
+                .find(|p| p.id == id)
+                .and_then(|p| p.diff.as_deref())
+        };
+        assert_eq!(tag("K1"), Some("unchanged"));
+        assert_eq!(tag("K2"), Some("renamed"), "label differs");
+        assert_eq!(tag("K3"), Some("resized"), "bounds differ");
+        assert_eq!(tag("K4"), Some("removed"));
+        assert_eq!(tag("K5"), Some("added"));
     }
 
     // The lane-title `+` aligns a lane's *first* element to the board's existing left column (no

@@ -23,7 +23,7 @@
 //!   kind (additive) and upcast the old one; never redefine an existing kind in place.
 
 use crate::json::{self, Json};
-use crate::model::{Edge, Element, Model, Phase};
+use crate::model::{resolve_region_id, Edge, Element, Model, Phase};
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -35,9 +35,25 @@ pub enum Event {
         title: String,
     },
     PhaseAdded {
+        /// Stable region id. `None` on a legacy band (predates region editing); `replay` mints a
+        /// deterministic positional id so old logs stay replayable without an `upcast` (additive
+        /// field, not a renamed kind).
+        id: Option<String>,
         label: String,
         from_col: i64,
         to_col: i64,
+    },
+    PhaseResized {
+        id: String,
+        from_col: i64,
+        to_col: i64,
+    },
+    PhaseRenamed {
+        id: String,
+        label: String,
+    },
+    PhaseRemoved {
+        id: String,
     },
     ElementAdded {
         id: String,
@@ -170,10 +186,21 @@ pub fn parse_event(j: &Json) -> Option<Event> {
     Some(match j.get("event")?.as_str()? {
         "BoardTitled" => Event::BoardTitled { title: s("title")? },
         "PhaseAdded" => Event::PhaseAdded {
+            id: s("id"),
             label: s("label")?,
             from_col: i("fromCol")?,
             to_col: i("toCol")?,
         },
+        "PhaseResized" => Event::PhaseResized {
+            id: s("id")?,
+            from_col: i("fromCol")?,
+            to_col: i("toCol")?,
+        },
+        "PhaseRenamed" => Event::PhaseRenamed {
+            id: s("id")?,
+            label: s("label")?,
+        },
+        "PhaseRemoved" => Event::PhaseRemoved { id: s("id")? },
         "ElementAdded" => Event::ElementAdded {
             id: s("id")?,
             kind: s("type")?,
@@ -218,18 +245,46 @@ pub fn parse_event(j: &Json) -> Option<Event> {
 /// deterministic: same log → same `Model`.
 pub fn replay(events: &[Event]) -> Model {
     let mut m = Model::default();
+    // Highest `K` region suffix seen so far — threaded across the fold so a synthetic id for a
+    // legacy (id-less) band never reuses a suffix freed by `PhaseRemoved` or taken by an explicit
+    // id. Mirrors `serve::mint_id`'s "highest ever added" rule (see `resolve_region_id`).
+    let mut max_region = 0u32;
     for ev in events {
         match ev {
             Event::BoardTitled { title } => m.title = title.clone(),
             Event::PhaseAdded {
+                id,
                 label,
                 from_col,
                 to_col,
-            } => m.phases.push(Phase {
-                label: label.clone(),
-                from_col: *from_col,
-                to_col: *to_col,
-            }),
+            } => {
+                // A legacy band carries no id; mint the next free `K<n>` past the highest ever
+                // seen so resize/rename/remove can target it and no suffix is ever reused.
+                let id = resolve_region_id(id.as_deref(), &mut max_region);
+                m.phases.push(Phase {
+                    id,
+                    label: label.clone(),
+                    from_col: *from_col,
+                    to_col: *to_col,
+                    diff: None,
+                });
+            }
+            Event::PhaseResized {
+                id,
+                from_col,
+                to_col,
+            } => {
+                if let Some(p) = m.phases.iter_mut().find(|p| &p.id == id) {
+                    p.from_col = *from_col;
+                    p.to_col = *to_col;
+                }
+            }
+            Event::PhaseRenamed { id, label } => {
+                if let Some(p) = m.phases.iter_mut().find(|p| &p.id == id) {
+                    p.label = label.clone();
+                }
+            }
+            Event::PhaseRemoved { id } => m.phases.retain(|p| &p.id != id),
             Event::ElementAdded {
                 id,
                 kind,
@@ -317,6 +372,7 @@ pub fn from_model(m: &Model) -> Vec<Event> {
     }
     for p in &m.phases {
         ev.push(Event::PhaseAdded {
+            id: Some(p.id.clone()),
             label: p.label.clone(),
             from_col: p.from_col,
             to_col: p.to_col,
@@ -466,15 +522,36 @@ pub fn to_json(ev: &Event) -> Json {
     match ev {
         Event::BoardTitled { title } => obj(vec![("event", s("BoardTitled")), ("title", s(title))]),
         Event::PhaseAdded {
+            id,
             label,
             from_col,
             to_col,
+        } => {
+            let mut p = vec![("event", s("PhaseAdded"))];
+            if let Some(id) = id {
+                p.push(("id", s(id)));
+            }
+            p.push(("label", s(label)));
+            p.push(("fromCol", n(*from_col)));
+            p.push(("toCol", n(*to_col)));
+            obj(p)
+        }
+        Event::PhaseResized {
+            id,
+            from_col,
+            to_col,
         } => obj(vec![
-            ("event", s("PhaseAdded")),
-            ("label", s(label)),
+            ("event", s("PhaseResized")),
+            ("id", s(id)),
             ("fromCol", n(*from_col)),
             ("toCol", n(*to_col)),
         ]),
+        Event::PhaseRenamed { id, label } => obj(vec![
+            ("event", s("PhaseRenamed")),
+            ("id", s(id)),
+            ("label", s(label)),
+        ]),
+        Event::PhaseRemoved { id } => obj(vec![("event", s("PhaseRemoved")), ("id", s(id))]),
         Event::ElementAdded {
             id,
             kind,
@@ -559,6 +636,116 @@ mod tests {
 
     fn ev(line: &str) -> Event {
         parse_event(&json::parse(line).unwrap()).unwrap()
+    }
+
+    // ---- F-container: regions (Stage 1, the event spine) ---------------------------------
+    // A region is a labelled vertical band that evolves the legacy `Phase`. Membership and
+    // pivotal are derived from geometry (later stages), so the spine only needs: add with a
+    // stable id, resize, rename, remove — plus legacy bands (no id) replaying deterministically.
+
+    #[test]
+    fn phase_added_round_trips_its_id() {
+        let e = ev(r#"{"event":"PhaseAdded","id":"K1","label":"Checkout","fromCol":0,"toCol":3}"#);
+        assert!(matches!(&e, Event::PhaseAdded { id: Some(id), label, .. }
+            if id == "K1" && label == "Checkout"));
+        // serialize → parse is a fixed point
+        assert_eq!(
+            json::to_string(&to_json(&ev(&line(&e)))),
+            json::to_string(&to_json(&e))
+        );
+    }
+
+    #[test]
+    fn legacy_phase_without_id_replays_to_a_stable_positional_id() {
+        // An old log's bands carry no id; replay must mint deterministic `K<n>` so resize/rename
+        // can target them and two replays of the same log agree.
+        let evs = vec![
+            ev(r#"{"event":"PhaseAdded","label":"A","fromCol":0,"toCol":2}"#),
+            ev(r#"{"event":"PhaseAdded","label":"B","fromCol":3,"toCol":5}"#),
+        ];
+        let m = replay(&evs);
+        assert_eq!(
+            m.phases.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            ["K1", "K2"]
+        );
+    }
+
+    #[test]
+    fn region_resize_rename_remove_fold_by_id() {
+        let evs = vec![
+            ev(r#"{"event":"PhaseAdded","id":"K1","label":"Old","fromCol":0,"toCol":2}"#),
+            ev(r#"{"event":"PhaseAdded","id":"K2","label":"Keep","fromCol":3,"toCol":4}"#),
+            ev(r#"{"event":"PhaseResized","id":"K1","fromCol":0,"toCol":5}"#),
+            ev(r#"{"event":"PhaseRenamed","id":"K1","label":"New"}"#),
+            ev(r#"{"event":"PhaseRemoved","id":"K2"}"#),
+        ];
+        let m = replay(&evs);
+        assert_eq!(m.phases.len(), 1, "K2 removed");
+        let k1 = &m.phases[0];
+        assert_eq!(
+            (k1.id.as_str(), k1.label.as_str(), k1.from_col, k1.to_col),
+            ("K1", "New", 0, 5)
+        );
+    }
+
+    #[test]
+    fn synthetic_region_ids_never_reuse_a_freed_suffix() {
+        // Regression: deriving the synthetic id from the live phase *count* would re-mint `K2`
+        // after a removal. The id must come from the highest suffix ever seen, never reused —
+        // the same reservation rule serve::mint_id uses for elements.
+        let evs = vec![
+            ev(r#"{"event":"PhaseAdded","label":"A","fromCol":0,"toCol":1}"#),
+            ev(r#"{"event":"PhaseAdded","label":"B","fromCol":2,"toCol":3}"#),
+            ev(r#"{"event":"PhaseRemoved","id":"K1"}"#),
+            ev(r#"{"event":"PhaseAdded","label":"C","fromCol":4,"toCol":5}"#),
+        ];
+        let m = replay(&evs);
+        let ids: Vec<_> = m.phases.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["K2", "K3"],
+            "the third add must be K3, not a reused K2"
+        );
+    }
+
+    #[test]
+    fn a_synthetic_id_skips_past_an_explicit_one() {
+        // An explicit id raises the watermark, so a following legacy band mints past it.
+        let evs = vec![
+            ev(r#"{"event":"PhaseAdded","id":"K5","label":"Explicit","fromCol":0,"toCol":1}"#),
+            ev(r#"{"event":"PhaseAdded","label":"Legacy","fromCol":2,"toCol":3}"#),
+        ];
+        let m = replay(&evs);
+        assert_eq!(
+            m.phases[1].id, "K6",
+            "synthetic id mints one past the highest seen"
+        );
+    }
+
+    #[test]
+    fn region_ops_on_an_unknown_id_are_no_ops() {
+        let evs = vec![
+            ev(r#"{"event":"PhaseAdded","id":"K1","label":"A","fromCol":0,"toCol":2}"#),
+            ev(r#"{"event":"PhaseRenamed","id":"K9","label":"ghost"}"#),
+            ev(r#"{"event":"PhaseRemoved","id":"K9"}"#),
+        ];
+        let m = replay(&evs);
+        assert_eq!(m.phases.len(), 1);
+        assert_eq!(m.phases[0].label, "A");
+    }
+
+    #[test]
+    fn from_model_emits_region_ids_so_genesis_round_trips() {
+        // compact()/genesis fold the final state into PhaseAdded; the id must survive so a
+        // compacted log keeps stable region identity.
+        let log = vec![
+            ev(r#"{"event":"PhaseAdded","id":"K1","label":"A","fromCol":0,"toCol":2}"#),
+            ev(r#"{"event":"PhaseResized","id":"K1","fromCol":0,"toCol":9}"#),
+        ];
+        let folded = compact(&log);
+        let m = replay(&folded);
+        assert_eq!(m.phases[0].id, "K1");
+        assert_eq!(m.phases[0].to_col, 9, "resize survives the fold");
     }
 
     // ---- F-inline-edit: a direct rename must not be able to blank a label -----------------
