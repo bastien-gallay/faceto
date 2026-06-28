@@ -59,6 +59,11 @@ reviewer; flip to a `Region` rename only if the team prefers it.
 - Emit a grabbable border affordance (class / hit-region) for the resize handle — the *visual* half
   of D5; the interaction is Stage 6.
 - Diff styling for `added` / `removed` / `resized` regions, consistent with element diff styling.
+  - ⚠️ **Review #4 (pinned):** `render.rs` (≈`:629`) currently reads only `label`/`from_col`/`to_col`
+    and ignores `Phase.diff`. Since Stage 3 now feeds *removed* regions into `model.phases`, a removed
+    band would render as a **phantom unstyled band** in a diff overlay until this stage styles it.
+    Latent today (no version produces region-differing models until Stage 5 UI), but this stage must
+    read `Phase.diff` and style/omit removed bands explicitly.
 
 ## Stage 5 — Mint + append (`serve.rs`) · behavioural
 
