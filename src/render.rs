@@ -3,7 +3,7 @@
 //! Deterministic, pure std. The colour grammar (one type → one colour → one lane) and the
 //! whole visual language are ported faithfully from the original Python harness.
 
-use crate::model::{Element, Model};
+use crate::model::{Edge, Element, Model};
 use std::collections::HashMap;
 
 // Canonical lane order (top → bottom). `command` and `hotspot` are deepened from their classic
@@ -30,6 +30,13 @@ pub fn lane_prefix(kind: &str) -> Option<char> {
         .iter()
         .position(|&l| l == kind)
         .map(|i| LANE_PREFIXES[i])
+}
+
+/// A lane's vertical rank in the fixed 8-lane grammar (`actor` = 0 … `hotspot` = 7). Used as the
+/// y-band when ordering a crowded cell's members by their edge neighbours (F-edge-routing Lever A).
+/// An unknown kind is never one of the 8 lanes, so it sorts to the top — harmless, never panics.
+fn lane_index(kind: &str) -> usize {
+    LANES.iter().position(|&l| l == kind).unwrap_or(0)
 }
 
 fn colour(kind: &str) -> &'static str {
@@ -92,6 +99,11 @@ const MARGIN_L: f64 = 150.0;
 const MARGIN_T: f64 = 116.0;
 const STICKY_W: f64 = 176.0;
 const STICKY_H: f64 = 74.0;
+// How far apart sibling connectors fan when several meet a box on the same face (F-edge-routing
+// Lever B). Deliberately small — the calm-instrument register wants a gentle spread, not a starburst.
+// `fan_offsets` caps the per-slot step below this when a face is crowded, so the extreme anchor
+// always stays on the box (a high-degree node packs tighter rather than spilling off the edge).
+const FAN_SPREAD: f64 = 12.0;
 
 fn is_upper(c: char) -> bool {
     c.is_ascii_uppercase()
@@ -245,29 +257,168 @@ fn diff_tooltip(e: &Element, meta: &(String, String)) -> String {
     }
 }
 
-/// A smooth connector between two box centres, anchored on the facing edges.
-fn edge_path(p1: (f64, f64), p2: (f64, f64)) -> String {
+/// One edge-endpoint queued on a box's face for fan-out: `(edge index, is-src, far-end cross pos)`.
+type FaceMember = (usize, bool, f64);
+
+/// A smooth connector between two box centres, anchored on the facing edges. `off1`/`off2` slide
+/// each anchor along its facing edge (Lever B fan-out, F-edge-routing): the offset rides the *free*
+/// axis of the chosen facing — Y for a left/right face, X for a top/bottom face — so several
+/// connectors meeting one box on the same side spread out instead of collapsing onto one point.
+/// Both offsets `0.0` reproduces the classic centre-to-centre path byte-for-byte.
+fn edge_path(p1: (f64, f64), p2: (f64, f64), off1: f64, off2: f64) -> String {
     let (x1, y1) = p1;
     let (x2, y2) = p2;
     if (x2 - x1).abs() < STICKY_W {
+        // Vertical facing: anchors ride the top/bottom faces, so the fan offset slides them in X.
         let sgn = if y2 >= y1 { 1.0 } else { -1.0 };
+        let (ax1, ax2) = (x1 + off1, x2 + off2);
         let ay1 = y1 + sgn * STICKY_H / 2.0;
         let ay2 = y2 - sgn * STICKY_H / 2.0;
         let my = (ay1 + ay2) / 2.0;
         format!(
             "M{:.1},{:.1} C{:.1},{:.1} {:.1},{:.1} {:.1},{:.1}",
-            x1, ay1, x1, my, x2, my, x2, ay2
+            ax1, ay1, ax1, my, ax2, my, ax2, ay2
         )
     } else {
+        // Horizontal facing: anchors ride the left/right faces, so the fan offset slides them in Y.
         let sgn = if x2 >= x1 { 1.0 } else { -1.0 };
         let ax1 = x1 + sgn * STICKY_W / 2.0;
         let ax2 = x2 - sgn * STICKY_W / 2.0;
+        let (ay1, ay2) = (y1 + off1, y2 + off2);
         let mx = (ax1 + ax2) / 2.0;
         format!(
             "M{:.1},{:.1} C{:.1},{:.1} {:.1},{:.1} {:.1},{:.1}",
-            ax1, y1, mx, y1, mx, y2, ax2, y2
+            ax1, ay1, mx, ay1, mx, ay2, ax2, ay2
         )
     }
+}
+
+/// Lever A (F-edge-routing): order each `(lane, col)` cell's simultaneous members by the mean band
+/// of their edge neighbours — a neighbour's lane (Rows/Grid) or its col (Columns), both fixed, so
+/// one deterministic pass with no layered iteration — and return `(sub_ord, cell_total)`. A member
+/// with no edges falls back to its own (shared) band, so an edge-free cell keeps file order through
+/// the stable sort. Output is independent of `HashMap` iteration order (each cell writes disjoint
+/// `sub_ord` indices), so the render stays deterministic.
+fn cell_sub_order(
+    elements: &[Element],
+    edges: &[Edge],
+    idx_of: &HashMap<&str, usize>,
+    packing: Packing,
+) -> (Vec<i64>, HashMap<(String, i64), i64>) {
+    let band = |j: usize| match packing {
+        Packing::Columns => elements[j].col.unwrap() as f64,
+        _ => lane_index(&elements[j].kind) as f64,
+    };
+    // Running barycenter: a sum of neighbour bands and a count per node — no per-node Vec allocated.
+    let mut bsum = vec![0.0_f64; elements.len()];
+    let mut bcnt = vec![0u32; elements.len()];
+    for e in edges {
+        if let (Some(&s), Some(&d)) = (idx_of.get(e.src.as_str()), idx_of.get(e.dst.as_str())) {
+            bsum[s] += band(d);
+            bcnt[s] += 1;
+            bsum[d] += band(s);
+            bcnt[d] += 1;
+        }
+    }
+    let bary = |i: usize| {
+        if bcnt[i] == 0 {
+            band(i)
+        } else {
+            bsum[i] / bcnt[i] as f64
+        }
+    };
+
+    let mut cell_members: HashMap<(String, i64), Vec<usize>> = HashMap::new();
+    for (i, e) in elements.iter().enumerate() {
+        cell_members
+            .entry((e.kind.clone(), e.col.unwrap()))
+            .or_default()
+            .push(i);
+    }
+    let mut sub_ord = vec![0i64; elements.len()];
+    for members in cell_members.values_mut() {
+        // Members enter in file order; the stable sort keeps that order for equal barycenters.
+        members.sort_by(|&a, &b| {
+            bary(a)
+                .partial_cmp(&bary(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for (rank, &i) in members.iter().enumerate() {
+            sub_ord[i] = rank as i64;
+        }
+    }
+    // `cell_total` is just each cell's count — derive it by consuming `cell_members` (no key clones).
+    let cell_total = cell_members
+        .into_iter()
+        .map(|(k, v)| (k, v.len() as i64))
+        .collect();
+    (sub_ord, cell_total)
+}
+
+/// Lever B (F-edge-routing): per-edge fan offsets `(off_src, off_dst)` so several connectors meeting
+/// one box on the same face spread along it instead of collapsing onto one anchor. `ends[ei]` is
+/// edge `ei`'s `(src, dst)` element indices (`None` if an endpoint is unplaced); `centers` are the
+/// resolved box centres. The face test mirrors `edge_path`'s facing rule, so the offset always rides
+/// the free axis. A lone edge on a face keeps offset 0 (the classic centre anchor). Order-independent
+/// (each endpoint writes its own `off_*[ei]` exactly once), so the render stays deterministic.
+fn fan_offsets(ends: &[Option<(usize, usize)>], centers: &[(f64, f64)]) -> (Vec<f64>, Vec<f64>) {
+    // face: 0 right / 1 left (horizontal facing, fan in Y) · 2 bottom / 3 top (vertical, fan in X).
+    // A face's members are `(edge index, is the box this edge's src?, far-end cross position)`.
+    let mut face_groups: HashMap<(usize, u8), Vec<FaceMember>> = HashMap::new();
+    for (ei, end) in ends.iter().enumerate() {
+        let (s, d) = match end {
+            Some(p) => *p,
+            None => continue,
+        };
+        let (cs, cd) = (centers[s], centers[d]);
+        let horizontal = (cd.0 - cs.0).abs() >= STICKY_W;
+        let (face_s, cross_s, face_d, cross_d) = if horizontal {
+            let fs = if cd.0 > cs.0 { 0 } else { 1 };
+            let fd = if cs.0 > cd.0 { 0 } else { 1 };
+            (fs, cd.1, fd, cs.1)
+        } else {
+            let fs = if cd.1 > cs.1 { 2 } else { 3 };
+            let fd = if cs.1 > cd.1 { 2 } else { 3 };
+            (fs, cd.0, fd, cs.0)
+        };
+        face_groups
+            .entry((s, face_s))
+            .or_default()
+            .push((ei, true, cross_s));
+        face_groups
+            .entry((d, face_d))
+            .or_default()
+            .push((ei, false, cross_d));
+    }
+    let mut off_src = vec![0.0_f64; ends.len()];
+    let mut off_dst = vec![0.0_f64; ends.len()];
+    for (&(_, face), members) in face_groups.iter_mut() {
+        let k = members.len();
+        if k < 2 {
+            continue;
+        }
+        // Sort by the far end's cross position; tie-break on edge index so the fan is deterministic.
+        members.sort_by(|a, b| {
+            a.2.partial_cmp(&b.2)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
+        // Clamp the per-slot step so the extreme anchor stays on the box face: a horizontal face
+        // (0/1) fans in Y across STICKY_H, a vertical face (2/3) in X across STICKY_W. The extreme
+        // slot rides step·(k−1)/2, so step ≤ half-extent·2/(k−1) keeps it on the box. For a small
+        // k the cap exceeds FAN_SPREAD, so the common case is unchanged (byte-identical).
+        let half = if face <= 1 { STICKY_H } else { STICKY_W } / 2.0;
+        let step = FAN_SPREAD.min(2.0 * half / (k as f64 - 1.0));
+        for (slot, &(ei, is_src, _)) in members.iter().enumerate() {
+            let off = step * (slot as f64 - (k as f64 - 1.0) / 2.0);
+            if is_src {
+                off_src[ei] = off;
+            } else {
+                off_dst[ei] = off;
+            }
+        }
+    }
+    (off_src, off_dst)
 }
 
 /// How a cell of several *simultaneous* stickies (same lane + col) is unpacked so none hide. `col`
@@ -341,16 +492,15 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
     // Two or more elements sharing a (lane, col) cell are *simultaneous* — `col` is the timeline,
     // not a per-lane slot — so we never spread them across fake columns (that would lie about when
     // they happen). Instead each cell unpacks into a sub-grid (`Packing`): `sub_ord[i]` is element
-    // i's slot within its cell (file order), `cell_total` the cell's count.
-    let mut sub_ord: Vec<i64> = Vec::with_capacity(elements.len());
-    let mut cell_total: HashMap<(String, i64), i64> = HashMap::new();
-    for e in &elements {
-        let n = cell_total
-            .entry((e.kind.clone(), e.col.unwrap()))
-            .or_insert(0);
-        sub_ord.push(*n);
-        *n += 1;
-    }
+    // i's slot within its cell, `cell_total` the cell's count. Lever A (F-edge-routing) orders a
+    // crowded cell by its members' edge-neighbour barycenter — see `cell_sub_order`. `idx_of` (the
+    // id→index map) is reused below to resolve edge endpoints, so it is built once here.
+    let idx_of: HashMap<&str, usize> = elements
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.id.as_str(), i))
+        .collect();
+    let (sub_ord, cell_total) = cell_sub_order(&elements, &model.edges, &idx_of, packing);
 
     // Each timeline column is as wide as its busiest cell's sub-columns demand; each lane as tall
     // as its deepest cell's sub-rows. The chosen packing decides how a cell's count splits between
@@ -414,12 +564,6 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
 
     let width = (board_right + 40.0) as i64;
     let height = (lanes_bottom + 60.0) as i64;
-
-    let by_id: HashMap<String, usize> = elements
-        .iter()
-        .enumerate()
-        .map(|(i, e)| (e.id.clone(), i))
-        .collect();
 
     let diff_meta = model.diff_meta.clone();
     let mut p: Vec<String> = Vec::new();
@@ -573,13 +717,28 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
         ));
     }
 
+    // Lever B (F-edge-routing): fan connectors that share a box face apart so they don't collapse
+    // onto one anchor — see `fan_offsets`. `ends[ei]` resolves each edge's endpoints once (reusing
+    // `idx_of`); the edge loop below reuses it to skip edges with an unplaced endpoint.
+    let ends: Vec<Option<(usize, usize)>> = model
+        .edges
+        .iter()
+        .map(
+            |e| match (idx_of.get(e.src.as_str()), idx_of.get(e.dst.as_str())) {
+                (Some(&s), Some(&d)) => Some((s, d)),
+                _ => None,
+            },
+        )
+        .collect();
+    let (off_src, off_dst) = fan_offsets(&ends, &centers);
+
     // Edges (under the stickies). A hotspot connector is a concern, not a flow: dotted, arrow-less.
-    for edge in &model.edges {
-        let (si, di) = match (by_id.get(&edge.src), by_id.get(&edge.dst)) {
-            (Some(&si), Some(&di)) => (si, di),
-            _ => continue,
+    for (ei, edge) in model.edges.iter().enumerate() {
+        let (si, di) = match ends[ei] {
+            Some(p) => p,
+            None => continue,
         };
-        let d = edge_path(centers[si], centers[di]);
+        let d = edge_path(centers[si], centers[di], off_src[ei], off_dst[ei]);
         let is_hot = elements[si].kind == "hotspot" || elements[di].kind == "hotspot";
         let cls = if is_hot { "edge hot" } else { "edge" };
         let attrs = format!(
@@ -1076,6 +1235,184 @@ mod tests {
         assert_eq!(attr_values(&svg, "data-cy"), vec!["494.0".to_string()]);
         // col 0 centre, no stagger: MARGIN_L + COL_W/2 = 150 + 105.
         assert_eq!(attr_values(&svg, "data-cx"), vec!["255.0".to_string()]);
+    }
+
+    // Read the data-cy a given element group carries, so a test can correlate id → centre.
+    fn cy_of(svg: &str, id: &str) -> f64 {
+        let g = format!("<g id=\"{}\"", id);
+        let i = svg.find(&g).expect("element group");
+        let rest = &svg[i..];
+        let key = "data-cy=\"";
+        let j = rest.find(key).unwrap() + key.len();
+        rest[j..][..rest[j..].find('"').unwrap()].parse().unwrap()
+    }
+
+    fn el(id: &str, kind: &str, col: i64) -> Element {
+        Element {
+            id: id.into(),
+            kind: kind.into(),
+            label: "L".into(),
+            col: Some(col),
+            detail: None,
+            resolved: false,
+            diff: None,
+            was: None,
+        }
+    }
+
+    // Lever A (F-edge-routing): a crowded cell stacks its members by the mean lane of their edge
+    // neighbours, not file order — a sticky wired to a lane *above* takes the upper sub-row even
+    // when it appears later in the file. Two events share (event, col 1); `E_lo` links up to an
+    // actor, `E_hi` links down to a read model. File order lists `E_hi` first, so the old file-order
+    // packing put it on top; barycenter ordering must flip them so the connectors don't cross.
+    #[test]
+    fn crowded_cell_orders_members_by_neighbour_barycenter() {
+        let m = Model {
+            title: "t".into(),
+            phases: vec![],
+            elements: vec![
+                el("X1", "actor", 0),
+                el("R1", "readmodel", 2),
+                el("E_hi", "event", 1),
+                el("E_lo", "event", 1),
+            ],
+            edges: vec![
+                Edge {
+                    src: "X1".into(),
+                    dst: "E_lo".into(),
+                    status: None,
+                },
+                Edge {
+                    src: "E_hi".into(),
+                    dst: "R1".into(),
+                    status: None,
+                },
+            ],
+            diff_meta: None,
+        };
+        let svg = render_svg_packed(&m, Packing::Rows);
+        assert!(
+            cy_of(&svg, "E_lo") < cy_of(&svg, "E_hi"),
+            "E_lo (up-neighbour) must take the upper sub-row"
+        );
+    }
+
+    // An edge-free crowded cell has no barycenter signal, so it must keep file order untouched —
+    // this is what guarantees the packing tests above stay green. Five events, no edges: their
+    // centres must descend in file order E0..E4 (Rows packing stacks top→bottom).
+    #[test]
+    fn edge_free_cell_keeps_file_order() {
+        let svg = render_svg_packed(&events_at_col(2, 5), Packing::Rows);
+        let cys: Vec<f64> = (0..5).map(|k| cy_of(&svg, &format!("E{k}"))).collect();
+        assert!(
+            cys.windows(2).all(|w| w[0] < w[1]),
+            "edge-free cell reordered: {cys:?}"
+        );
+    }
+
+    // Lever B (F-edge-routing): the fan-out offset must be a pure addition — offset 0 reproduces
+    // the classic centre-to-centre path byte-for-byte (no regression on the lone-edge common case),
+    // and a non-zero offset slides only the anchor along its facing edge (Y for a horizontal facing),
+    // never the opposite axis. p1→p2 is horizontal facing (dx = 400 ≥ STICKY_W).
+    #[test]
+    fn edge_path_offset_zero_is_classic_and_offset_slides_the_anchor() {
+        let p1 = (100.0, 200.0);
+        let p2 = (500.0, 260.0);
+        assert_eq!(
+            edge_path(p1, p2, 0.0, 0.0),
+            "M188.0,200.0 C300.0,200.0 300.0,260.0 412.0,260.0"
+        );
+        // +12 at the source slides that anchor (and its control point) down 12px in Y only.
+        assert_eq!(
+            edge_path(p1, p2, 12.0, 0.0),
+            "M188.0,212.0 C300.0,212.0 300.0,260.0 412.0,260.0"
+        );
+    }
+
+    // Two flow edges leaving the same actor on its right face must fan to distinct anchor Ys, so the
+    // bundle reads as two lines, not one. `X1` issues `C1` (above) and `C2` (below); the connectors
+    // share the actor's right face and must not start at the same point.
+    #[test]
+    fn sibling_edges_fan_apart_at_a_shared_face() {
+        let m = Model {
+            title: "t".into(),
+            phases: vec![],
+            elements: vec![
+                el("X1", "actor", 0),
+                el("C1", "command", 1),
+                el("C2", "command", 1),
+            ],
+            edges: vec![
+                Edge {
+                    src: "X1".into(),
+                    dst: "C1".into(),
+                    status: None,
+                },
+                Edge {
+                    src: "X1".into(),
+                    dst: "C2".into(),
+                    status: None,
+                },
+            ],
+            diff_meta: None,
+        };
+        let svg = render_svg_packed(&m, Packing::Rows);
+        // Each edge path's start anchor Y (the M y-coord). They must differ by the fan spread.
+        let starts: Vec<f64> = svg
+            .match_indices("<path class=\"edge\"")
+            .map(|(i, _)| {
+                let m0 = svg[i..].find('M').unwrap() + i + 1;
+                let seg = &svg[m0..];
+                let comma = seg.find(',').unwrap();
+                let end = seg.find(' ').unwrap();
+                seg[comma + 1..end].parse().unwrap()
+            })
+            .collect();
+        assert_eq!(starts.len(), 2, "expected two flow edges");
+        assert!(
+            (starts[0] - starts[1]).abs() > 1.0,
+            "sibling edges share an anchor Y: {starts:?}"
+        );
+    }
+
+    // Lever B clamp (F-edge-routing): one actor wired to 9 commands on its right → 9 connectors
+    // share the actor's right face. Unclamped, the extreme fan offset (FAN_SPREAD·(9-1)/2 = 48)
+    // exceeds the face half-extent (STICKY_H/2 = 37) and would start a connector off the box; the
+    // clamp must tighten the step so every anchor stays on the actor.
+    #[test]
+    fn fan_clamp_keeps_anchors_on_the_box_for_a_high_degree_face() {
+        let mut elements = vec![el("X1", "actor", 0)];
+        let mut edges = vec![];
+        for k in 0..9 {
+            elements.push(el(&format!("C{k}"), "command", 1));
+            edges.push(Edge {
+                src: "X1".into(),
+                dst: format!("C{k}"),
+                status: None,
+            });
+        }
+        let m = Model {
+            title: "t".into(),
+            phases: vec![],
+            elements,
+            edges,
+            diff_meta: None,
+        };
+        let svg = render_svg_packed(&m, Packing::Rows);
+        let cy = cy_of(&svg, "X1");
+        let mut count = 0;
+        for (i, _) in svg.match_indices("data-src=\"X1\"") {
+            let after = &svg[i + svg[i..].find('M').unwrap() + 1..];
+            let comma = after.find(',').unwrap();
+            let end = after.find(' ').unwrap();
+            let y: f64 = after[comma + 1..end].parse().unwrap();
+            assert!(
+                (y - cy).abs() <= STICKY_H / 2.0 + 0.05,
+                "anchor slid off the box: y={y}, cy={cy}"
+            );
+            count += 1;
+        }
+        assert_eq!(count, 9, "expected 9 fanned connectors");
     }
 
     #[test]

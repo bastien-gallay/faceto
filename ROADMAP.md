@@ -14,7 +14,7 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | --- | --- | --- | --- | --- |
 | F-inline-edit | UI · direct edit | ✅ | **Now** | Rename / move / remove elements directly on the board; the comment box becomes optional, not the only path. Wires client gestures to the existing `ElementRenamed/Moved/Removed` events + server-side minting — high impact, low effort. Shipped PR #4. |
 | F-inline-add | UI · direct edit | ✅ | **Now** | Direct on-board element creation (the `add` substrate already exists end-to-end via the modal). Hover-element `+` and an empty-board affordance replace the modal dropdown's `add` option. Lane-only, client-only. Shipped PR #5. |
-| F-edge-routing | UI · legibility | ☐ | **Next** | Reduce edge crossings via a layout heuristic in `render.rs`. Self-contained, no model-spine change. Lower ceiling than grouping but cheap and immediate. |
+| F-edge-routing | UI · legibility | 🚧 | **Now** | Reduce edge crossings via a layout heuristic in `render.rs`. Self-contained, no model-spine change. Lower ceiling than grouping but cheap and immediate. |
 | F-container | model · grouping | ☐ | Later | Add the missing bounded-context / container primitive as a readability device. The single brick that also unlocks F-model-smells and F-ddd-process. Build when grouping-legibility or linting becomes the felt pain. |
 | F-mcp-narrative | AI · participant | ☐ | Later | MCP server (stdio JSON-RPC, std-only) + a reverse-narrative / discovery skill so an LLM reads the log and proposes events. On product-thesis; the real answer to "solo & stuck". Revisit when momentum, not legibility, ends sessions. |
 | F-multiplayer | collab · network | ☐ | Parked | Multi-collaborator over network + event reconciliation + user naming. Heaviest std-only lift; fixes *crowded*, not *solo* — out of slice until a real multi-user need appears. |
@@ -79,6 +79,62 @@ tie-break problem entirely; prepend uses a strict lane-minimum − 1, which sort
 
 **Out of scope / parked:** F-container (domains) and the F-board-gestures future set (hover
 tool-buttons, click-centre rename, drag-to-move).
+
+## Working note — F-edge-routing (2026-06-27, branch `feat/F-edge-routing`)
+
+**The locked-node constraint (the whole shape of this slice).** Node positions are *not*
+free here: `col` is the global timeline (x) and `type` is the lane (y) — both are domain
+invariants we must not break. So the textbook crossing-reducer (permute node positions) is
+off the table. The only genuinely free levers inside `render.rs` are **(a) the order of
+*simultaneous* stickies within a single `(lane, col)` cell** (`sub_ord`, today just file
+order) and **(b) how edges anchor and route between fixed centres** (`edge_path`). This slice
+spends both, and touches nothing in the event/model spine.
+
+**Lever A — barycenter within-cell ordering.** For each crowded cell, sort its members by the
+mean position of their edge neighbours, then assign `sub_ord` from that order (stable, file-order
+tiebreak). Because a neighbour's *lane* is fixed, its vertical band is essentially fixed, so the
+barycenter is computable in a **single deterministic pass** — no Sugiyama iteration, no clocks,
+no randomness. Rows packing sorts sub-rows by neighbour **lane index**; Columns packing sorts
+sub-columns by neighbour **col**. A lone sticky in a cell is unaffected (its classic mid-lane spot
+holds). This is the part that removes *topological* crossings.
+
+**Lever B — fan-out anchoring.** When several edges meet a box on the same side, they all anchor
+at the box centre today and read as one fat bundle (e.g. `X1`→`C1` and `X1`→`C2` in the sample).
+Generalise `edge_path` to take a small per-edge anchor offset so siblings spread along the facing
+side. This is legibility polish (reduces visual *overlap*, not crossings), kept **subtle** per the
+calm-instrument register in DESIGN.md — a few px of spread, never a starburst.
+
+**Hard sync constraint (R).** `src/template.html` carries a JS port of `edge_path` (`edgePath`,
+~line 211) used for the in-page move-nudge. Any change to the `edge_path` *signature/geometry* must
+be mirrored there or the client nudge diverges from the authoritative server render. (In log mode
+the server re-render lands moments later and corrects it; in legacy `model.json` mode the nudge is
+the only feedback, so the ports must match.) Lever A changes only `sub_ord`/centres, which the
+client already reads from the DOM — no JS change. Lever B changes `edge_path`'s signature — **must**
+update `edgePath` too.
+
+**Out of scope (deliberately).** Obstacle-avoidance routing (bowing a cross-lane edge around an
+intervening sticky) is *not* in this slice: it needs every box's geometry on both server and client,
+risks a busy non-calm look, and has a poor effort/payoff ratio. Park it; reopen only if dogfood
+shows cross-lane edges genuinely getting lost under boxes.
+
+**Known regression (accepted, not fixed).** Dogfooding this branch surfaced that the header
+Rows / Columns / Grid packing buttons no longer switch the board. Cause unconfirmed — the server
+renders each packing correctly (`packing_chooses_its_growth_axis` is green) and the client re-render
+path rebuilds its position maps (`renderPack → bindStickies → readLayout`), so code inspection
+didn't pin it on this slice. Left unfixed on purpose: packing is likely to be replaced soon by a
+thin-positioning model, so investing in the three-mode control now would be wasted. Revisit only if
+packing survives that change.
+
+**Tests to done** (red first, then green):
+
+- UT (Lever A): a two-member cell whose neighbours sit in opposite lane-bands orders so the
+  upper-neighbour member takes the upper sub-row; a lone sticky keeps its mid-lane centre
+  (re-pin / preserve `a_lone_sticky_stays_on_the_lane_mid_line`).
+- UT (Lever A): ordering is deterministic and stable — equal barycenters fall back to file order.
+- UT (Lever B): `edge_path` with offset 0 is byte-identical to today's path (no-regression on the
+  common single-edge case); a non-zero offset shifts the anchor along the facing side only.
+- Non-regression: absolute-y render tests on sparse models re-pinned; `diff` styling, hotspot
+  dotted connector, and the JS `edgePath` port stay in lockstep (manual board check).
 
 ## Why this slice
 
