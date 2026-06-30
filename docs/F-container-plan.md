@@ -2,7 +2,8 @@
 
 # F-container — build plan
 
-Status: **model brick merged (S1–S3); render landed (S4, branch `feat/F-container-render`); resume at Stage 5 (serve mint + append)** · Companion:
+Status: **model brick merged (S1–S3); render (S4) + serve mint/append (S5) landed on branch
+`feat/F-container-render`; resume at Stage 6 (client gestures)** · Companion:
 [`F-container-scope.md`](./F-container-scope.md)
 
 Build order is **model-first**: the pure brick (replay + diff) is testable with zero UI, and the
@@ -106,7 +107,7 @@ removed regions render inside a `<g opacity="0.45">` ghost. `is_pivotal` lost it
 (now consumed); **`region_of` keeps its `#[allow(dead_code)]`** — render derives membership from
 geometry directly, so `region_of`'s first real caller is Stage 5/6 (serve/client), not render.
 
-## Stage 5 — Mint + append (`serve.rs`) · behavioural
+## Stage 5 — Mint + append (`serve.rs`) · behavioural · ✅ done (branch `feat/F-container-render`)
 
 - Region id **mint namespace** `K<N>`, computed under the `appends` lock like `mint_id` — scan
   `PhaseAdded` history for the next free suffix (removed-but-not-compacted ids stay reserved).
@@ -118,6 +119,15 @@ geometry directly, so `region_of`'s first real caller is Stage 5/6 (serve/client
   (col change). Pivotal needs no route — both fall out of geometry on the next render (D2/D3).
 - Tests: region mint picks next free `K` suffix; concurrent region adds never collide;
   `comment_to_events` maps each region command.
+
+**As built (S5):** added a sibling `mint_region_id` (review #3) rather than generalising `mint_id` —
+it folds the log's `PhaseAdded` history through `model::resolve_region_id`, the exact function
+`replay` uses to synthesize legacy ids, so a fresh mint shares that namespace by construction (a
+region id can never collide with one replay would later synthesize for the same log). `append_region_add`
+mirrors `append_add`: mint + write under the `appends` lock. `region-add` is special-cased in the
+`POST /comment` dispatch (like element `add`) since it needs the server-minted id; `region-resize`/
+`region-rename`/`region-remove` go through `comment_to_events`, keyed by a `regionId` field (a region
+is not an element, so it doesn't share `elemId`). 6 new tests; 86 total, gate clean.
 
 ## Stage 6 — Client gestures (`template.html`) · behavioural · ⚠️ DESIGN.md register
 

@@ -120,6 +120,30 @@ impl Ctx {
         Self::write_line(&self.model_path, &events::line(&ev)).map_err(|e| e.to_string())?;
         Ok(ev)
     }
+
+    /// Mint a fresh region id and append a `PhaseAdded` — the region-mint half of Stage 5,
+    /// mirroring `append_add`'s H6 answer for elements. Minted and written under `appends`, so
+    /// two concurrent region adds can never collide. Returns the minted event so the handler can
+    /// log it.
+    fn append_region_add(
+        &self,
+        label: String,
+        from_col: i64,
+        to_col: i64,
+    ) -> Result<events::Event, String> {
+        let _guard = self.appends.lock().unwrap();
+        let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&raw);
+        let log = events::parse_log(&text)?;
+        let ev = events::Event::PhaseAdded {
+            id: Some(mint_region_id(&log)),
+            label,
+            from_col,
+            to_col,
+        };
+        Self::write_line(&self.model_path, &events::line(&ev)).map_err(|e| e.to_string())?;
+        Ok(ev)
+    }
 }
 
 /// The single letter each lane stamps onto a freshly minted id. The 8-lane prefixes come from
@@ -150,6 +174,22 @@ fn mint_id(kind: &str, log: &[events::Event]) -> String {
     // saturating_add: a hand-edited log with a suffix at u32::MAX must not panic (debug) or
     // wrap to 0 (release) and re-mint a colliding low id.
     format!("{}{}", prefix, max.saturating_add(1))
+}
+
+/// Next free region id: `K<n>` one past the highest `K` suffix **ever seen** in the log —
+/// explicit ids on `PhaseAdded`, *and* the synthetic ids `replay` mints for legacy id-less bands
+/// (carry-over review #3, `F-container-scope.md`). Folding through `model::resolve_region_id` for
+/// every `PhaseAdded` is exactly what `replay` does to compute its own `max_region`, so this mint
+/// shares that namespace by construction — a region id can never collide with one replay would
+/// have synthesized, and a removed-but-not-compacted suffix stays reserved (same rule as `mint_id`).
+fn mint_region_id(log: &[events::Event]) -> String {
+    let mut max_region = 0u32;
+    for ev in log {
+        if let events::Event::PhaseAdded { id, .. } = ev {
+            model::resolve_region_id(id.as_deref(), &mut max_region);
+        }
+    }
+    format!("K{}", max_region.saturating_add(1))
 }
 
 pub fn serve(model_path: &Path, port: u16, packing: render::Packing) -> Result<(), String> {
@@ -334,6 +374,17 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                             }
                         }
                     }
+                    Ok(v @ json::Json::Obj(_)) if v.get_str("kind") == Some("region-add") => {
+                        match add_region_from_comment(&ctx, &v) {
+                            Ok(ev) => {
+                                println!("  \u{2795} event: {}", events::line(&ev));
+                                send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
+                            }
+                            Err(code) => {
+                                send(&mut out, code, "application/json", b"{\"ok\":false}", &[])
+                            }
+                        }
+                    }
                     Ok(v @ json::Json::Obj(_)) => {
                         let evs = events::comment_to_events(&v);
                         if evs.is_empty() {
@@ -451,6 +502,18 @@ fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
         .filter(|s| !s.is_empty())
         .map(String::from);
     ctx.append_add(&kind, label, col, detail, prepend)
+        .map_err(|_| 500u16)
+}
+
+/// Handle a `kind:"region-add"` post: a region-creation command, the region counterpart of
+/// `add_from_comment`. A non-empty `text` (label) and a `[fromCol, toCol]` span are required; the
+/// server mints the id (review #3 / H6 for regions). Returns the HTTP status to fail with: `400`
+/// for a missing label or span, `500` if the append itself fails.
+fn add_region_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
+    let label = v.get_str("text").and_then(events::nonblank).ok_or(400u16)?;
+    let from_col = v.get_i64("fromCol").ok_or(400u16)?;
+    let to_col = v.get_i64("toCol").ok_or(400u16)?;
+    ctx.append_region_add(label, from_col, to_col)
         .map_err(|_| 500u16)
 }
 
@@ -656,6 +719,117 @@ mod tests {
             events::Event::ElementRemoved { id: "E2".into() },
         ];
         assert_eq!(mint_id("event", &log), "E3");
+    }
+
+    fn region_added(id: &str, from_col: i64, to_col: i64) -> events::Event {
+        events::Event::PhaseAdded {
+            id: Some(id.into()),
+            label: id.into(),
+            from_col,
+            to_col,
+        }
+    }
+
+    #[test]
+    fn mint_region_id_picks_next_free_k_suffix() {
+        let log = [region_added("K1", 0, 2), region_added("K3", 3, 5)];
+        assert_eq!(mint_region_id(&log), "K4"); // past the highest K, not filling the K2 gap
+        assert_eq!(mint_region_id(&[]), "K1"); // empty log starts at 1
+    }
+
+    #[test]
+    fn mint_region_id_does_not_reuse_a_removed_id() {
+        let log = [
+            region_added("K1", 0, 2),
+            region_added("K2", 3, 5),
+            events::Event::PhaseRemoved { id: "K2".into() },
+        ];
+        assert_eq!(mint_region_id(&log), "K3");
+    }
+
+    #[test]
+    fn mint_region_id_shares_the_namespace_with_replays_synthetic_ids() {
+        // Review #3: a legacy id-less PhaseAdded replays to a synthetic K<n> (resolve_region_id).
+        // The mint must reserve that suffix too, or a fresh region could collide with one replay
+        // would later synthesize for the same log.
+        let log = [events::Event::PhaseAdded {
+            id: None,
+            label: "Legacy".into(),
+            from_col: 0,
+            to_col: 2,
+        }];
+        assert_eq!(mint_region_id(&log), "K2"); // K1 is reserved for the legacy band
+        let model = events::replay(&log);
+        assert_eq!(model.phases[0].id, "K1");
+    }
+
+    #[test]
+    fn append_region_add_mints_persists_and_replays() {
+        let path =
+            std::env::temp_dir().join(format!("faceto-region-h6-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, events::line(&region_added("K1", 0, 2)) + "\n").unwrap();
+        let ctx = Ctx {
+            model_path: path.clone(),
+            comments_path: path.clone(),
+            log_mode: true,
+            packing: render::Packing::default(),
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        };
+
+        let ev = ctx.append_region_add("Checkout".into(), 3, 6).unwrap();
+        assert!(matches!(&ev, events::Event::PhaseAdded { id: Some(id), .. } if id == "K2"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        let model = events::replay(&events::parse_log(&text).unwrap());
+        let k2 = model.phases.iter().find(|p| p.id == "K2").unwrap();
+        assert_eq!(k2.label, "Checkout");
+        assert_eq!((k2.from_col, k2.to_col), (3, 6));
+    }
+
+    #[test]
+    fn region_resize_rename_remove_map_to_phase_events() {
+        let resize =
+            json::parse(r#"{"kind":"region-resize","regionId":"K1","fromCol":0,"toCol":5}"#)
+                .unwrap();
+        let evs = events::comment_to_events(&resize);
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(
+            &evs[0],
+            events::Event::PhaseResized { id, from_col: 0, to_col: 5 } if id == "K1"
+        ));
+
+        let rename =
+            json::parse(r#"{"kind":"region-rename","regionId":"K1","text":"Fulfillment"}"#)
+                .unwrap();
+        let evs = events::comment_to_events(&rename);
+        assert_eq!(evs.len(), 1);
+        assert!(
+            matches!(&evs[0], events::Event::PhaseRenamed { id, label } if id == "K1" && label == "Fulfillment")
+        );
+
+        let remove = json::parse(r#"{"kind":"region-remove","regionId":"K1"}"#).unwrap();
+        let evs = events::comment_to_events(&remove);
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], events::Event::PhaseRemoved { id } if id == "K1"));
+    }
+
+    #[test]
+    fn region_edits_with_missing_data_are_rejected() {
+        let no_span = json::parse(r#"{"kind":"region-resize","regionId":"K1"}"#).unwrap();
+        assert!(events::comment_to_events(&no_span).is_empty());
+
+        let blank_rename =
+            json::parse(r#"{"kind":"region-rename","regionId":"K1","text":"   "}"#).unwrap();
+        assert!(events::comment_to_events(&blank_rename).is_empty());
+
+        let no_region = json::parse(r#"{"kind":"region-remove"}"#).unwrap();
+        assert!(events::comment_to_events(&no_region).is_empty());
     }
 
     #[test]
