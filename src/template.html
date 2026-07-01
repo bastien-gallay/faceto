@@ -52,15 +52,16 @@
   /* Inline add: a ghost ink-blue + that fades in when you hover a sticky (its right edge) or a lane
      title (prepend). DESIGN: the accent marks where you act; calmest form — a bare glyph, no chrome
      at rest. Click opens the same inline editor as rename to type the new label. */
-  /* Hover glyphs — bare ghost affordances that fade in on a sticky's edge (the + add, the × remove).
-     Individually anchored, never a button row (DESIGN §6: no floating toolbar); each is one glyph in
-     the live-pen accent, no chrome at rest. */
-  #add-plus, #remove-x { position: fixed; display: none; z-index: 19; width: 22px; height: 22px;
+  /* Hover glyphs — bare ghost affordances that fade in at a sticky's edges (+ add, × remove, and a
+     speech-bubble comment). Individually anchored at different edges, never a button row (DESIGN §6:
+     no floating toolbar); each is one glyph in the live-pen accent, no chrome at rest. */
+  #add-plus, #remove-x, #comment-c { position: fixed; display: none; z-index: 19; width: 22px; height: 22px;
               padding: 0; border: none; background: none; cursor: pointer; color: #1A6FAE;
               font: 600 20px -apple-system, Segoe UI, Roboto, sans-serif; line-height: 22px;
               text-align: center; opacity: 0; transition: opacity .15s ease-out; }
-  #add-plus.show, #remove-x.show { display: block; opacity: 1; }
-  #add-plus:focus-visible, #remove-x:focus-visible { outline: 2px solid #1A6FAE; outline-offset: 1px; border-radius: 3px; opacity: 1; display: block; }
+  #add-plus.show, #remove-x.show, #comment-c.show { display: block; opacity: 1; }
+  #comment-c svg { width: 16px; height: 16px; vertical-align: middle; fill: currentColor; }
+  #add-plus:focus-visible, #remove-x:focus-visible, #comment-c:focus-visible { outline: 2px solid #1A6FAE; outline-offset: 1px; border-radius: 3px; opacity: 1; display: block; }
   /* Region gestures (F-container Stage 6): the label tab is a focusable rename target — same
      focus-visible ring as a sticky, so keyboard and mouse discoverability stay in parity. The
      rail (an invisible per-column hit-strip, region.rs) only shows a cursor; its "+" reuses
@@ -74,7 +75,7 @@
      a label). No transition — a drag must track the cursor instantly. */
   #region-drag-guide { position: fixed; display: none; z-index: 18; width: 2px; background: #1A6FAE;
                         opacity: .8; pointer-events: none; }
-  @media (prefers-reduced-motion: reduce) { .edge, .sticky, #add-plus, #remove-x { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .edge, .sticky, #add-plus, #remove-x, #comment-c { transition: none; } }
   /* Narrow widths: let the header wrap instead of clipping. Without this the packing control
      (Rows / Columns / Grid) and the Reload button slide off-screen and become unreachable. */
   @media (max-width: 680px) {
@@ -119,10 +120,11 @@
   <button id="export">Export comments</button>
   <button id="refresh" title="re-pull comments and show what changed in the board since you last looked">Reload</button>
 </header>
-<div id="board" role="group" aria-label="event-storming board — each sticky is a button: double-click or F2 to rename, Delete to remove, arrow keys to move, Enter to comment">__SVG__</div>
+<div id="board" role="group" aria-label="event-storming board — each sticky is a button: single-click to focus, double-click or F2 to rename, drag or arrow keys to move, c or Enter to comment, Delete to remove">__SVG__</div>
 <input id="rename-edit" aria-label="rename this element" autocomplete="off" spellcheck="false">
 <button id="add-plus" class="hovglyph" type="button" aria-label="add an element here" title="add an element">+</button>
 <button id="remove-x" class="hovglyph" type="button" aria-label="remove this element" title="remove this element">×</button>
+<button id="comment-c" class="hovglyph" type="button" aria-label="comment on this element (or press c)" title="comment (c)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5c-3.9 0-7 2.24-7 5 0 1.58 1.02 2.99 2.6 3.9-.14.86-.57 1.8-1.3 2.55 1.35-.14 2.55-.66 3.46-1.38.7.18 1.46.28 2.24.28 3.9 0 7-2.24 7-5.35C15 3.74 11.9 1.5 8 1.5z"/></svg></button>
 <div id="region-drag-guide" aria-hidden="true"></div>
 
 <dialog id="modal">
@@ -358,10 +360,9 @@ function doMove(id, dir) {
 // move never changes it. Pointer Events + setPointerCapture (like the region-resize drag): once
 // captured, every event including pointerup lands on the box even if the button releases off-window,
 // so the drag can't leak (the fix the PR #11 review pinned for region resize). A press that never
-// crosses DRAG_THRESHOLD is a plain click — it just focuses (see suppressClick below).
+// crosses DRAG_THRESHOLD is a plain click, which just focuses the box (single-click is benign).
 const DRAG_THRESHOLD = 4;   // px of travel before a press becomes a drag rather than a click
 let stickyDrag = null;      // { id, startX, fromCol, col, moved } while dragging, else null
-let suppressClick = false;  // a completed drag must not also fire the box's click action
 // The column index whose centre is nearest an SVG-space x, searching the occupied span plus one
 // past each end (colCenter interpolates the empty ones at the default pitch) — snap-to-grid.
 function nearestCol(svgX) {
@@ -407,7 +408,6 @@ function endStickyDrag(e) {
   if (!d) return;
   colOf[d.id] = d.fromCol;   // undo the preview so moveTo re-derives the true origin (and swaps)
   if (d.moved && d.col !== d.fromCol) {
-    suppressClick = true;    // the pointerup will fire a click; a real drag must not also act on it
     moveTo(d.id, d.col);     // sets colOf=target + applyLayout (with swap) + posts — no snap-back
   } else {
     applyLayout();           // sub-threshold / no-op: snap the box back to where it started
@@ -485,6 +485,9 @@ function graceGlyph(btn, act) {
   return btn;
 }
 const removeXBtn = graceGlyph($("#remove-x"), doRemove);
+// Comment moved off the single click (which now just focuses) onto the c key + this glyph — so the
+// modal is prose-only. Both open it via openModal (hoisted below).
+const commentBtn = graceGlyph($("#comment-c"), (id) => openModal(document.getElementById(id)));
 
 // ---- inline add (the + affordance) ----------------------------------------
 // A ghost ink-blue + fades in on sticky hover (its right edge → add-after, same lane, col+1) and on
@@ -759,27 +762,22 @@ function bindStickies() {
   buildGraph();
   readLayout();
   document.querySelectorAll(".sticky").forEach((g) => {
-    // Single click → comment (the signature sidecar); double click → rename in place. A short
-    // timer disambiguates the two so a double click never flashes the modal first; the keyboard
-    // comment path (focus + Enter) stays instant.
-    let clickT = null;
-    g.onclick = () => {
-      if (suppressClick) { suppressClick = false; return; }   // this click ended a drag — ignore it
-      if (clickT) return;
-      clickT = setTimeout(() => { clickT = null; openModal(g); }, 200);
-    };
-    g.ondblclick = () => { clearTimeout(clickT); clickT = null; startRename(g); };
-    g.onpointerdown = startStickyDrag;   // grab to drag along the lane (moves it left/right)
+    // Single click just focuses / spotlights (select-then-edit — the calm gesture); double-click or
+    // F2 renames in place. Comment moved off the click onto the c key + the comment glyph, so the
+    // box's click is benign — no modal, no disambiguation timer. Grab-drag along the lane moves it.
+    g.ondblclick = () => startRename(g);
+    g.onpointerdown = startStickyDrag;
     g.onmouseenter = () => {
       hoverId = g.id; hoverOn(g.id);
       const r = g.getBoundingClientRect();
       showPlus(r.right + 4, r.top + r.height / 2 - 11,
         { type: g.dataset.kind, col: +g.dataset.col + 1, sx: r.right + 12, sy: r.top });
-      removeXBtn.at(r.right - 3, r.top - 9, g.id);   // × at the top-right corner
+      removeXBtn.at(r.right - 3, r.top - 9, g.id);                    // × at the top-right corner
+      commentBtn.at(r.left - 24, r.top + r.height / 2 - 11, g.id);    // comment at the left edge
     };
     g.onmouseleave = () => {
       if (hoverId === g.id) hoverId = null;
-      hoverOff(); hidePlusSoon(); removeXBtn.hideSoon();
+      hoverOff(); hidePlusSoon(); removeXBtn.hideSoon(); commentBtn.hideSoon();
     };
     // Keyboard parity with the mouse: focusing a sticky makes it the ← / → move target (same as
     // hover) and spotlights its connectors; Enter / Space opens its comment dialog.
@@ -850,8 +848,8 @@ $("#m-left").addEventListener("click", () => { const id = window._activeId; $("#
 $("#m-right").addEventListener("click", () => { const id = window._activeId; $("#modal").close("move"); doMove(id, "right"); });
 
 // Hover or focus a sticky and act on it from the keyboard — the keyboard-fast path, parity with
-// the mouse: ← / → nudge a column, F2 renames in place, Delete / Backspace removes. Skipped while
-// the modal or an inline rename owns the keyboard, or while typing in a field.
+// the mouse: ← / → nudge a column, F2 renames in place, c opens its comment, Delete / Backspace
+// removes. Skipped while the modal or an inline rename owns the keyboard, or while typing in a field.
 // One inline editor, two modes: `adding` posts kind:"add", otherwise it commits a rename.
 $("#rename-edit").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); adding ? endAdd(true) : endRename(true); }
@@ -871,6 +869,9 @@ document.addEventListener("keydown", (e) => {
   } else if (e.key === "F2") {
     e.preventDefault();
     startRename(document.getElementById(hoverId));
+  } else if (e.key === "c" || e.key === "C") {
+    e.preventDefault();
+    openModal(document.getElementById(hoverId));
   } else if (e.key === "Delete" || e.key === "Backspace") {
     e.preventDefault();
     doRemove(hoverId);
