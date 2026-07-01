@@ -2,8 +2,8 @@
 
 # F-container — build plan
 
-Status: **model brick merged (S1–S3); render (S4) + serve mint/append (S5) landed on branch
-`feat/F-container-render`; resume at Stage 6 (client gestures)** · Companion:
+Status: **all seven stages done — F-container ships on branch `feat/F-container-client-gestures`
+(PR #11), flipping the feature to ✅ in `ROADMAP.md`** · Companion:
 [`F-container-scope.md`](./F-container-scope.md)
 
 Build order is **model-first**: the pure brick (replay + diff) is testable with zero UI, and the
@@ -129,7 +129,7 @@ mirrors `append_add`: mint + write under the `appends` lock. `region-add` is spe
 `region-rename`/`region-remove` go through `comment_to_events`, keyed by a `regionId` field (a region
 is not an element, so it doesn't share `elemId`). 6 new tests; 86 total, gate clean.
 
-## Stage 6 — Client gestures (`template.html`) · behavioural · ⚠️ DESIGN.md register
+## Stage 6 — Client gestures (`template.html`) · behavioural · ✅ done (branch `feat/F-container-client-gestures`)
 
 Layered on the F-inline-edit / F-inline-add drag substrate:
 
@@ -141,11 +141,78 @@ Layered on the F-inline-edit / F-inline-add drag substrate:
   re-render (derived — no extra post).
 - Offline `localStorage` fallback parity with existing structural ops (local-only, not resynced).
 
-## Stage 7 — Example + roadmap · housekeeping
+**As built (S6):** `render.rs` grew three pieces of markup to give the client something to hang
+gestures on, since Stage 4 drew regions decoratively only: (1) a **region rail** — one invisible
+per-column hit-rect, painted *before* the regions so a live region's own rect/edges/tab paint over
+it and stay clickable, and it only "shows through" (hoverable) in the gaps between/around regions —
+exactly the create-region affordance, with no client-side membership math; (2) each region wrapped
+in a `<g class="region" data-region data-from-col data-to-col>`, so a resize drag can read the
+*fixed* other edge straight off the DOM instead of inverting screen pixels back to a column; (3)
+the label tab wrapped in a focusable `<g class="region-tab" role="button" tabindex="0"
+data-label>` (mirrors the sticky pattern) as one rename hit-target.
+
+`template.html`: `region-add`/`region-rename` reuse the *existing* `adding`/`renaming` state objects
+and the same floating `#rename-edit` input as element add/rename (tagged `region: true`/keyed by
+`regionId`) rather than duplicating the editor — one inline-edit substrate for both element and
+region text entry. Resize is a real mouse drag: `mousedown` on a `region-edge` starts it, a thin
+`#region-drag-guide` line follows the cursor snapped to the *exact* rail-cell boundary the server
+itself renders (`readRegionRail` reads `x`/`width` straight off the `.region-rail` DOM — no
+pixel-to-column guessing), and the drag clamps so the moving edge can never cross the fixed other
+edge (client-side `events::valid_span` parity — never even offers an invalid target). `STRUCTURAL_KINDS`
+and a new `NOT_APPLIED_OFFLINE` set give the four region kinds the same offline-fallback treatment as
+`add`/`drop` (stashed locally, not applied to the board, `Export` to keep). 89 tests green (2 new
+render tests: region-group/tab/edge markup, and the region-rail covering every visible column even
+with zero regions); the drag/hover/rename/create gestures themselves have no Rust test surface and
+were verified by hand — `faceto serve` against a copy of `examples/event-log.jsonl`, driving
+rename (K1 → "Kickoff"), create (`region-add` at the rail, minted `K3`), and resize (`region-resize`
+K2 via a simulated drag) end to end through the real HTTP server, each producing the correct
+`PhaseRenamed`/`PhaseAdded`/`PhaseResized` log line and re-rendering the diff overlay correctly.
+No client-side gesture exists yet for `region-remove` (not required by this stage's bullet list;
+the server route has existed since Stage 5).
+
+**Medium-effort review on PR #11 found and fixed 8 issues:** neither `render.rs` nor the client
+guarded against a region's *authored* bounds extending past the element-derived column range the
+rail covers — `data-from-col`/`data-to-col` carried the raw unclamped `Phase` value, so dragging
+such a region's edge could silently discard its true off-screen extent (`railLeft`/`railRight`
+lookups miss for a column with no rail cell). Fixed by emitting the same *clamped* bound the
+visual box already uses (WYSIWYG: what's draggable is exactly what's drawn) — a small, narrowly-
+scoped fix over widening the whole board's column range. Also fixed: a region-resize drag had no
+pointer capture, so releasing the mouse outside the browser window never fired the `mouseup` that
+cleans it up, permanently leaking the drag state and a stuck guide line — switched to Pointer
+Events + `setPointerCapture` (every subsequent event for the gesture, including its end, is now
+delivered to the captured element regardless of cursor position). Neither direction of
+resize-drag ↔ rename/add had a reentrancy guard (every other gesture-start function already
+checked `renaming || adding`) — added `regionDrag` to those guards and `renaming || adding` to
+`startRegionResize`. Cleanup: `startRegionRename` (a near-verbatim copy of `startRename`) folded
+into one function taking an optional `region` flag; `NOT_APPLIED_OFFLINE` now derives from
+`STRUCTURAL_KINDS` instead of a hand-copied duplicate; the unused `data-col` on `.region-edge`
+(never read client-side) removed; `regionBounds` now excludes removed/ghosted regions
+(`.region:not(.removed)`); the region-add editor's box size now reads `regionTabH`/
+`regionTabCharW`/`regionTabPad` from `__CONFIG__` (new `REGION_TAB_*` constants in render.rs)
+instead of hardcoding `140`/`22`. 89 tests green (1 updated to pin the new clamped-bound contract);
+all fixes re-verified by hand against a live server, including the pointer-capture drag completing
+correctly and the reentrancy guards blocking a resize-during-rename attempt.
+
+## Stage 7 — Example + roadmap · housekeeping · ✅ done (branch `feat/F-container-client-gestures`)
 
 - Add a region (and a pivotal boundary event) to `examples/sample.model.json`; verify `genesis →
   render → serve` carries it end to end.
 - Flip `F-container` status to ✅ in `ROADMAP.md` **inside this PR** (not a follow-up docs PR).
+
+**As built (S7):** `examples/sample.model.json` already carried both a region *and* a pivotal
+boundary event from before F-container existed — `begin`[0,1]/`work`[2,4], with `E1` (DayStarted)
+sitting on `begin`'s `to_col` and `E2` (ItemAdded) on `work`'s `from_col` — so this stage added no
+contrived third region purely to tick the checklist; genesis→render→serve already carried it (the
+board's own screenshots throughout Stages 4–6 are proof). What the two phases lacked was an
+explicit `id` — every element in the file already carries one, but the phases relied on
+`resolve_region_id`'s synthetic-id fallback. Gave them `"id": "K1"`/`"K2"` so the canonical example
+matches the "id is the stable identity, never derive from position" invariant the same way every
+element does, and re-verified `render`/`genesis`/`serve` all carry the explicit ids through
+unchanged (`data-region="K1"`/`"K2"` in the rendered SVG, `PhaseAdded{id:Some("K1"),...}` in the
+genesis batch). `examples/event-log.jsonl` — the independently-evolving, already-diverged tracked
+log — is untouched: it isn't re-derived from `model.json` on each change (that log has its own
+history since genesis, per the event-sourcing spine), and it already renders/serves K1/K2 correctly
+(verified by hand in Stage 5/6). `ROADMAP.md` flipped to ✅ in this same PR.
 
 ## Test gate (every stage)
 

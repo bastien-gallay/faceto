@@ -58,6 +58,19 @@
               text-align: center; opacity: 0; transition: opacity .15s ease-out; }
   #add-plus.show { display: block; opacity: 1; }
   #add-plus:focus-visible { outline: 2px solid #1A6FAE; outline-offset: 1px; border-radius: 3px; opacity: 1; display: block; }
+  /* Region gestures (F-container Stage 6): the label tab is a focusable rename target — same
+     focus-visible ring as a sticky, so keyboard and mouse discoverability stay in parity. The
+     rail (an invisible per-column hit-strip, region.rs) only shows a cursor; its "+" reuses
+     #add-plus, so no rail-specific style is needed beyond the pointer affordance. */
+  .region-tab { cursor: pointer; }
+  .region-tab:focus { outline: none; }
+  .region-tab:focus-visible rect { stroke: #1A6FAE; stroke-width: 2; }
+  .region-rail { cursor: pointer; }
+  /* Resize drag guide: a thin ink-blue line that follows the cursor, snapped to the column the
+     drop would land on (F-inline-edit's live-pen accent, applied to a region boundary instead of
+     a label). No transition — a drag must track the cursor instantly. */
+  #region-drag-guide { position: fixed; display: none; z-index: 18; width: 2px; background: #1A6FAE;
+                        opacity: .8; pointer-events: none; }
   @media (prefers-reduced-motion: reduce) { .edge, .sticky, #add-plus { transition: none; } }
   /* Narrow widths: let the header wrap instead of clipping. Without this the packing control
      (Rows / Columns / Grid) and the Reload button slide off-screen and become unreachable. */
@@ -106,6 +119,7 @@
 <div id="board" role="group" aria-label="event-storming board — each sticky is a button: double-click or F2 to rename, Delete to remove, arrow keys to move, Enter to comment">__SVG__</div>
 <input id="rename-edit" aria-label="rename this element" autocomplete="off" spellcheck="false">
 <button id="add-plus" type="button" aria-label="add an element here" title="add an element">+</button>
+<div id="region-drag-guide" aria-hidden="true"></div>
 
 <dialog id="modal">
   <form method="dialog">
@@ -143,7 +157,15 @@ const LS_KEY = "facetoComments";
 const CFG = __CONFIG__;   // { colW, stickyW, stickyH, pack } — geometry + default packing, from render.rs
 // Structural ops change the board itself, not feedback on a box — kept out of the note badges,
 // counts and prior-comment list (and never resynced offline; the log is the truth).
-const STRUCTURAL_KINDS = new Set(["move", "add", "drop"]);
+const STRUCTURAL_KINDS = new Set([
+  "move", "add", "drop", "region-add", "region-resize", "region-rename", "region-remove",
+]);
+// Of those, add/drop/region-* have no client-side fallback: there is no id to mint, or nothing to
+// remove/resize/rename locally without a server round-trip. `move` is the one exception — it
+// still applies (see replayMoves), so it's the one structural kind excluded here. Derived from
+// STRUCTURAL_KINDS (not hand-copied) so a future structural kind is safe-by-default: it starts
+// "not applied offline" until someone deliberately teaches replayMoves to apply it too.
+const NOT_APPLIED_OFFLINE = new Set([...STRUCTURAL_KINDS].filter((k) => k !== "move"));
 let serverLive = false;
 let comments = [];        // {elemId, kind, text, ts}  (kind:"move" carries col/prevCol/swap…)
 let shownVersion = null;  // model hash the board currently displays — the diff baseline
@@ -322,27 +344,37 @@ function doMove(id, dir) {
 // F2 opens it; Enter commits a kind:"rename", Escape cancels. The same non-blank rule the server
 // enforces (events::nonblank) is applied here, and an unchanged label is a no-op, so a slip never
 // posts a dead event. `renaming` holds the open edit (and silences the board's move/remove keys).
-let renaming = null;   // { id, original } while editing, else null
-function startRename(g) {
-  if (!g || renaming) return;
+// A region's label tab reuses the same editor and function (`region` true), keyed by `regionId`
+// instead of `elemId` — a region isn't an element (F-container Stage 6). `regionDrag` also gates
+// this: a resize drag captures the pointer, but the keyboard (F2) isn't captured, so a rename must
+// not open mid-drag either (review: the two gestures had no mutual exclusion).
+let renaming = null;   // { id, original, region? } while editing, else null
+function startRename(g, region) {
+  if (!g || renaming || adding || regionDrag) return;
   const input = $("#rename-edit"), r = g.getBoundingClientRect();
   Object.assign(input.style,
     { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, display: "block" });
-  input.value = g.dataset.hero || "";
-  renaming = { id: g.id, original: input.value };
+  input.value = (region ? g.dataset.label : g.dataset.hero) || "";
+  renaming = region ? { id: g.dataset.region, original: input.value, region: true } : { id: g.id, original: input.value };
   input.focus();
   input.select();
 }
 function endRename(commit) {
   if (!renaming) return;
-  const { id, original } = renaming, text = $("#rename-edit").value.trim();
+  const { id, original, region } = renaming, text = $("#rename-edit").value.trim();
   renaming = null;
   $("#rename-edit").style.display = "none";
-  if (!commit) { note("rename cancelled"); document.getElementById(id)?.focus(); return; }
+  if (!commit) { note("rename cancelled"); if (!region) document.getElementById(id)?.focus(); return; }
   if (!text) { note("rename needs a label — left unchanged"); return; }   // mirrors the server guard
   if (text === original.trim()) { note("no change"); return; }
+  const ts = new Date().toISOString();
+  if (region) {
+    note("region renamed");
+    postComment({ regionId: id, kind: "region-rename", text, ts, status: "open" });
+    return;
+  }
   note("renamed");
-  postComment({ elemId: id, kind: "rename", text, ts: new Date().toISOString(), status: "open" });
+  postComment({ elemId: id, kind: "rename", text, ts, status: "open" });
 }
 
 // ---- inline remove --------------------------------------------------------
@@ -362,7 +394,9 @@ function doRemove(id) {
 // lane-title hover (→ prepend; the server derives the left-edge col). Clicking it opens the *same*
 // inline editor as rename to type the new label — Enter posts kind:"add", Escape cancels. The id is
 // minted server-side and the non-blank guard is mirrored here, so a blank slip never posts.
-let adding = null;       // { type, col?, prepend?, sx, sy } while typing the new label, else null
+// The region rail (F-container Stage 6) reuses the same + and editor for `region-add`
+// (`region: true`, carrying the new region's `[fromCol, toCol]` instead of a lane/col).
+let adding = null;       // { type, col?, prepend?, sx, sy } or { region: true, fromCol, toCol, sx, sy }
 let plusHideT = null;
 const plusBtn = $("#add-plus");
 function showPlus(x, y, action) {
@@ -379,11 +413,17 @@ plusBtn.addEventListener("mouseenter", () => clearTimeout(plusHideT));
 plusBtn.addEventListener("mouseleave", hidePlusSoon);
 plusBtn.addEventListener("click", () => { if (plusBtn._action) startAdd(plusBtn._action); });
 function startAdd(action) {
-  if (renaming || adding) return;
+  if (renaming || adding || regionDrag) return;
   plusBtn.classList.remove("show");
   const input = $("#rename-edit");
+  // The region-add box mirrors render.rs's own tab-sizing formula via CFG (Composable — render.rs
+  // stays the single source of truth for this layout decision; see REGION_TAB_H etc. in render.rs).
+  // The label isn't known yet (the user hasn't typed it), so width guesses a placeholder length —
+  // same rough-preview spirit as the element box, which doesn't know the future label either.
+  const w = action.region ? CFG.regionTabCharW * 10 + CFG.regionTabPad : CFG.stickyW;
+  const h = action.region ? CFG.regionTabH : CFG.stickyH;
   Object.assign(input.style,
-    { left: `${action.sx}px`, top: `${action.sy}px`, width: `${CFG.stickyW}px`, height: `${CFG.stickyH}px`, display: "block" });
+    { left: `${action.sx}px`, top: `${action.sy}px`, width: `${w}px`, height: `${h}px`, display: "block" });
   input.value = "";
   adding = action;
   input.focus();
@@ -395,8 +435,14 @@ function endAdd(commit) {
   $("#rename-edit").style.display = "none";
   if (!commit) { note("add cancelled"); return; }
   if (!text) { note("add needs a label — nothing added"); return; }   // mirrors the server guard
+  const ts = new Date().toISOString();
+  if (a.region) {
+    note("region added");
+    postComment({ kind: "region-add", text, fromCol: a.fromCol, toCol: a.toCol, ts, status: "open" });
+    return;
+  }
   note("element added");
-  const c = { kind: "add", type: a.type, text, ts: new Date().toISOString(), status: "open" };
+  const c = { kind: "add", type: a.type, text, ts, status: "open" };
   if (a.prepend) c.prepend = true; else c.col = a.col;
   postComment(c);
 }
@@ -414,6 +460,116 @@ function bindLaneAdders() {
   });
 }
 
+// ---- region gestures (F-container Stage 6) --------------------------------
+// Create: hovering a `region-rail` cell (render.rs — one invisible hit-rect per visible column,
+// painted *under* any live region so a gap between/around regions is the only place it shows
+// through) reveals the same + as an element add; clicking it opens the same inline editor,
+// `endAdd` posting kind:"region-add" for a one-column-wide span at that col.
+// Rename: clicking (or Enter/Space on) the label tab opens the same editor, keyed by regionId.
+// Resize: dragging a `region-edge` hit-line (render.rs) picks a new boundary column, snapped to
+// the exact rail-cell edges the server itself renders — no pixel-to-column guessing needed, the
+// true bounds are read straight off the DOM (readRegionRail). `regionBounds` mirrors `baseCol` for
+// stickies: a snapshot of each region's current `[from, to]`, refreshed on every board swap.
+// regionBounds only tracks *live* regions (`.region:not(.removed)`) — a removed region's group
+// still carries `data-region`/`data-from-col`/`data-to-col` (so a diff overlay can identify it),
+// but nothing on the new side can resize/rename it, so its bounds have no business in a map every
+// live gesture reads by regionId.
+let regionBounds = {};      // regionId -> { from, to }
+let railLeft = {}, railRight = {};   // col -> its rail cell's left/right x, in SVG user units
+function readRegionRail() {
+  railLeft = {}; railRight = {};
+  document.querySelectorAll(".region-rail").forEach((r) => {
+    const col = +r.dataset.col;
+    railLeft[col] = +r.getAttribute("x");
+    railRight[col] = railLeft[col] + +r.getAttribute("width");
+  });
+}
+// The column whose rail cell contains SVG-space x, or the nearest end column if x falls outside
+// every rail cell (dragged past the board's edge). The rail only covers the element-derived
+// column range, but render.rs now clamps each region's own data-from-col/data-to-col into that
+// same range (review: emitting the raw unclamped bound here let a drag target a column with no
+// rail cell, silently discarding an off-screen region's true extent) — so every bound this
+// function needs to resolve is always addressable.
+function colAtSvgX(x) {
+  const cols = Object.keys(railLeft).map(Number).sort((a, b) => a - b);
+  if (!cols.length) return null;
+  for (const c of cols) if (x >= railLeft[c] && x < railRight[c]) return c;
+  return x < railLeft[cols[0]] ? cols[0] : cols[cols.length - 1];
+}
+const dragGuide = $("#region-drag-guide");
+let regionDrag = null;   // { regionId, edge, otherCol, svgLeft, col? } while dragging, else null
+// Pointer Events + setPointerCapture (not mousedown/mousemove/mouseup on document): once captured,
+// every subsequent pointer event for this gesture — including its pointerup — is delivered to
+// `line` regardless of where the cursor ends up, even outside the browser window. Review: a plain
+// document-level mouseup misses entirely if the button is released off-window, leaking `regionDrag`
+// and the drag guide forever (no cleanup path existed for that case).
+function startRegionResize(e) {
+  if (e.button !== 0 || renaming || adding || regionDrag) return;
+  e.preventDefault();
+  const line = e.currentTarget;
+  const bounds = regionBounds[line.dataset.region];
+  if (!bounds) return;
+  const otherCol = line.dataset.edge === "from" ? bounds.to : bounds.from;
+  const svgLeft = document.querySelector("#board svg").getBoundingClientRect().left;
+  regionDrag = { regionId: line.dataset.region, edge: line.dataset.edge, otherCol, svgLeft };
+  const bandRect = line.getBoundingClientRect();   // the edge line already spans band_top..band_bot
+  Object.assign(dragGuide.style, { top: `${bandRect.top}px`, height: `${bandRect.height}px`, display: "block" });
+  line.setPointerCapture(e.pointerId);
+  line.addEventListener("pointermove", dragRegionEdge);
+  line.addEventListener("pointerup", endRegionResize);
+  line.addEventListener("pointercancel", endRegionResize);
+}
+function dragRegionEdge(e) {
+  if (!regionDrag) return;
+  const col = colAtSvgX(e.clientX - regionDrag.svgLeft);
+  if (col === null) return;
+  // Clamp so the dragged edge can never cross the fixed other edge (mirrors events::valid_span —
+  // the client never even offers an invalid target, rather than posting one the server rejects).
+  regionDrag.col = regionDrag.edge === "from"
+    ? Math.min(col, regionDrag.otherCol - 1)
+    : Math.max(col, regionDrag.otherCol + 1);
+  const x = regionDrag.edge === "from" ? railLeft[regionDrag.col] : railRight[regionDrag.col];
+  dragGuide.style.left = `${regionDrag.svgLeft + x}px`;
+}
+function endRegionResize(e) {
+  e.currentTarget.removeEventListener("pointermove", dragRegionEdge);
+  e.currentTarget.removeEventListener("pointerup", endRegionResize);
+  e.currentTarget.removeEventListener("pointercancel", endRegionResize);
+  dragGuide.style.display = "none";
+  const d = regionDrag;
+  regionDrag = null;
+  if (!d || d.col === undefined) return;   // pointerdown with no drag (or a cancel) — nothing to commit
+  const fromCol = d.edge === "from" ? d.col : d.otherCol;
+  const toCol = d.edge === "from" ? d.otherCol : d.col;
+  const bounds = regionBounds[d.regionId];
+  if (bounds && bounds.from === fromCol && bounds.to === toCol) { note("no change"); return; }
+  note("region resized");
+  postComment({ regionId: d.regionId, kind: "region-resize", fromCol, toCol, ts: new Date().toISOString(), status: "open" });
+}
+// Re-bound after every board swap, alongside the stickies and lane adders.
+function bindRegions() {
+  readRegionRail();
+  regionBounds = {};
+  document.querySelectorAll(".region:not(.removed)").forEach((g) => {
+    regionBounds[g.dataset.region] = { from: +g.dataset.fromCol, to: +g.dataset.toCol };
+  });
+  document.querySelectorAll(".region-rail").forEach((r) => {
+    r.onmouseenter = () => {
+      const rect = r.getBoundingClientRect();
+      showPlus(rect.left + rect.width / 2 - 11, rect.top + 4,
+        { region: true, fromCol: +r.dataset.col, toCol: +r.dataset.col + 1, sx: rect.left + 2, sy: rect.top + 2 });
+    };
+    r.onmouseleave = hidePlusSoon;
+  });
+  document.querySelectorAll(".region-tab").forEach((g) => {
+    g.onclick = () => startRename(g, true);
+    g.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startRename(g, true); } };
+  });
+  document.querySelectorAll(".region-edge").forEach((edge) => {
+    edge.onpointerdown = startRegionResize;
+  });
+}
+
 // Persist a comment (move or feedback): POST when live, else stash in localStorage. Offline
 // stash is best-effort and one-way — it is NOT replayed to the server on reconnect (the next
 // live `load()` replaces `comments` with the server's), so structural ops made offline (`add`,
@@ -426,8 +582,9 @@ async function postComment(c) {
   } catch {}
   if (posted) { await load(); return; }
   const a = lsGet(); a.push(c); lsSet(a); comments = a; replayMoves(); paint();
-  // add/drop can't reach the board offline (no server to mint/remove); move is applied locally.
-  note((c.kind === "add" || c.kind === "drop")
+  // add/drop/region-* can't reach the board offline (no server to mint/remove/resize/rename);
+  // move is the one structural kind applied locally (see replayMoves).
+  note(NOT_APPLIED_OFFLINE.has(c.kind)
     ? `offline — ${c.kind} saved locally (not applied to the board; Export to keep it)`
     : "offline — saved locally (Export to keep)");
 }
@@ -527,6 +684,7 @@ function bindStickies() {
     };
   });
   bindLaneAdders();
+  bindRegions();
 }
 
 function paint() {
@@ -596,7 +754,9 @@ $("#rename-edit").addEventListener("keydown", (e) => {
 });
 $("#rename-edit").addEventListener("blur", () => { adding ? endAdd(true) : endRename(true); });
 document.addEventListener("keydown", (e) => {
-  if ($("#modal").open || renaming || adding || !hoverId) return;
+  // regionDrag: a resize drag captures the pointer but not the keyboard, so F2 could otherwise
+  // open a rename mid-drag (review: no gesture guarded against the other's in-progress state).
+  if ($("#modal").open || renaming || adding || regionDrag || !hoverId) return;
   const ae = document.activeElement;
   if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
