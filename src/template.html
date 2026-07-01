@@ -769,8 +769,9 @@ function bindStickies() {
       const r = g.getBoundingClientRect();
       showPlus(r.right + 4, r.top + r.height / 2 - 11,
         { type: g.dataset.kind, col: +g.dataset.col + 1, sx: r.right + 12, sy: r.top });
-      removeXBtn.at(r.right - 3, r.top - 9, g.id);                    // × at the top-right corner
-      commentBtn.at(r.left - 24, r.top + r.height / 2 - 11, g.id);    // comment at the left edge
+      removeXBtn.at(r.right - 3, r.top - 9, g.id);    // × at the top-right corner
+      commentBtn.at(r.left - 19, r.top - 9, g.id);    // comment at the top-left corner (clears the
+                                                      // left-face arrowhead of any incoming edge)
     };
     g.onmouseleave = () => {
       if (hoverId === g.id) hoverId = null;
