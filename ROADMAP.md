@@ -23,7 +23,7 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | F-ddd-process | DDD process | ☐ | Parked | Adjacent capabilities from the ddd-crew starter modelling process. Depends on F-container; open after it lands. |
 | F-new-diagrams | new formats | ☐ | Parked | New diagram types: C4, User Story Mapping, BPMN. The long-term PRODUCT.md ambition; deferred until the event-storming board is excellent. |
 | F-model-smells | linting | ☐ | Parked | Detect model smells — orphans, loops, heavy bounded-contexts. Needs the F-container primitive and a graph pass; open once grouping exists. |
-| F-board-gestures | UI · direct edit | ☐ | Later | Richer on-element gestures layered over F-inline-add: hover opens a small tool-button set on the element, click-on-centre is an in-place rename, drag-n-drop moves left/right. The modal then carries only prose actions, and `resolve` shows only on hotspots / open questions. Open after F-inline-add lands and the bare `+` gesture has been dogfooded. |
+| F-board-gestures | UI · direct edit | 🚧 | **Now** | Richer on-element gestures layered over F-inline-add: **chromeless** bare ghost glyphs (`+` add · `×` remove · comment), not a floating toolbar (DESIGN §6); single-click focuses only (select-then-edit), double-click / F2 rename, drag left/right moves, `c` / comment glyph opens the modal. The modal then carries only prose actions, and `resolve` shows only on hotspots / open questions. Working note below; decisions ratified 2026-07-01. |
 
 ## Working note — F-inline-edit (2026-06-20, branch `feat/F-inline-edit`)
 
