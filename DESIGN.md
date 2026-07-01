@@ -333,6 +333,14 @@ its neighbours stay lit (`.adj`), and everything else recedes (edges → .07, st
 is the optical bench's focusing knob and the system's defining interaction. ←/→ while hovering
 nudges the sticky one column — the keyboard-fast path.
 
+Hovering also reveals the box's edit affordances as **individual bare ghost glyphs**, never a
+floating toolbar (§6): a `+` (add) on the right edge, a `×` (remove) at the top-right corner, and a
+speech-bubble comment at the top-left corner — each a single live-pen accent glyph, no chrome at
+rest, anchored apart so it reads as three affordances, not a control cluster. The box itself carries
+the rest: single-click focuses, double-click / F2 renames in place, a left/right drag (or ←/→) moves
+it along its lane, and **`c`** opens its comment. This is the anti-Miro reading of "gestures on the
+element" — the chrome stays calm while every edit stays direct.
+
 ## 6. Do's and Don'ts
 
 ### Do

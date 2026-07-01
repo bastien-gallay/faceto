@@ -23,7 +23,7 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | F-ddd-process | DDD process | ☐ | Parked | Adjacent capabilities from the ddd-crew starter modelling process. Depends on F-container; open after it lands. |
 | F-new-diagrams | new formats | ☐ | Parked | New diagram types: C4, User Story Mapping, BPMN. The long-term PRODUCT.md ambition; deferred until the event-storming board is excellent. |
 | F-model-smells | linting | ☐ | Parked | Detect model smells — orphans, loops, heavy bounded-contexts. Needs the F-container primitive and a graph pass; open once grouping exists. |
-| F-board-gestures | UI · direct edit | 🚧 | **Now** | Richer on-element gestures layered over F-inline-add: **chromeless** bare ghost glyphs (`+` add · `×` remove · comment), not a floating toolbar (DESIGN §6); single-click focuses only (select-then-edit), double-click / F2 rename, drag left/right moves, `c` / comment glyph opens the modal. The modal then carries only prose actions, and `resolve` shows only on hotspots / open questions. Working note below; decisions ratified 2026-07-01. |
+| F-board-gestures | UI · direct edit | ✅ | **Now** | Richer on-element gestures layered over F-inline-add: **chromeless** bare ghost glyphs (`+` add · `×` remove · comment), not a floating toolbar (DESIGN §6); single-click focuses only (select-then-edit), double-click / F2 rename, drag left/right moves, `c` / comment glyph opens the modal. The modal then carries only prose actions, and `resolve` shows only on hotspots / open questions. Working note below; shipped 2026-07-01. |
 
 ## Working note — F-inline-edit (2026-06-20, branch `feat/F-inline-edit`)
 
@@ -135,6 +135,44 @@ packing survives that change.
   common single-edge case); a non-zero offset shifts the anchor along the facing side only.
 - Non-regression: absolute-y render tests on sparse models re-pinned; `diff` styling, hotspot
   dotted connector, and the JS `edgePath` port stay in lockstep (manual board check).
+
+## Working note — F-board-gestures (2026-07-01, branch `feat/F-board-gestures`)
+
+**Scope.** Close the "Now" slice by making the box itself the edit surface, layered on the existing
+F-inline-add / F-inline-edit / region-resize gesture engine. Client-only — every event
+(`move` / `drop` / `rename` / `comment` / `resolve`) already exists end to end, so `render.rs` and
+the server are untouched; the whole slice is `src/template.html`. No new Rust behaviour, hence no
+new Rust tests — the gate stays green and the gestures are hand-verified on a live `serve` (the
+F-container Stage 6 pattern).
+
+**Two forks ratified before building.**
+
+- **Affordance style (D1).** The roadmap line said "hover opens a small tool-button set," but
+  `DESIGN.md §6` forbids floating toolbars. Chosen: **chromeless — individual bare ghost glyphs**
+  (`+` add on the right edge, `×` remove top-right, a speech-bubble comment top-left), never a
+  button row. DESIGN wins over the literal wording; the glyphs stay in the live-pen accent, no chrome
+  at rest, and hide together when a drag starts.
+- **Single-click (D2).** Chosen **focus / spotlight only** (select-then-edit, the calm gesture);
+  comment relocates off the click to the **`c`** key + the comment glyph — the user's redirect,
+  cleaner than either option first offered. So the click is benign, which let the disambiguation
+  timer and the drag's `suppressClick` guard both go away.
+
+**Gesture map (the contract).** single-click → focus · double-click / **F2** → rename in place ·
+drag left/right (or ← / →) → move along the lane · **`c`** / comment glyph → the prose modal ·
+**`×`** glyph / Delete → remove · `+` → add. The modal is now **prose-only**
+(comment / split / open question / resolve); `resolve` is gated in `openModal` to a hotspot or an
+element carrying an open `question`.
+
+**As built.** `moveTo(id, targetCol)` was extracted from `doMove` first (tidy) so the arrow nudge
+and the new drag share one move contract. Drag reuses the region-resize pattern — Pointer Events +
+`setPointerCapture`, a 4px threshold below which a press is just a click, snap-to-column via the
+rendered centres, and an occupied same-lane target swaps (both `ElementMoved` lines confirmed on the
+wire). A small `graceGlyph` helper factors the fade / grace-travel / stashed-target plumbing so `×`
+and comment are one line of wiring each. Hand-verification surfaced one fix — the comment glyph moved
+from the left-centre edge (where it landed on incoming arrowheads) to the top-left corner.
+
+**Out of scope.** Lane change via vertical drag (breaks `type` = lane); server-side enforcement of
+the resolve-gating (a UI concern); any new event kind or model-spine change.
 
 ## Why this slice
 
