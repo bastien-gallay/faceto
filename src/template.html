@@ -348,6 +348,67 @@ function doMove(id, dir) {
   moveTo(id, colOf[id] + (dir === "left" ? -1 : 1));
 }
 
+// ---- drag a sticky along its lane -----------------------------------------
+// The mouse counterpart to the ←/→ nudge: grab a box and drag it left/right to a new column, the
+// same kind:"move" the arrows post (via moveTo). Horizontal only — `type` selects the lane and a
+// move never changes it. Pointer Events + setPointerCapture (like the region-resize drag): once
+// captured, every event including pointerup lands on the box even if the button releases off-window,
+// so the drag can't leak (the fix the PR #11 review pinned for region resize). A press that never
+// crosses DRAG_THRESHOLD is a plain click — it just focuses (see suppressClick below).
+const DRAG_THRESHOLD = 4;   // px of travel before a press becomes a drag rather than a click
+let stickyDrag = null;      // { id, startX, fromCol, col, moved } while dragging, else null
+let suppressClick = false;  // a completed drag must not also fire the box's click action
+// The column index whose centre is nearest an SVG-space x, searching the occupied span plus one
+// past each end (colCenter interpolates the empty ones at the default pitch) — snap-to-grid.
+function nearestCol(svgX) {
+  const known = Object.keys(colX).map(Number);
+  if (!known.length) return 0;
+  let best = Math.min(...known) - 1, bestD = Infinity;
+  for (let c = best; c <= Math.max(...known) + 1; c++) {
+    const d = Math.abs(colCenter(c) - svgX);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  return best;
+}
+function startStickyDrag(e) {
+  if (e.button !== 0 || renaming || adding || regionDrag || stickyDrag) return;
+  const g = e.currentTarget;
+  if (colOf[g.id] === undefined) return;
+  stickyDrag = { id: g.id, startX: e.clientX, fromCol: colOf[g.id], col: colOf[g.id], moved: false };
+  plusBtn.classList.remove("show");   // the pointer is captured now, so its own mouseleave won't fire
+  g.setPointerCapture(e.pointerId);
+  g.addEventListener("pointermove", dragSticky);
+  g.addEventListener("pointerup", endStickyDrag);
+  g.addEventListener("pointercancel", endStickyDrag);
+}
+function dragSticky(e) {
+  if (!stickyDrag) return;
+  if (!stickyDrag.moved && Math.abs(e.clientX - stickyDrag.startX) < DRAG_THRESHOLD) return;
+  stickyDrag.moved = true;
+  const svgLeft = document.querySelector("#board svg").getBoundingClientRect().left;
+  const target = nearestCol(e.clientX - svgLeft);
+  if (target === stickyDrag.col) return;
+  stickyDrag.col = target;
+  colOf[stickyDrag.id] = target;   // live preview through the shared applyLayout (box + its edges)
+  applyLayout();
+}
+function endStickyDrag(e) {
+  const g = e.currentTarget;
+  g.removeEventListener("pointermove", dragSticky);
+  g.removeEventListener("pointerup", endStickyDrag);
+  g.removeEventListener("pointercancel", endStickyDrag);
+  const d = stickyDrag;
+  stickyDrag = null;
+  if (!d) return;
+  colOf[d.id] = d.fromCol;   // undo the preview so moveTo re-derives the true origin (and swaps)
+  if (d.moved && d.col !== d.fromCol) {
+    suppressClick = true;    // the pointerup will fire a click; a real drag must not also act on it
+    moveTo(d.id, d.col);     // sets colOf=target + applyLayout (with swap) + posts — no snap-back
+  } else {
+    applyLayout();           // sub-threshold / no-op: snap the box back to where it started
+  }
+}
+
 // ---- inline rename --------------------------------------------------------
 // Edit a label where it sits: an input floats over the sticky's screen rect — the live pen
 // writing directly on the box (DESIGN: the accent marks where you are acting). Double-click or
@@ -360,7 +421,7 @@ function doMove(id, dir) {
 // not open mid-drag either (review: the two gestures had no mutual exclusion).
 let renaming = null;   // { id, original, region? } while editing, else null
 function startRename(g, region) {
-  if (!g || renaming || adding || regionDrag) return;
+  if (!g || renaming || adding || regionDrag || stickyDrag) return;
   const input = $("#rename-edit"), r = g.getBoundingClientRect();
   Object.assign(input.style,
     { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, display: "block" });
@@ -423,7 +484,7 @@ plusBtn.addEventListener("mouseenter", () => clearTimeout(plusHideT));
 plusBtn.addEventListener("mouseleave", hidePlusSoon);
 plusBtn.addEventListener("click", () => { if (plusBtn._action) startAdd(plusBtn._action); });
 function startAdd(action) {
-  if (renaming || adding || regionDrag) return;
+  if (renaming || adding || regionDrag || stickyDrag) return;
   plusBtn.classList.remove("show");
   const input = $("#rename-edit");
   // The region-add box mirrors render.rs's own tab-sizing formula via CFG (Composable — render.rs
@@ -514,7 +575,7 @@ let regionDrag = null;   // { regionId, edge, otherCol, svgLeft, col? } while dr
 // document-level mouseup misses entirely if the button is released off-window, leaking `regionDrag`
 // and the drag guide forever (no cleanup path existed for that case).
 function startRegionResize(e) {
-  if (e.button !== 0 || renaming || adding || regionDrag) return;
+  if (e.button !== 0 || renaming || adding || regionDrag || stickyDrag) return;
   e.preventDefault();
   const line = e.currentTarget;
   const bounds = regionBounds[line.dataset.region];
@@ -676,8 +737,13 @@ function bindStickies() {
     // timer disambiguates the two so a double click never flashes the modal first; the keyboard
     // comment path (focus + Enter) stays instant.
     let clickT = null;
-    g.onclick = () => { if (clickT) return; clickT = setTimeout(() => { clickT = null; openModal(g); }, 200); };
+    g.onclick = () => {
+      if (suppressClick) { suppressClick = false; return; }   // this click ended a drag — ignore it
+      if (clickT) return;
+      clickT = setTimeout(() => { clickT = null; openModal(g); }, 200);
+    };
     g.ondblclick = () => { clearTimeout(clickT); clickT = null; startRename(g); };
+    g.onpointerdown = startStickyDrag;   // grab to drag along the lane (moves it left/right)
     g.onmouseenter = () => {
       hoverId = g.id; hoverOn(g.id);
       const r = g.getBoundingClientRect();
@@ -764,9 +830,9 @@ $("#rename-edit").addEventListener("keydown", (e) => {
 });
 $("#rename-edit").addEventListener("blur", () => { adding ? endAdd(true) : endRename(true); });
 document.addEventListener("keydown", (e) => {
-  // regionDrag: a resize drag captures the pointer but not the keyboard, so F2 could otherwise
-  // open a rename mid-drag (review: no gesture guarded against the other's in-progress state).
-  if ($("#modal").open || renaming || adding || regionDrag || !hoverId) return;
+  // regionDrag / stickyDrag: a drag captures the pointer but not the keyboard, so F2 or c could
+  // otherwise fire mid-drag (review: no gesture guarded against the other's in-progress state).
+  if ($("#modal").open || renaming || adding || regionDrag || stickyDrag || !hoverId) return;
   const ae = document.activeElement;
   if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
