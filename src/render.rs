@@ -663,6 +663,24 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
         .filter_map(|e| e.col)
         .collect();
     let mut pivot_node_x: Vec<i64> = Vec::new(); // x·10 rounded, deduped before emit
+
+    // A "region rail": one invisible hit-rect per visible column, always rendered (Stage 6 —
+    // `create region` needs a click target even where no region exists yet). Painted *before* the
+    // regions below, so a live region's own rect/edges/tab paint over it and stay clickable for
+    // their own gestures; the rail only "shows through" (hoverable) in the gaps — exactly the
+    // create-region affordance, with no extra client-side membership logic.
+    for (idx, cw) in col_width.iter().enumerate() {
+        p.push(format!(
+            "<rect class=\"region-rail\" data-col=\"{}\" x=\"{:.1}\" y=\"{}\" width=\"{:.1}\" \
+             height=\"{}\" fill=\"transparent\"/>",
+            min_col + idx as i64,
+            col_left[idx],
+            band_top,
+            cw,
+            band_bot - band_top
+        ));
+    }
+
     for ph in &model.phases {
         let a = clamp_idx(ph.from_col);
         let b = clamp_idx(ph.to_col);
@@ -685,6 +703,15 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
             ""
         };
 
+        // One group per region carries its identity + stored bounds (Stage 6: the client reads
+        // `data-from-col`/`data-to-col` to know a resize's *other* edge without inverse pixel math).
+        p.push(format!(
+            "<g class=\"region{}\" data-region=\"{}\" data-from-col=\"{}\" data-to-col=\"{}\">",
+            if removed { " removed" } else { "" },
+            esc(&ph.id),
+            ph.from_col,
+            ph.to_col
+        ));
         if removed {
             p.push("<g opacity=\"0.45\">".to_string());
         }
@@ -701,20 +728,24 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
             "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1\"{}/>",
             x, band_top, right, band_top, top_stroke, dash
         ));
-        for (edge_x, edge) in [(x, "from"), (right, "to")] {
+        for (edge_x, edge, col) in [(x, "from", ph.from_col), (right, "to", ph.to_col)] {
             p.push(format!(
                 "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1.5\"{}/>",
                 edge_x, band_top, edge_x, band_bot, stroke, dash
             ));
             // A wide transparent hit-region carries the resize affordance for the Stage-6 client to
             // grab (the *visual* half of D5: grab target = the band border, not a sticky). A removed
-            // region is gone on the new side — there is nothing to resize, so no handle.
+            // region is gone on the new side — there is nothing to resize, so no handle. `data-col`
+            // is this edge's own authored bound, so a drag only needs to read the *other* edge's
+            // bound off the enclosing `<g>` to post a full `region-resize`.
             if !removed {
                 p.push(format!(
-                    "<line class=\"region-edge\" data-region=\"{}\" data-edge=\"{}\" x1=\"{:.1}\" \
-                     y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"transparent\" stroke-width=\"8\"/>",
+                    "<line class=\"region-edge\" data-region=\"{}\" data-edge=\"{}\" data-col=\"{}\" \
+                     x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"transparent\" \
+                     stroke-width=\"8\"/>",
                     esc(&ph.id),
                     edge,
+                    col,
                     edge_x,
                     band_top,
                     edge_x,
@@ -725,7 +756,8 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
 
         // Label tab — the region's identity handle, a quiet folder tab straddling the top-left
         // corner (instrument grey, no domain colour: the Bench-Is-Grey Rule). Carries the diff badge
-        // when the region changed.
+        // when the region changed. Grouped as one focusable button (mirrors the sticky pattern) so
+        // the Stage-6 client can bind a click/dblclick/Enter → in-place rename to one hit target.
         let badge = dk.and_then(diff_badge);
         let label = match badge {
             Some(b) => format!("{b} {}", ph.label),
@@ -734,6 +766,18 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
         let tab_h = 19.0;
         let tab_w = label.chars().count() as f64 * 6.6 + 18.0;
         let tab_y = band_top - tab_h + 1.0;
+        if !removed {
+            // `data-label` carries the *raw* stored label (no diff badge) — the Stage-6 rename
+            // editor prefills from this, not the badge-prefixed display `label` below.
+            p.push(format!(
+                "<g class=\"region-tab\" data-region=\"{}\" data-label=\"{}\" role=\"button\" \
+                 tabindex=\"0\" aria-label=\"region {}, {}\" style=\"cursor:pointer\">",
+                esc(&ph.id),
+                esc(&ph.label),
+                esc(&ph.id),
+                esc(&ph.label)
+            ));
+        }
         p.push(format!(
             "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"6\" \
              fill=\"#ffffff\" stroke=\"{}\" stroke-width=\"1\"{}/>",
@@ -746,6 +790,9 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
             diff_col.unwrap_or(AXIS_LABEL),
             esc(&label)
         ));
+        if !removed {
+            p.push("</g>".to_string());
+        }
 
         // Note each edge that carries a pivotal event (an `event` sitting on this region's
         // boundary col). A removed region is gone on the new side, so its borders mark nothing.
@@ -761,6 +808,7 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
         if removed {
             p.push("</g>".to_string());
         }
+        p.push("</g>".to_string());
     }
 
     // One pivotal node per unique boundary position (sorted for deterministic output; a node shared
@@ -1378,15 +1426,49 @@ mod tests {
         };
         let svg = render_svg_packed(&m, Packing::Rows);
         assert!(svg.contains(">Context A<"), "region label tab is missing");
-        // Both border edges carry the resize affordance, addressed by region id + side.
-        assert!(svg.contains("class=\"region-edge\" data-region=\"K1\" data-edge=\"from\""));
-        assert!(svg.contains("class=\"region-edge\" data-region=\"K1\" data-edge=\"to\""));
+        // Both border edges carry the resize affordance, addressed by region id + side, each
+        // stamped with its own authored bound (Stage 6: a drag reads the *other* edge off the
+        // enclosing group instead of inverting screen pixels back to a column).
+        assert!(svg.contains(
+            "class=\"region-edge\" data-region=\"K1\" data-edge=\"from\" data-col=\"0\""
+        ));
+        assert!(svg
+            .contains("class=\"region-edge\" data-region=\"K1\" data-edge=\"to\" data-col=\"2\""));
+        // The enclosing group carries the region's stable bounds, so a resize doesn't need to
+        // invert screen pixels back to a column for the edge that isn't being dragged.
+        assert!(svg
+            .contains("class=\"region\" data-region=\"K1\" data-from-col=\"0\" data-to-col=\"2\""));
+        // The label tab is one focusable rename target (mirrors the sticky's role=button pattern).
+        assert!(svg.contains(
+            "class=\"region-tab\" data-region=\"K1\" data-label=\"Context A\" role=\"button\" \
+                 tabindex=\"0\""
+        ));
         // E1 sits on the region's from-edge → a pivotal node; E2 (interior) does not add a third.
         assert_eq!(
             svg.matches("<circle").count(),
             1,
             "expected one pivotal node"
         );
+    }
+
+    // Stage 6: `create region` needs a click target even where no region exists yet, so a rail
+    // cell must cover every visible column regardless of whether any phase is present.
+    #[test]
+    fn region_rail_covers_every_visible_column_even_with_no_regions() {
+        let m = Model {
+            title: "t".into(),
+            phases: vec![],
+            elements: vec![el("E1", "event", 0), el("E2", "event", 2)],
+            edges: vec![],
+            diff_meta: None,
+        };
+        let svg = render_svg_packed(&m, Packing::Rows);
+        for col in 0..=2 {
+            assert!(
+                svg.contains(&format!("class=\"region-rail\" data-col=\"{col}\"")),
+                "missing region-rail cell for col {col}"
+            );
+        }
     }
 
     // Review #4: `diff_phases` feeds *removed* regions into `model.phases`. Render must read
@@ -1406,9 +1488,16 @@ mod tests {
             svg.contains("<g opacity=\"0.45\">"),
             "removed region is not ghosted"
         );
+        // The region still carries an identifying group (Stage 6: the client needs `data-region`
+        // to tell regions apart even when removed), but must not offer a resize handle or a
+        // rename tab for something that no longer exists.
         assert!(
-            !svg.contains("data-region=\"K9\""),
+            !svg.contains("class=\"region-edge\" data-region=\"K9\""),
             "a removed region must not offer a resize handle"
+        );
+        assert!(
+            !svg.contains("class=\"region-tab\" data-region=\"K9\""),
+            "a removed region must not offer a rename tab"
         );
     }
 

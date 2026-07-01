@@ -2,9 +2,9 @@
 
 # F-container — build plan
 
-Status: **model brick merged (S1–S3); render (S4) + serve mint/append (S5) landed on branch
-`feat/F-container-render`; resume at Stage 6 (client gestures)** · Companion:
-[`F-container-scope.md`](./F-container-scope.md)
+Status: **model brick (S1–S3), render (S4) and serve mint/append (S5) merged to `main`; client
+gestures (S6) landed on branch `feat/F-container-client-gestures`; resume at Stage 7
+(example + roadmap)** · Companion: [`F-container-scope.md`](./F-container-scope.md)
 
 Build order is **model-first**: the pure brick (replay + diff) is testable with zero UI, and the
 gestures are meaningless until replay and render carry regions. v1 ships model **and** on-board UI
@@ -129,7 +129,7 @@ mirrors `append_add`: mint + write under the `appends` lock. `region-add` is spe
 `region-rename`/`region-remove` go through `comment_to_events`, keyed by a `regionId` field (a region
 is not an element, so it doesn't share `elemId`). 6 new tests; 86 total, gate clean.
 
-## Stage 6 — Client gestures (`template.html`) · behavioural · ⚠️ DESIGN.md register
+## Stage 6 — Client gestures (`template.html`) · behavioural · ✅ done (branch `feat/F-container-client-gestures`)
 
 Layered on the F-inline-edit / F-inline-add drag substrate:
 
@@ -140,6 +140,35 @@ Layered on the F-inline-edit / F-inline-add drag substrate:
 - **Element across border**: the existing move gesture; membership + pivotal update is just a
   re-render (derived — no extra post).
 - Offline `localStorage` fallback parity with existing structural ops (local-only, not resynced).
+
+**As built (S6):** `render.rs` grew three pieces of markup to give the client something to hang
+gestures on, since Stage 4 drew regions decoratively only: (1) a **region rail** — one invisible
+per-column hit-rect, painted *before* the regions so a live region's own rect/edges/tab paint over
+it and stay clickable, and it only "shows through" (hoverable) in the gaps between/around regions —
+exactly the create-region affordance, with no client-side membership math; (2) each region wrapped
+in a `<g class="region" data-region data-from-col data-to-col>`, so a resize drag can read the
+*fixed* other edge straight off the DOM instead of inverting screen pixels back to a column; (3)
+the label tab wrapped in a focusable `<g class="region-tab" role="button" tabindex="0"
+data-label>` (mirrors the sticky pattern) as one rename hit-target.
+
+`template.html`: `region-add`/`region-rename` reuse the *existing* `adding`/`renaming` state objects
+and the same floating `#rename-edit` input as element add/rename (tagged `region: true`/keyed by
+`regionId`) rather than duplicating the editor — one inline-edit substrate for both element and
+region text entry. Resize is a real mouse drag: `mousedown` on a `region-edge` starts it, a thin
+`#region-drag-guide` line follows the cursor snapped to the *exact* rail-cell boundary the server
+itself renders (`readRegionRail` reads `x`/`width` straight off the `.region-rail` DOM — no
+pixel-to-column guessing), and the drag clamps so the moving edge can never cross the fixed other
+edge (client-side `events::valid_span` parity — never even offers an invalid target). `STRUCTURAL_KINDS`
+and a new `NOT_APPLIED_OFFLINE` set give the four region kinds the same offline-fallback treatment as
+`add`/`drop` (stashed locally, not applied to the board, `Export` to keep). 89 tests green (2 new
+render tests: region-group/tab/edge markup, and the region-rail covering every visible column even
+with zero regions); the drag/hover/rename/create gestures themselves have no Rust test surface and
+were verified by hand — `faceto serve` against a copy of `examples/event-log.jsonl`, driving
+rename (K1 → "Kickoff"), create (`region-add` at the rail, minted `K3`), and resize (`region-resize`
+K2 via a simulated drag) end to end through the real HTTP server, each producing the correct
+`PhaseRenamed`/`PhaseAdded`/`PhaseResized` log line and re-rendering the diff overlay correctly.
+No client-side gesture exists yet for `region-remove` (not required by this stage's bullet list;
+the server route has existed since Stage 5).
 
 ## Stage 7 — Example + roadmap · housekeeping
 
