@@ -29,6 +29,11 @@
   #status.live { background: #e6f7ec; color: #1b7a3d; }
   #note { font-size: 11px; color: #1b7a3d; }
   #board { overflow: auto; padding: 12px; }
+  /* Drag-to-move owns horizontal touch travel on a box or a region edge — without this the browser
+     claims the gesture to pan #board and pointercancels the drag. Labels are UI glass, not a text
+     document: no selection, so a mouse drag can't smear highlight across the boxes it passes. */
+  .sticky, .region-edge { touch-action: none; }
+  #board svg { user-select: none; -webkit-user-select: none; }
   .edge, .sticky { transition: opacity .15s ease-out; }
   .edge.hl { stroke: #2f3c45; opacity: 1 !important; stroke-width: 2.4; }
   .sticky:hover .card { stroke: #1a1a1a; stroke-width: 2; }
@@ -359,7 +364,11 @@ function doMove(id, dir) {
 // so the drag can't leak (the fix the PR #11 review pinned for region resize). A press that never
 // crosses DRAG_THRESHOLD is a plain click, which just focuses the box (single-click is benign).
 const DRAG_THRESHOLD = 4;   // px of travel before a press becomes a drag rather than a click
-let stickyDrag = null;      // { id, startX, fromCol, col, moved } while dragging, else null
+let stickyDrag = null;      // { id, pointerId, startX, fromCol, col, moved } while dragging, else null
+// One predicate for "a gesture owns the board" (inline edit, add, either drag): every gesture
+// entry point checks it, so mutual exclusion is one flag added here — not an edit at five sites.
+function gestureBusy() { return !!(renaming || adding || regionDrag || stickyDrag); }
+function hideGlyphs() { document.querySelectorAll(".hovglyph.show").forEach((b) => b.classList.remove("show")); }
 // The column index whose centre is nearest an SVG-space x, searching the occupied span plus one
 // past each end (colCenter interpolates the empty ones at the default pitch) — snap-to-grid.
 function nearestCol(svgX) {
@@ -373,19 +382,23 @@ function nearestCol(svgX) {
   return best;
 }
 function startStickyDrag(e) {
-  if (e.button !== 0 || renaming || adding || regionDrag || stickyDrag) return;
+  if (e.button !== 0 || gestureBusy()) return;
   const g = e.currentTarget;
   if (colOf[g.id] === undefined) return;
-  stickyDrag = { id: g.id, startX: e.clientX, fromCol: colOf[g.id], col: colOf[g.id], moved: false };
+  stickyDrag = { id: g.id, pointerId: e.pointerId, startX: e.clientX, fromCol: colOf[g.id], col: colOf[g.id], moved: false };
   // the pointer is captured now, so the hover glyphs' own mouseleave won't fire — hide them all
-  document.querySelectorAll(".hovglyph.show").forEach((b) => b.classList.remove("show"));
+  hideGlyphs();
   g.setPointerCapture(e.pointerId);
   g.addEventListener("pointermove", dragSticky);
   g.addEventListener("pointerup", endStickyDrag);
   g.addEventListener("pointercancel", endStickyDrag);
+  // Cleanup of last resort: a board swap can detach the box mid-drag, and a detached target never
+  // delivers its pointerup — without this the stuck stickyDrag would gate every gesture forever.
+  g.addEventListener("lostpointercapture", endStickyDrag);
 }
 function dragSticky(e) {
-  if (!stickyDrag) return;
+  // Only the captured pointer steers the drag — a second finger resting on the same box is ignored.
+  if (!stickyDrag || e.pointerId !== stickyDrag.pointerId) return;
   if (!stickyDrag.moved && Math.abs(e.clientX - stickyDrag.startX) < DRAG_THRESHOLD) return;
   stickyDrag.moved = true;
   const svgLeft = document.querySelector("#board svg").getBoundingClientRect().left;
@@ -396,18 +409,22 @@ function dragSticky(e) {
   applyLayout();
 }
 function endStickyDrag(e) {
+  if (stickyDrag && e.pointerId !== stickyDrag.pointerId) return;   // another finger lifting, not ours
   const g = e.currentTarget;
   g.removeEventListener("pointermove", dragSticky);
   g.removeEventListener("pointerup", endStickyDrag);
   g.removeEventListener("pointercancel", endStickyDrag);
+  g.removeEventListener("lostpointercapture", endStickyDrag);
   const d = stickyDrag;
   stickyDrag = null;
   if (!d) return;
+  if (!g.isConnected) return;  // detached by a board swap mid-drag — state dropped, nothing to commit
   colOf[d.id] = d.fromCol;   // undo the preview so moveTo re-derives the true origin (and swaps)
   if (d.moved && d.col !== d.fromCol) {
     moveTo(d.id, d.col);     // sets colOf=target + applyLayout (with swap) + posts — no snap-back
   } else {
     applyLayout();           // sub-threshold / no-op: snap the box back to where it started
+    g.focus();               // the single click's promised focus, not left to browser defaults
   }
 }
 
@@ -423,7 +440,8 @@ function endStickyDrag(e) {
 // not open mid-drag either (review: the two gestures had no mutual exclusion).
 let renaming = null;   // { id, original, region? } while editing, else null
 function startRename(g, region) {
-  if (!g || renaming || adding || regionDrag || stickyDrag) return;
+  if (!g || gestureBusy()) return;
+  hideGlyphs();   // the edit owns the board — a lingering × / comment click must not land mid-rename
   const input = $("#rename-edit"), r = g.getBoundingClientRect();
   Object.assign(input.style,
     { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, display: "block" });
@@ -478,7 +496,12 @@ function graceGlyph(btn, act) {
   btn.hideSoon = () => { hideT = setTimeout(() => btn.classList.remove("show"), 140); };
   btn.addEventListener("mouseenter", () => clearTimeout(hideT));
   btn.addEventListener("mouseleave", () => btn.hideSoon());
-  btn.addEventListener("click", () => { const id = btn._target; btn.classList.remove("show"); if (id) act(id); });
+  btn.addEventListener("click", () => {
+    if (gestureBusy()) return;   // belt-and-braces: never fire an action over an in-progress gesture
+    const id = btn._target;
+    btn.classList.remove("show");
+    if (id) act(id);
+  });
   return btn;
 }
 const removeXBtn = graceGlyph($("#remove-x"), doRemove);
@@ -510,8 +533,8 @@ plusBtn.addEventListener("mouseenter", () => clearTimeout(plusHideT));
 plusBtn.addEventListener("mouseleave", hidePlusSoon);
 plusBtn.addEventListener("click", () => { if (plusBtn._action) startAdd(plusBtn._action); });
 function startAdd(action) {
-  if (renaming || adding || regionDrag || stickyDrag) return;
-  plusBtn.classList.remove("show");
+  if (gestureBusy()) return;
+  hideGlyphs();   // the edit owns the board (see startRename) — this also hides the + itself
   const input = $("#rename-edit");
   // The region-add box mirrors render.rs's own tab-sizing formula via CFG (Composable — render.rs
   // stays the single source of truth for this layout decision; see REGION_TAB_H etc. in render.rs).
@@ -601,14 +624,14 @@ let regionDrag = null;   // { regionId, edge, otherCol, svgLeft, col? } while dr
 // document-level mouseup misses entirely if the button is released off-window, leaking `regionDrag`
 // and the drag guide forever (no cleanup path existed for that case).
 function startRegionResize(e) {
-  if (e.button !== 0 || renaming || adding || regionDrag || stickyDrag) return;
+  if (e.button !== 0 || gestureBusy()) return;
   e.preventDefault();
   const line = e.currentTarget;
   const bounds = regionBounds[line.dataset.region];
   if (!bounds) return;
   const otherCol = line.dataset.edge === "from" ? bounds.to : bounds.from;
   const svgLeft = document.querySelector("#board svg").getBoundingClientRect().left;
-  regionDrag = { regionId: line.dataset.region, edge: line.dataset.edge, otherCol, svgLeft };
+  regionDrag = { regionId: line.dataset.region, edge: line.dataset.edge, otherCol, svgLeft, pointerId: e.pointerId };
   const bandRect = line.getBoundingClientRect();   // the edge line already spans band_top..band_bot
   Object.assign(dragGuide.style, { top: `${bandRect.top}px`, height: `${bandRect.height}px`, display: "block" });
   line.setPointerCapture(e.pointerId);
@@ -617,7 +640,7 @@ function startRegionResize(e) {
   line.addEventListener("pointercancel", endRegionResize);
 }
 function dragRegionEdge(e) {
-  if (!regionDrag) return;
+  if (!regionDrag || e.pointerId !== regionDrag.pointerId) return;   // see dragSticky
   const col = colAtSvgX(e.clientX - regionDrag.svgLeft);
   if (col === null) return;
   // Clamp so the dragged edge can never cross the fixed other edge (mirrors events::valid_span —
@@ -629,6 +652,7 @@ function dragRegionEdge(e) {
   dragGuide.style.left = `${regionDrag.svgLeft + x}px`;
 }
 function endRegionResize(e) {
+  if (regionDrag && e.pointerId !== regionDrag.pointerId) return;   // another finger lifting, not ours
   e.currentTarget.removeEventListener("pointermove", dragRegionEdge);
   e.currentTarget.removeEventListener("pointerup", endRegionResize);
   e.currentTarget.removeEventListener("pointercancel", endRegionResize);
@@ -671,6 +695,9 @@ function bindRegions() {
 // stash is best-effort and one-way — it is NOT replayed to the server on reconnect (the next
 // live `load()` replaces `comments` with the server's), so structural ops made offline (`add`,
 // `move`) never reach the log. Export keeps them; the user is told so below.
+// A live drag owns the board: swapping the SVG mid-gesture detaches the captured box (orphaning
+// the drag) and replayMoves clobbers its colOf preview. Board rewrites wait for the gesture's end.
+function whenNoDrag(fn) { stickyDrag || regionDrag ? setTimeout(() => whenNoDrag(fn), 150) : fn(); }
 async function postComment(c) {
   let posted = false;
   try {
@@ -678,7 +705,8 @@ async function postComment(c) {
     posted = r.ok;
   } catch {}
   if (posted) { await load(); return; }
-  const a = lsGet(); a.push(c); lsSet(a); comments = a; replayMoves(); paint();
+  const a = lsGet(); a.push(c); lsSet(a); comments = a;
+  whenNoDrag(() => { replayMoves(); paint(); });
   // add/drop/region-* can't reach the board offline (no server to mint/remove/resize/rename);
   // move is the one structural kind applied locally (see replayMoves).
   note(NOT_APPLIED_OFFLINE.has(c.kind)
@@ -689,6 +717,7 @@ async function postComment(c) {
 // Reload: re-pull comments, and when the model changed under us, redraw the board with the
 // changes-since-you-last-looked overlay (diffed against the version currently on screen).
 async function load() {
+  if (stickyDrag || regionDrag) { whenNoDrag(load); return; }   // defer the swap, keep the gesture
   serverLive = false;
   try {
     const r = await fetch("/comments", { cache: "no-store" });
@@ -756,6 +785,14 @@ function hoverOff() {
   document.querySelectorAll(".sticky.adj").forEach((g) => g.classList.remove("adj"));
 }
 function bindStickies() {
+  // A board swap detaches every old node: the hovered box never fires its mouseleave and a
+  // captured drag never delivers its pointerup — clear the stale hover/gesture state here or a
+  // dead id lingers in hoverId / the glyph stashes and a stuck drag flag gates every gesture.
+  hoverId = null;
+  hideGlyphs();
+  hoverOff();
+  stickyDrag = null;
+  if (regionDrag) { regionDrag = null; dragGuide.style.display = "none"; }
   buildGraph();
   readLayout();
   document.querySelectorAll(".sticky").forEach((g) => {
@@ -766,6 +803,7 @@ function bindStickies() {
     g.onpointerdown = startStickyDrag;
     g.onmouseenter = () => {
       hoverId = g.id; hoverOn(g.id);
+      if (gestureBusy()) return;   // an open edit / drag owns the board — no action glyphs meanwhile
       const r = g.getBoundingClientRect();
       showPlus(r.right + 4, r.top + r.height / 2 - 11,
         { type: g.dataset.kind, col: +g.dataset.col + 1, sx: r.right + 12, sy: r.top });
@@ -809,6 +847,7 @@ function paint() {
 
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 function openModal(g) {
+  if (!g) return;   // a stale hoverId / glyph target can name a box a board swap removed
   const id = g.id;
   $("#m-id").textContent = id;
   $("#m-label").textContent = g.dataset.hero || "";
@@ -857,9 +896,10 @@ $("#rename-edit").addEventListener("keydown", (e) => {
 });
 $("#rename-edit").addEventListener("blur", () => { adding ? endAdd(true) : endRename(true); });
 document.addEventListener("keydown", (e) => {
-  // regionDrag / stickyDrag: a drag captures the pointer but not the keyboard, so F2 or c could
-  // otherwise fire mid-drag (review: no gesture guarded against the other's in-progress state).
-  if ($("#modal").open || renaming || adding || regionDrag || stickyDrag || !hoverId) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;   // never shadow Cmd/Ctrl shortcuts (copy, back…)
+  // gestureBusy: a drag captures the pointer but not the keyboard, so F2 or c could otherwise
+  // fire mid-drag (review: no gesture guarded against the other's in-progress state).
+  if ($("#modal").open || gestureBusy() || !hoverId) return;
   const ae = document.activeElement;
   if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
