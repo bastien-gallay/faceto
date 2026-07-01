@@ -318,12 +318,15 @@ function replayMoves() {
   applyLayout();
 }
 
-// Nudge a sticky one column. Within its lane an occupied target column means the two swap.
-function doMove(id, dir) {
-  if (colOf[id] === undefined) return;
-  const from = colOf[id], target = from + (dir === "left" ? -1 : 1);
+// Move a sticky to an absolute target column, swapping with any sticky already in that column in
+// the same lane. Shared by the ←/→ nudge (doMove) and drag-to-move — the single move contract.
+// A no-op if the target is the current column. `dir` (for the note/text) is derived from the
+// shift, so a single-step nudge and a multi-column drag both read naturally.
+function moveTo(id, target) {
+  if (colOf[id] === undefined || target === colOf[id]) return;
+  const from = colOf[id];
   // No fixed left edge: `col` is a global coordinate and the lane-title `+` (prepend) mints
-  // negative cols, which the renderer draws on-board. Move-left grows the board left the same way.
+  // negative cols, which the renderer draws on-board. Moving left grows the board left the same way.
   let swapId = null;
   for (const oid in colOf) {
     if (oid !== id && kindOf[oid] === kindOf[id] && colOf[oid] === target) { swapId = oid; break; }
@@ -331,11 +334,18 @@ function doMove(id, dir) {
   colOf[id] = target;
   if (swapId) colOf[swapId] = from;
   applyLayout();
+  const dir = target < from ? "left" : "right";
   const c = { elemId: id, kind: "move", col: target, prevCol: from,
               text: `moved ${dir} to col ${target}`, ts: new Date().toISOString(), status: "open" };
   if (swapId) { c.swapId = swapId; c.swapCol = from; c.swapPrevCol = target; }
   note(swapId ? `swapped with ${swapId}` : `moved ${dir}`);
   postComment(c);
+}
+
+// Nudge a sticky one column left/right — the keyboard/arrow fast path.
+function doMove(id, dir) {
+  if (colOf[id] === undefined) return;
+  moveTo(id, colOf[id] + (dir === "left" ? -1 : 1));
 }
 
 // ---- inline rename --------------------------------------------------------
