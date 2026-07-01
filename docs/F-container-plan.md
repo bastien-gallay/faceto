@@ -2,9 +2,9 @@
 
 # F-container — build plan
 
-Status: **model brick (S1–S3), render (S4) and serve mint/append (S5) merged to `main`; client
-gestures (S6) landed on branch `feat/F-container-client-gestures`; resume at Stage 7
-(example + roadmap)** · Companion: [`F-container-scope.md`](./F-container-scope.md)
+Status: **all seven stages done — F-container ships on branch `feat/F-container-client-gestures`
+(PR #11), flipping the feature to ✅ in `ROADMAP.md`** · Companion:
+[`F-container-scope.md`](./F-container-scope.md)
 
 Build order is **model-first**: the pure brick (replay + diff) is testable with zero UI, and the
 gestures are meaningless until replay and render carry regions. v1 ships model **and** on-board UI
@@ -170,11 +170,26 @@ K2 via a simulated drag) end to end through the real HTTP server, each producing
 No client-side gesture exists yet for `region-remove` (not required by this stage's bullet list;
 the server route has existed since Stage 5).
 
-## Stage 7 — Example + roadmap · housekeeping
+## Stage 7 — Example + roadmap · housekeeping · ✅ done (branch `feat/F-container-client-gestures`)
 
 - Add a region (and a pivotal boundary event) to `examples/sample.model.json`; verify `genesis →
   render → serve` carries it end to end.
 - Flip `F-container` status to ✅ in `ROADMAP.md` **inside this PR** (not a follow-up docs PR).
+
+**As built (S7):** `examples/sample.model.json` already carried both a region *and* a pivotal
+boundary event from before F-container existed — `begin`[0,1]/`work`[2,4], with `E1` (DayStarted)
+sitting on `begin`'s `to_col` and `E2` (ItemAdded) on `work`'s `from_col` — so this stage added no
+contrived third region purely to tick the checklist; genesis→render→serve already carried it (the
+board's own screenshots throughout Stages 4–6 are proof). What the two phases lacked was an
+explicit `id` — every element in the file already carries one, but the phases relied on
+`resolve_region_id`'s synthetic-id fallback. Gave them `"id": "K1"`/`"K2"` so the canonical example
+matches the "id is the stable identity, never derive from position" invariant the same way every
+element does, and re-verified `render`/`genesis`/`serve` all carry the explicit ids through
+unchanged (`data-region="K1"`/`"K2"` in the rendered SVG, `PhaseAdded{id:Some("K1"),...}` in the
+genesis batch). `examples/event-log.jsonl` — the independently-evolving, already-diverged tracked
+log — is untouched: it isn't re-derived from `model.json` on each change (that log has its own
+history since genesis, per the event-sourcing spine), and it already renders/serves K1/K2 correctly
+(verified by hand in Stage 5/6). `ROADMAP.md` flipped to ✅ in this same PR.
 
 ## Test gate (every stage)
 
