@@ -363,19 +363,17 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
             let text = String::from_utf8_lossy(&buf);
             if ctx.log_mode {
                 return match json::parse(&text) {
-                    Ok(v @ json::Json::Obj(_)) if v.get_str("kind") == Some("add") => {
-                        match add_from_comment(&ctx, &v) {
-                            Ok(ev) => {
-                                println!("  \u{2795} event: {}", events::line(&ev));
-                                send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
-                            }
-                            Err(code) => {
-                                send(&mut out, code, "application/json", b"{\"ok\":false}", &[])
-                            }
-                        }
-                    }
-                    Ok(v @ json::Json::Obj(_)) if v.get_str("kind") == Some("region-add") => {
-                        match add_region_from_comment(&ctx, &v) {
+                    Ok(v @ json::Json::Obj(_))
+                        if matches!(v.get_str("kind"), Some("add") | Some("region-add")) =>
+                    {
+                        // Both need a server-minted id (H6 / review #3), so both go through the
+                        // same mint-and-respond path — only which append fn mints differs.
+                        let result = if v.get_str("kind") == Some("add") {
+                            add_from_comment(&ctx, &v)
+                        } else {
+                            add_region_from_comment(&ctx, &v)
+                        };
+                        match result {
                             Ok(ev) => {
                                 println!("  \u{2795} event: {}", events::line(&ev));
                                 send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
@@ -506,13 +504,17 @@ fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
 }
 
 /// Handle a `kind:"region-add"` post: a region-creation command, the region counterpart of
-/// `add_from_comment`. A non-empty `text` (label) and a `[fromCol, toCol]` span are required; the
-/// server mints the id (review #3 / H6 for regions). Returns the HTTP status to fail with: `400`
-/// for a missing label or span, `500` if the append itself fails.
+/// `add_from_comment`. A non-empty `text` (label) and a well-ordered `[fromCol, toCol]` span
+/// (`events::valid_span`) are required; the server mints the id (review #3 / H6 for regions).
+/// Returns the HTTP status to fail with: `400` for a missing label or an absent/inverted/
+/// zero-width span, `500` if the append itself fails.
 fn add_region_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
     let label = v.get_str("text").and_then(events::nonblank).ok_or(400u16)?;
     let from_col = v.get_i64("fromCol").ok_or(400u16)?;
     let to_col = v.get_i64("toCol").ok_or(400u16)?;
+    if !events::valid_span(from_col, to_col) {
+        return Err(400u16);
+    }
     ctx.append_region_add(label, from_col, to_col)
         .map_err(|_| 500u16)
 }
@@ -830,6 +832,45 @@ mod tests {
 
         let no_region = json::parse(r#"{"kind":"region-remove"}"#).unwrap();
         assert!(events::comment_to_events(&no_region).is_empty());
+    }
+
+    #[test]
+    fn region_resize_rejects_an_inverted_or_zero_width_span() {
+        // A resize into fromCol >= toCol would make region_of's `from_col <= col <= to_col`
+        // test unsatisfiable for any col, silently dropping the region from every column's
+        // membership while render still draws a (normalized) visible band for it.
+        let inverted =
+            json::parse(r#"{"kind":"region-resize","regionId":"K1","fromCol":9,"toCol":2}"#)
+                .unwrap();
+        assert!(events::comment_to_events(&inverted).is_empty());
+
+        let zero_width =
+            json::parse(r#"{"kind":"region-resize","regionId":"K1","fromCol":3,"toCol":3}"#)
+                .unwrap();
+        assert!(events::comment_to_events(&zero_width).is_empty());
+    }
+
+    #[test]
+    fn add_region_from_comment_rejects_an_inverted_or_zero_width_span() {
+        let ctx = Ctx {
+            model_path: std::env::temp_dir().join("faceto-nonexistent-region.jsonl"),
+            comments_path: std::env::temp_dir().join("faceto-nonexistent-region.jsonl"),
+            log_mode: true,
+            packing: render::Packing::default(),
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        };
+        // The span check runs before any file access, same as the label check — no file needed.
+        let inverted =
+            json::parse(r#"{"kind":"region-add","text":"X","fromCol":5,"toCol":2}"#).unwrap();
+        assert_eq!(add_region_from_comment(&ctx, &inverted), Err(400));
+
+        let zero_width =
+            json::parse(r#"{"kind":"region-add","text":"X","fromCol":4,"toCol":4}"#).unwrap();
+        assert_eq!(add_region_from_comment(&ctx, &zero_width), Err(400));
     }
 
     #[test]

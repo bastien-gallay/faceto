@@ -411,6 +411,17 @@ pub fn nonblank(s: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+/// A region span with content: `from_col < to_col`, or `false` for an inverted or zero-width
+/// span. An inverted span would mint or resize into a region `region_of`'s `from_col <= col &&
+/// col <= to_col` test can never match — a permanent, silent gap between the model (which drops
+/// the region from every column's membership) and the render, which normalizes the span and
+/// draws it as a real band regardless. Shared by the `region-add` guard (`serve.rs`) and the
+/// `region-resize` guard in [`region_comment_to_events`], so a raw POST can't create what the
+/// other can't.
+pub fn valid_span(from_col: i64, to_col: i64) -> bool {
+    from_col < to_col
+}
+
 /// Map one posted/stored comment object to the event(s) it persists — the single source of
 /// truth for the comment→event translation, shared by the live server (`POST /comment` in log
 /// mode) and the `comments.jsonl` migration ([`from_comments`]). `move`/`resolve`/`rename`/`drop`
@@ -474,20 +485,22 @@ pub fn comment_to_events(v: &Json) -> Vec<Event> {
 
 /// The region half of [`comment_to_events`]: `region-resize`/`region-rename`/`region-remove`,
 /// keyed by `regionId` rather than `elemId` (a region is not an element). Returns an empty vec
-/// when the comment names no region, when a `region-resize` carries no `[fromCol, toCol]` span, or
-/// when a `region-rename` carries a blank label — same no-op guards as the element path, so a
-/// malformed post never replays as a phantom edit.
+/// when the comment names no region, when a `region-resize` carries no `[fromCol, toCol]` span or
+/// an inverted/zero-width one (`valid_span`), or when a `region-rename` carries a blank label —
+/// same no-op guards as the element path, so a malformed post never replays as a phantom edit.
 fn region_comment_to_events(v: &Json, kind: &str) -> Vec<Event> {
     let Some(id) = v.get_str("regionId").map(str::to_string) else {
         return Vec::new();
     };
     match kind {
         "region-resize" => match (v.get_i64("fromCol"), v.get_i64("toCol")) {
-            (Some(from_col), Some(to_col)) => vec![Event::PhaseResized {
-                id,
-                from_col,
-                to_col,
-            }],
+            (Some(from_col), Some(to_col)) if valid_span(from_col, to_col) => {
+                vec![Event::PhaseResized {
+                    id,
+                    from_col,
+                    to_col,
+                }]
+            }
             _ => Vec::new(),
         },
         "region-rename" => {
