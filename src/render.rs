@@ -743,7 +743,7 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
             "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"11\" font-weight=\"600\" fill=\"{}\">{}</text>",
             x + 9.0,
             tab_y + 13.5,
-            diff_col.unwrap_or("#555555"),
+            diff_col.unwrap_or(AXIS_LABEL),
             esc(&label)
         ));
 
@@ -770,7 +770,7 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
         pivot_node_x.dedup();
         for kx in &pivot_node_x {
             p.push(format!(
-                "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"4\" fill=\"#555555\" \
+                "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"4\" fill=\"{AXIS_LABEL}\" \
                  stroke=\"#fbfbfd\" stroke-width=\"1.5\"/>",
                 *kx as f64 / 10.0,
                 cy
