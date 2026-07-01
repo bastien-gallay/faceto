@@ -52,12 +52,15 @@
   /* Inline add: a ghost ink-blue + that fades in when you hover a sticky (its right edge) or a lane
      title (prepend). DESIGN: the accent marks where you act; calmest form — a bare glyph, no chrome
      at rest. Click opens the same inline editor as rename to type the new label. */
-  #add-plus { position: fixed; display: none; z-index: 19; width: 22px; height: 22px; padding: 0;
-              border: none; background: none; cursor: pointer; color: #1A6FAE;
+  /* Hover glyphs — bare ghost affordances that fade in on a sticky's edge (the + add, the × remove).
+     Individually anchored, never a button row (DESIGN §6: no floating toolbar); each is one glyph in
+     the live-pen accent, no chrome at rest. */
+  #add-plus, #remove-x { position: fixed; display: none; z-index: 19; width: 22px; height: 22px;
+              padding: 0; border: none; background: none; cursor: pointer; color: #1A6FAE;
               font: 600 20px -apple-system, Segoe UI, Roboto, sans-serif; line-height: 22px;
               text-align: center; opacity: 0; transition: opacity .15s ease-out; }
-  #add-plus.show { display: block; opacity: 1; }
-  #add-plus:focus-visible { outline: 2px solid #1A6FAE; outline-offset: 1px; border-radius: 3px; opacity: 1; display: block; }
+  #add-plus.show, #remove-x.show { display: block; opacity: 1; }
+  #add-plus:focus-visible, #remove-x:focus-visible { outline: 2px solid #1A6FAE; outline-offset: 1px; border-radius: 3px; opacity: 1; display: block; }
   /* Region gestures (F-container Stage 6): the label tab is a focusable rename target — same
      focus-visible ring as a sticky, so keyboard and mouse discoverability stay in parity. The
      rail (an invisible per-column hit-strip, region.rs) only shows a cursor; its "+" reuses
@@ -71,7 +74,7 @@
      a label). No transition — a drag must track the cursor instantly. */
   #region-drag-guide { position: fixed; display: none; z-index: 18; width: 2px; background: #1A6FAE;
                         opacity: .8; pointer-events: none; }
-  @media (prefers-reduced-motion: reduce) { .edge, .sticky, #add-plus { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .edge, .sticky, #add-plus, #remove-x { transition: none; } }
   /* Narrow widths: let the header wrap instead of clipping. Without this the packing control
      (Rows / Columns / Grid) and the Reload button slide off-screen and become unreachable. */
   @media (max-width: 680px) {
@@ -118,7 +121,8 @@
 </header>
 <div id="board" role="group" aria-label="event-storming board — each sticky is a button: double-click or F2 to rename, Delete to remove, arrow keys to move, Enter to comment">__SVG__</div>
 <input id="rename-edit" aria-label="rename this element" autocomplete="off" spellcheck="false">
-<button id="add-plus" type="button" aria-label="add an element here" title="add an element">+</button>
+<button id="add-plus" class="hovglyph" type="button" aria-label="add an element here" title="add an element">+</button>
+<button id="remove-x" class="hovglyph" type="button" aria-label="remove this element" title="remove this element">×</button>
 <div id="region-drag-guide" aria-hidden="true"></div>
 
 <dialog id="modal">
@@ -375,7 +379,8 @@ function startStickyDrag(e) {
   const g = e.currentTarget;
   if (colOf[g.id] === undefined) return;
   stickyDrag = { id: g.id, startX: e.clientX, fromCol: colOf[g.id], col: colOf[g.id], moved: false };
-  plusBtn.classList.remove("show");   // the pointer is captured now, so its own mouseleave won't fire
+  // the pointer is captured now, so the hover glyphs' own mouseleave won't fire — hide them all
+  document.querySelectorAll(".hovglyph.show").forEach((b) => b.classList.remove("show"));
   g.setPointerCapture(e.pointerId);
   g.addEventListener("pointermove", dragSticky);
   g.addEventListener("pointerup", endStickyDrag);
@@ -459,6 +464,27 @@ function doRemove(id) {
   note(`removed ${id}`);
   postComment({ elemId: id, kind: "drop", text: "removed inline", ts: new Date().toISOString(), status: "open" });
 }
+
+// A hover glyph that acts on a stashed target id: a fixed ghost button (the × remove) that fades in
+// at a box corner and stays reachable while the cursor travels onto it — the + add glyph's grace
+// behaviour, factored so each glyph is a line of wiring, not a copy of the timer plumbing. `hoverId`
+// is cleared the moment the cursor leaves the box for the glyph, so the target is stashed on show.
+function graceGlyph(btn, act) {
+  let hideT = null;
+  btn.at = (x, y, targetId) => {
+    clearTimeout(hideT);
+    btn._target = targetId;
+    btn.style.left = `${x}px`;
+    btn.style.top = `${y}px`;
+    btn.classList.add("show");
+  };
+  btn.hideSoon = () => { hideT = setTimeout(() => btn.classList.remove("show"), 140); };
+  btn.addEventListener("mouseenter", () => clearTimeout(hideT));
+  btn.addEventListener("mouseleave", () => btn.hideSoon());
+  btn.addEventListener("click", () => { const id = btn._target; btn.classList.remove("show"); if (id) act(id); });
+  return btn;
+}
+const removeXBtn = graceGlyph($("#remove-x"), doRemove);
 
 // ---- inline add (the + affordance) ----------------------------------------
 // A ghost ink-blue + fades in on sticky hover (its right edge → add-after, same lane, col+1) and on
@@ -749,8 +775,12 @@ function bindStickies() {
       const r = g.getBoundingClientRect();
       showPlus(r.right + 4, r.top + r.height / 2 - 11,
         { type: g.dataset.kind, col: +g.dataset.col + 1, sx: r.right + 12, sy: r.top });
+      removeXBtn.at(r.right - 3, r.top - 9, g.id);   // × at the top-right corner
     };
-    g.onmouseleave = () => { if (hoverId === g.id) hoverId = null; hoverOff(); hidePlusSoon(); };
+    g.onmouseleave = () => {
+      if (hoverId === g.id) hoverId = null;
+      hoverOff(); hidePlusSoon(); removeXBtn.hideSoon();
+    };
     // Keyboard parity with the mouse: focusing a sticky makes it the ← / → move target (same as
     // hover) and spotlights its connectors; Enter / Space opens its comment dialog.
     g.onfocus = () => { hoverId = g.id; hoverOn(g.id); };
