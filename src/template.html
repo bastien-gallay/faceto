@@ -162,8 +162,10 @@ const STRUCTURAL_KINDS = new Set([
 ]);
 // Of those, add/drop/region-* have no client-side fallback: there is no id to mint, or nothing to
 // remove/resize/rename locally without a server round-trip. `move` is the one exception — it
-// still applies (see replayMoves) so it's excluded here even though it's structural above.
-const NOT_APPLIED_OFFLINE = new Set(["add", "drop", "region-add", "region-resize", "region-rename", "region-remove"]);
+// still applies (see replayMoves), so it's the one structural kind excluded here. Derived from
+// STRUCTURAL_KINDS (not hand-copied) so a future structural kind is safe-by-default: it starts
+// "not applied offline" until someone deliberately teaches replayMoves to apply it too.
+const NOT_APPLIED_OFFLINE = new Set([...STRUCTURAL_KINDS].filter((k) => k !== "move"));
 let serverLive = false;
 let comments = [];        // {elemId, kind, text, ts}  (kind:"move" carries col/prevCol/swap…)
 let shownVersion = null;  // model hash the board currently displays — the diff baseline
@@ -342,26 +344,18 @@ function doMove(id, dir) {
 // F2 opens it; Enter commits a kind:"rename", Escape cancels. The same non-blank rule the server
 // enforces (events::nonblank) is applied here, and an unchanged label is a no-op, so a slip never
 // posts a dead event. `renaming` holds the open edit (and silences the board's move/remove keys).
-// A region's label tab reuses the same editor (`region: true`), keyed by `regionId` instead of
-// `elemId` — a region isn't an element (F-container Stage 6).
+// A region's label tab reuses the same editor and function (`region` true), keyed by `regionId`
+// instead of `elemId` — a region isn't an element (F-container Stage 6). `regionDrag` also gates
+// this: a resize drag captures the pointer, but the keyboard (F2) isn't captured, so a rename must
+// not open mid-drag either (review: the two gestures had no mutual exclusion).
 let renaming = null;   // { id, original, region? } while editing, else null
-function startRename(g) {
-  if (!g || renaming || adding) return;
+function startRename(g, region) {
+  if (!g || renaming || adding || regionDrag) return;
   const input = $("#rename-edit"), r = g.getBoundingClientRect();
   Object.assign(input.style,
     { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, display: "block" });
-  input.value = g.dataset.hero || "";
-  renaming = { id: g.id, original: input.value };
-  input.focus();
-  input.select();
-}
-function startRegionRename(g) {
-  if (renaming || adding) return;
-  const input = $("#rename-edit"), r = g.getBoundingClientRect();
-  Object.assign(input.style,
-    { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, display: "block" });
-  input.value = g.dataset.label || "";
-  renaming = { id: g.dataset.region, original: input.value, region: true };
+  input.value = (region ? g.dataset.label : g.dataset.hero) || "";
+  renaming = region ? { id: g.dataset.region, original: input.value, region: true } : { id: g.id, original: input.value };
   input.focus();
   input.select();
 }
@@ -419,10 +413,15 @@ plusBtn.addEventListener("mouseenter", () => clearTimeout(plusHideT));
 plusBtn.addEventListener("mouseleave", hidePlusSoon);
 plusBtn.addEventListener("click", () => { if (plusBtn._action) startAdd(plusBtn._action); });
 function startAdd(action) {
-  if (renaming || adding) return;
+  if (renaming || adding || regionDrag) return;
   plusBtn.classList.remove("show");
   const input = $("#rename-edit");
-  const w = action.region ? 140 : CFG.stickyW, h = action.region ? 22 : CFG.stickyH;
+  // The region-add box mirrors render.rs's own tab-sizing formula via CFG (Composable — render.rs
+  // stays the single source of truth for this layout decision; see REGION_TAB_H etc. in render.rs).
+  // The label isn't known yet (the user hasn't typed it), so width guesses a placeholder length —
+  // same rough-preview spirit as the element box, which doesn't know the future label either.
+  const w = action.region ? CFG.regionTabCharW * 10 + CFG.regionTabPad : CFG.stickyW;
+  const h = action.region ? CFG.regionTabH : CFG.stickyH;
   Object.assign(input.style,
     { left: `${action.sx}px`, top: `${action.sy}px`, width: `${w}px`, height: `${h}px`, display: "block" });
   input.value = "";
@@ -471,6 +470,10 @@ function bindLaneAdders() {
 // the exact rail-cell edges the server itself renders — no pixel-to-column guessing needed, the
 // true bounds are read straight off the DOM (readRegionRail). `regionBounds` mirrors `baseCol` for
 // stickies: a snapshot of each region's current `[from, to]`, refreshed on every board swap.
+// regionBounds only tracks *live* regions (`.region:not(.removed)`) — a removed region's group
+// still carries `data-region`/`data-from-col`/`data-to-col` (so a diff overlay can identify it),
+// but nothing on the new side can resize/rename it, so its bounds have no business in a map every
+// live gesture reads by regionId.
 let regionBounds = {};      // regionId -> { from, to }
 let railLeft = {}, railRight = {};   // col -> its rail cell's left/right x, in SVG user units
 function readRegionRail() {
@@ -482,7 +485,11 @@ function readRegionRail() {
   });
 }
 // The column whose rail cell contains SVG-space x, or the nearest end column if x falls outside
-// every rail cell (dragged past the board's edge).
+// every rail cell (dragged past the board's edge). The rail only covers the element-derived
+// column range, but render.rs now clamps each region's own data-from-col/data-to-col into that
+// same range (review: emitting the raw unclamped bound here let a drag target a column with no
+// rail cell, silently discarding an off-screen region's true extent) — so every bound this
+// function needs to resolve is always addressable.
 function colAtSvgX(x) {
   const cols = Object.keys(railLeft).map(Number).sort((a, b) => a - b);
   if (!cols.length) return null;
@@ -491,8 +498,13 @@ function colAtSvgX(x) {
 }
 const dragGuide = $("#region-drag-guide");
 let regionDrag = null;   // { regionId, edge, otherCol, svgLeft, col? } while dragging, else null
+// Pointer Events + setPointerCapture (not mousedown/mousemove/mouseup on document): once captured,
+// every subsequent pointer event for this gesture — including its pointerup — is delivered to
+// `line` regardless of where the cursor ends up, even outside the browser window. Review: a plain
+// document-level mouseup misses entirely if the button is released off-window, leaking `regionDrag`
+// and the drag guide forever (no cleanup path existed for that case).
 function startRegionResize(e) {
-  if (e.button !== 0) return;   // left button only
+  if (e.button !== 0 || renaming || adding || regionDrag) return;
   e.preventDefault();
   const line = e.currentTarget;
   const bounds = regionBounds[line.dataset.region];
@@ -502,8 +514,10 @@ function startRegionResize(e) {
   regionDrag = { regionId: line.dataset.region, edge: line.dataset.edge, otherCol, svgLeft };
   const bandRect = line.getBoundingClientRect();   // the edge line already spans band_top..band_bot
   Object.assign(dragGuide.style, { top: `${bandRect.top}px`, height: `${bandRect.height}px`, display: "block" });
-  document.addEventListener("mousemove", dragRegionEdge);
-  document.addEventListener("mouseup", endRegionResize);
+  line.setPointerCapture(e.pointerId);
+  line.addEventListener("pointermove", dragRegionEdge);
+  line.addEventListener("pointerup", endRegionResize);
+  line.addEventListener("pointercancel", endRegionResize);
 }
 function dragRegionEdge(e) {
   if (!regionDrag) return;
@@ -517,13 +531,14 @@ function dragRegionEdge(e) {
   const x = regionDrag.edge === "from" ? railLeft[regionDrag.col] : railRight[regionDrag.col];
   dragGuide.style.left = `${regionDrag.svgLeft + x}px`;
 }
-function endRegionResize() {
-  document.removeEventListener("mousemove", dragRegionEdge);
-  document.removeEventListener("mouseup", endRegionResize);
+function endRegionResize(e) {
+  e.currentTarget.removeEventListener("pointermove", dragRegionEdge);
+  e.currentTarget.removeEventListener("pointerup", endRegionResize);
+  e.currentTarget.removeEventListener("pointercancel", endRegionResize);
   dragGuide.style.display = "none";
   const d = regionDrag;
   regionDrag = null;
-  if (!d || d.col === undefined) return;   // mousedown with no drag — nothing to commit
+  if (!d || d.col === undefined) return;   // pointerdown with no drag (or a cancel) — nothing to commit
   const fromCol = d.edge === "from" ? d.col : d.otherCol;
   const toCol = d.edge === "from" ? d.otherCol : d.col;
   const bounds = regionBounds[d.regionId];
@@ -535,7 +550,7 @@ function endRegionResize() {
 function bindRegions() {
   readRegionRail();
   regionBounds = {};
-  document.querySelectorAll(".region").forEach((g) => {
+  document.querySelectorAll(".region:not(.removed)").forEach((g) => {
     regionBounds[g.dataset.region] = { from: +g.dataset.fromCol, to: +g.dataset.toCol };
   });
   document.querySelectorAll(".region-rail").forEach((r) => {
@@ -547,11 +562,11 @@ function bindRegions() {
     r.onmouseleave = hidePlusSoon;
   });
   document.querySelectorAll(".region-tab").forEach((g) => {
-    g.onclick = () => startRegionRename(g);
-    g.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startRegionRename(g); } };
+    g.onclick = () => startRename(g, true);
+    g.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startRename(g, true); } };
   });
   document.querySelectorAll(".region-edge").forEach((edge) => {
-    edge.onmousedown = startRegionResize;
+    edge.onpointerdown = startRegionResize;
   });
 }
 
@@ -739,7 +754,9 @@ $("#rename-edit").addEventListener("keydown", (e) => {
 });
 $("#rename-edit").addEventListener("blur", () => { adding ? endAdd(true) : endRename(true); });
 document.addEventListener("keydown", (e) => {
-  if ($("#modal").open || renaming || adding || !hoverId) return;
+  // regionDrag: a resize drag captures the pointer but not the keyboard, so F2 could otherwise
+  // open a rename mid-drag (review: no gesture guarded against the other's in-progress state).
+  if ($("#modal").open || renaming || adding || regionDrag || !hoverId) return;
   const ae = document.activeElement;
   if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {

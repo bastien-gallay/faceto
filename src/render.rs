@@ -112,6 +112,13 @@ const MARGIN_L: f64 = 150.0;
 const MARGIN_T: f64 = 116.0;
 const STICKY_W: f64 = 176.0;
 const STICKY_H: f64 = 74.0;
+// A region's label tab: fixed height, width grows with the label (a per-char pitch + fixed
+// padding). The client's region-add editor mirrors `REGION_TAB_H` via `__CONFIG__` rather than
+// inventing its own box size (CUPID-Composable: render.rs is the single source of truth for a
+// layout decision the client also needs — CODING_STANDARDS.md §Composable).
+const REGION_TAB_H: f64 = 19.0;
+const REGION_TAB_CHAR_W: f64 = 6.6;
+const REGION_TAB_PAD: f64 = 18.0;
 // How far apart sibling connectors fan when several meet a box on the same face (F-edge-routing
 // Lever B). Deliberately small — the calm-instrument register wants a gentle spread, not a starburst.
 // `fan_offsets` caps the per-slot step below this when a face is crowded, so the extreme anchor
@@ -688,6 +695,14 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
         let x = col_left[lo];
         let right = col_left[hi] + col_width[hi];
         let w = right - x;
+        // The *clamped* bound (review: a region drag desyncs if the client reads the raw stored
+        // `ph.from_col`/`ph.to_col` — those can extend past `min_col..max_col` (the element-derived
+        // range the region-rail covers), so a resize starting from an out-of-range "other edge"
+        // could target a column with no rail cell at all. Emitting the same clamped value the
+        // visual box already uses keeps the client's drag math and the rendered board in lockstep —
+        // WYSIWYG: what's draggable is exactly what's drawn, never a hidden true bound.
+        let clamped_from = min_col + lo as i64;
+        let clamped_to = min_col + hi as i64;
 
         // Diff verdict mapped onto the element-diff vocabulary (Review #4: read `Phase.diff` or a
         // *removed* region — now fed into `model.phases` by `diff_phases` — paints as a phantom
@@ -703,14 +718,15 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
             ""
         };
 
-        // One group per region carries its identity + stored bounds (Stage 6: the client reads
-        // `data-from-col`/`data-to-col` to know a resize's *other* edge without inverse pixel math).
+        // One group per region carries its identity + *clamped* bounds (Stage 6: the client reads
+        // `data-from-col`/`data-to-col` to know a resize's *other* edge without inverse pixel math;
+        // clamped so that edge always falls on a column the region-rail actually covers).
         p.push(format!(
             "<g class=\"region{}\" data-region=\"{}\" data-from-col=\"{}\" data-to-col=\"{}\">",
             if removed { " removed" } else { "" },
             esc(&ph.id),
-            ph.from_col,
-            ph.to_col
+            clamped_from,
+            clamped_to
         ));
         if removed {
             p.push("<g opacity=\"0.45\">".to_string());
@@ -728,24 +744,24 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
             "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1\"{}/>",
             x, band_top, right, band_top, top_stroke, dash
         ));
-        for (edge_x, edge, col) in [(x, "from", ph.from_col), (right, "to", ph.to_col)] {
+        for (edge_x, edge) in [(x, "from"), (right, "to")] {
             p.push(format!(
                 "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1.5\"{}/>",
                 edge_x, band_top, edge_x, band_bot, stroke, dash
             ));
             // A wide transparent hit-region carries the resize affordance for the Stage-6 client to
             // grab (the *visual* half of D5: grab target = the band border, not a sticky). A removed
-            // region is gone on the new side — there is nothing to resize, so no handle. `data-col`
-            // is this edge's own authored bound, so a drag only needs to read the *other* edge's
-            // bound off the enclosing `<g>` to post a full `region-resize`.
+            // region is gone on the new side — there is nothing to resize, so no handle. The dragged
+            // edge's own bound is resolved client-side from the rail cell under the cursor, not from
+            // an attribute here — only the enclosing `<g>`'s `data-from-col`/`data-to-col` carry a
+            // stored bound (the *other*, undragged edge's).
             if !removed {
                 p.push(format!(
-                    "<line class=\"region-edge\" data-region=\"{}\" data-edge=\"{}\" data-col=\"{}\" \
+                    "<line class=\"region-edge\" data-region=\"{}\" data-edge=\"{}\" \
                      x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"transparent\" \
                      stroke-width=\"8\"/>",
                     esc(&ph.id),
                     edge,
-                    col,
                     edge_x,
                     band_top,
                     edge_x,
@@ -763,8 +779,8 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
             Some(b) => format!("{b} {}", ph.label),
             None => ph.label.clone(),
         };
-        let tab_h = 19.0;
-        let tab_w = label.chars().count() as f64 * 6.6 + 18.0;
+        let tab_h = REGION_TAB_H;
+        let tab_w = label.chars().count() as f64 * REGION_TAB_CHAR_W + REGION_TAB_PAD;
         let tab_y = band_top - tab_h + 1.0;
         if !removed {
             // `data-label` carries the *raw* stored label (no diff badge) — the Stage-6 rename
@@ -1162,13 +1178,17 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
 pub fn render_html(svg: &str, title: &str, packing: Packing) -> String {
     // The client reuses these geometry constants to re-place a moved sticky and redraw its edges
     // in the browser, and `pack` so its packing control opens on the mode the SVG was rendered in —
-    // keep render.rs the single source of truth for them.
+    // keep render.rs the single source of truth for them. `regionTabH`/`regionTabCharW` do the same
+    // for the region-add editor's box (Composable — the client must not invent its own tab size).
     let cfg = format!(
-        "{{\"colW\":{},\"stickyW\":{},\"stickyH\":{},\"pack\":\"{}\"}}",
+        "{{\"colW\":{},\"stickyW\":{},\"stickyH\":{},\"pack\":\"{}\",\"regionTabH\":{},\"regionTabCharW\":{},\"regionTabPad\":{}}}",
         COL_W,
         STICKY_W,
         STICKY_H,
-        packing.as_str()
+        packing.as_str(),
+        REGION_TAB_H,
+        REGION_TAB_CHAR_W,
+        REGION_TAB_PAD
     );
     HTML_TEMPLATE
         .replace("__TITLE__", &esc(title))
@@ -1426,18 +1446,16 @@ mod tests {
         };
         let svg = render_svg_packed(&m, Packing::Rows);
         assert!(svg.contains(">Context A<"), "region label tab is missing");
-        // Both border edges carry the resize affordance, addressed by region id + side, each
-        // stamped with its own authored bound (Stage 6: a drag reads the *other* edge off the
-        // enclosing group instead of inverting screen pixels back to a column).
-        assert!(svg.contains(
-            "class=\"region-edge\" data-region=\"K1\" data-edge=\"from\" data-col=\"0\""
-        ));
+        // Both border edges carry the resize affordance, addressed by region id + side.
+        assert!(svg.contains("class=\"region-edge\" data-region=\"K1\" data-edge=\"from\""));
+        assert!(svg.contains("class=\"region-edge\" data-region=\"K1\" data-edge=\"to\""));
+        // The enclosing group carries the region's *clamped* bounds — K1's authored to_col (2) is
+        // past the last visible column (elements only reach col 1), so the group reports the
+        // clamped bound (1), matching the visual box exactly. Review: emitting the raw, unclamped
+        // `ph.to_col` here desynced the client's drag math from the rail (which only covers
+        // min_col..max_col) — a resize could target a column with no rail cell at all.
         assert!(svg
-            .contains("class=\"region-edge\" data-region=\"K1\" data-edge=\"to\" data-col=\"2\""));
-        // The enclosing group carries the region's stable bounds, so a resize doesn't need to
-        // invert screen pixels back to a column for the edge that isn't being dragged.
-        assert!(svg
-            .contains("class=\"region\" data-region=\"K1\" data-from-col=\"0\" data-to-col=\"2\""));
+            .contains("class=\"region\" data-region=\"K1\" data-from-col=\"0\" data-to-col=\"1\""));
         // The label tab is one focusable rename target (mirrors the sticky's role=button pattern).
         assert!(svg.contains(
             "class=\"region-tab\" data-region=\"K1\" data-label=\"Context A\" role=\"button\" \

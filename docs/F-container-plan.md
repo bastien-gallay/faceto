@@ -170,6 +170,29 @@ K2 via a simulated drag) end to end through the real HTTP server, each producing
 No client-side gesture exists yet for `region-remove` (not required by this stage's bullet list;
 the server route has existed since Stage 5).
 
+**Medium-effort review on PR #11 found and fixed 8 issues:** neither `render.rs` nor the client
+guarded against a region's *authored* bounds extending past the element-derived column range the
+rail covers — `data-from-col`/`data-to-col` carried the raw unclamped `Phase` value, so dragging
+such a region's edge could silently discard its true off-screen extent (`railLeft`/`railRight`
+lookups miss for a column with no rail cell). Fixed by emitting the same *clamped* bound the
+visual box already uses (WYSIWYG: what's draggable is exactly what's drawn) — a small, narrowly-
+scoped fix over widening the whole board's column range. Also fixed: a region-resize drag had no
+pointer capture, so releasing the mouse outside the browser window never fired the `mouseup` that
+cleans it up, permanently leaking the drag state and a stuck guide line — switched to Pointer
+Events + `setPointerCapture` (every subsequent event for the gesture, including its end, is now
+delivered to the captured element regardless of cursor position). Neither direction of
+resize-drag ↔ rename/add had a reentrancy guard (every other gesture-start function already
+checked `renaming || adding`) — added `regionDrag` to those guards and `renaming || adding` to
+`startRegionResize`. Cleanup: `startRegionRename` (a near-verbatim copy of `startRename`) folded
+into one function taking an optional `region` flag; `NOT_APPLIED_OFFLINE` now derives from
+`STRUCTURAL_KINDS` instead of a hand-copied duplicate; the unused `data-col` on `.region-edge`
+(never read client-side) removed; `regionBounds` now excludes removed/ghosted regions
+(`.region:not(.removed)`); the region-add editor's box size now reads `regionTabH`/
+`regionTabCharW`/`regionTabPad` from `__CONFIG__` (new `REGION_TAB_*` constants in render.rs)
+instead of hardcoding `140`/`22`. 89 tests green (1 updated to pin the new clamped-bound contract);
+all fixes re-verified by hand against a live server, including the pointer-capture drag completing
+correctly and the reentrancy guards blocking a resize-during-rename attempt.
+
 ## Stage 7 — Example + roadmap · housekeeping · ✅ done (branch `feat/F-container-client-gestures`)
 
 - Add a region (and a pivotal boundary event) to `examples/sample.model.json`; verify `genesis →
