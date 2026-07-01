@@ -137,21 +137,18 @@
     <div class="modal-b">
       <div class="rel" id="m-rel"></div>
       <div class="prior" id="m-prior"></div>
+      <!-- Prose actions only. Rename / drop / move are direct board gestures now (double-click / F2,
+           the × glyph or Delete, drag or ← / →); resolve is gated to hotspots / open questions in
+           openModal. -->
       <select id="m-kind">
         <option value="comment">comment</option>
         <option value="split">split — this is more than one element</option>
-        <option value="rename">rename / reword</option>
-        <option value="drop">drop — never happened</option>
-        <option value="move">move — wrong lane / position</option>
         <option value="question">open question</option>
         <option value="resolve">resolve a hotspot</option>
       </select>
       <textarea id="m-text" placeholder="short note — the next session reads this and adjusts the model"></textarea>
     </div>
     <div class="modal-f">
-      <button type="button" id="m-left" title="move this sticky one column left (or press ← while hovering it)">Move ←</button>
-      <button type="button" id="m-right" title="move this sticky one column right (or press → while hovering it)">Move →</button>
-      <span class="spacer" style="flex:1"></span>
       <button value="cancel">Cancel</button>
       <button id="m-save" value="save" style="background:#1A6FAE;color:#fff;border-color:#1A6FAE">Save comment</button>
     </div>
@@ -823,6 +820,11 @@ function openModal(g) {
   $("#m-rel").innerHTML = rel ? "connected to: " + rel : "";
   $("#m-text").value = "";
   $("#m-kind").value = "comment";
+  // Resolve only makes sense on a hotspot or an element carrying an open question — hide it elsewhere
+  // (the reset to "comment" above means a hidden option is never the live selection).
+  const hasQuestion = (window._byEl?.[id] || []).some((c) => c.kind === "question");
+  const resolveOpt = $("#m-kind option[value='resolve']");
+  resolveOpt.hidden = resolveOpt.disabled = !(g.dataset.kind === "hotspot" || hasQuestion);
   const prior = (window._byEl?.[id] || []).map((c) => `<div>[${esc(c.kind)}] ${esc(c.text)}</div>`).join("");
   $("#m-prior").innerHTML = prior ? "<b>prior:</b>" + prior : "";
   $("#modal").returnValue = "cancel";
@@ -842,10 +844,6 @@ $("#modal").addEventListener("close", () => {
   const ts = new Date().toISOString();
   postComment({ elemId: window._activeId, kind: $("#m-kind").value, text, ts, status: "open" });
 });
-
-// Move buttons close the modal first so the nudge is visible (the backdrop dims the board).
-$("#m-left").addEventListener("click", () => { const id = window._activeId; $("#modal").close("move"); doMove(id, "left"); });
-$("#m-right").addEventListener("click", () => { const id = window._activeId; $("#modal").close("move"); doMove(id, "right"); });
 
 // Hover or focus a sticky and act on it from the keyboard — the keyboard-fast path, parity with
 // the mouse: ← / → nudge a column, F2 renames in place, c opens its comment, Delete / Backspace
