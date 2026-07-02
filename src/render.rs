@@ -101,12 +101,11 @@ fn phase_diff_kind(diff: Option<&str>) -> Option<&'static str> {
 }
 
 const COL_W: f64 = 210.0;
-// When a (lane, col) cell holds several simultaneous stickies they unpack into a sub-grid. A
-// sub-row adds ROW_PITCH of height; a sub-column adds SUBCOL_W of width. LANE_VPAD keeps a single
-// -row lane at the classic 108px (92 + 16), so uncrowded boards look exactly as before whatever the
-// packing.
+// When a (lane, col) cell holds several simultaneous stickies they auto-stack into sub-rows, each
+// adding ROW_PITCH of height (a stored `y` places its element freely in the same band instead).
+// LANE_VPAD keeps a single-row lane at the classic 108px (92 + 16), so uncrowded boards look
+// exactly as before.
 const ROW_PITCH: f64 = 92.0;
-const SUBCOL_W: f64 = 190.0;
 const LANE_VPAD: f64 = 16.0;
 const MARGIN_L: f64 = 150.0;
 const MARGIN_T: f64 = 116.0;
@@ -316,22 +315,20 @@ fn edge_path(p1: (f64, f64), p2: (f64, f64), off1: f64, off2: f64) -> String {
     }
 }
 
-/// Lever A (F-edge-routing): order each `(lane, col)` cell's simultaneous members by the mean band
-/// of their edge neighbours — a neighbour's lane (Rows/Grid) or its col (Columns), both fixed, so
-/// one deterministic pass with no layered iteration — and return `(sub_ord, cell_total)`. A member
-/// with no edges falls back to its own (shared) band, so an edge-free cell keeps file order through
-/// the stable sort. Output is independent of `HashMap` iteration order (each cell writes disjoint
-/// `sub_ord` indices), so the render stays deterministic.
+/// Order each `(lane, col)` cell's simultaneous members and return `(sub_ord, cell_total)`.
+/// The primary key is the **stored `y`** (F-2d-placement): a dropped-on-top element (small
+/// fraction) takes an upper slot, dropped-below (large fraction) a lower one; an unplaced member
+/// keeps the neutral 0.5. Within equal keys, the edge-neighbour barycenter orders the stack
+/// (Lever A, F-edge-routing — a neighbour's lane is fixed, so one deterministic pass), and a
+/// member with no edges falls back to its own (shared) lane, so an edge-free cell keeps file
+/// order through the stable sort. Output is independent of `HashMap` iteration order (each cell
+/// writes disjoint `sub_ord` indices), so the render stays deterministic.
 fn cell_sub_order(
     elements: &[Element],
     edges: &[Edge],
     idx_of: &HashMap<&str, usize>,
-    packing: Packing,
 ) -> (Vec<i64>, HashMap<(String, i64), i64>) {
-    let band = |j: usize| match packing {
-        Packing::Columns => elements[j].col.unwrap() as f64,
-        _ => lane_index(&elements[j].kind) as f64,
-    };
+    let band = |j: usize| lane_index(&elements[j].kind) as f64;
     // Running barycenter: a sum of neighbour bands and a count per node — no per-node Vec allocated.
     let mut bsum = vec![0.0_f64; elements.len()];
     let mut bcnt = vec![0u32; elements.len()];
@@ -358,13 +355,21 @@ fn cell_sub_order(
             .or_default()
             .push(i);
     }
+    // A member's placement key: its stored `y` clamped into the band (an out-of-range log value
+    // must still sort *inside* the stack), 0.5 — the neutral middle — when unplaced.
+    let key = |j: usize| elements[j].y.map(|y| y.clamp(0.0, 1.0)).unwrap_or(0.5);
     let mut sub_ord = vec![0i64; elements.len()];
     for members in cell_members.values_mut() {
-        // Members enter in file order; the stable sort keeps that order for equal barycenters.
+        // Members enter in file order; the stable sort keeps that order for equal keys.
         members.sort_by(|&a, &b| {
-            bary(a)
-                .partial_cmp(&bary(b))
+            key(a)
+                .partial_cmp(&key(b))
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then(
+                    bary(a)
+                        .partial_cmp(&bary(b))
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
         });
         for (rank, &i) in members.iter().enumerate() {
             sub_ord[i] = rank as i64;
@@ -444,52 +449,7 @@ fn fan_offsets(ends: &[Option<(usize, usize)>], centers: &[(f64, f64)]) -> (Vec<
     (off_src, off_dst)
 }
 
-/// How a cell of several *simultaneous* stickies (same lane + col) is unpacked so none hide. `col`
-/// stays the timeline — we never spread members across fake columns — only their pixels move.
-#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
-pub enum Packing {
-    /// Stack into sub-rows: the board grows taller. The calm default.
-    #[default]
-    Rows,
-    /// Fan into sub-columns: the board grows wider (a timeline scrolls sideways naturally).
-    Columns,
-    /// Pack into a near-square sub-grid: height and width grow modestly. The balanced mix.
-    Grid,
-}
-
-impl Packing {
-    /// Parse a `--pack` flag / `?pack=` query value; anything unrecognised falls back to `Rows`.
-    pub fn parse(s: &str) -> Packing {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "columns" | "column" | "cols" | "col" => Packing::Columns,
-            "grid" | "mix" | "mixed" => Packing::Grid,
-            _ => Packing::Rows,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Packing::Rows => "rows",
-            Packing::Columns => "columns",
-            Packing::Grid => "grid",
-        }
-    }
-
-    /// The sub-grid `(cols, rows)` that a cell of `n` simultaneous stickies unpacks into.
-    fn cell_grid(self, n: i64) -> (i64, i64) {
-        let n = n.max(1);
-        match self {
-            Packing::Rows => (1, n),
-            Packing::Columns => (n, 1),
-            Packing::Grid => {
-                let cols = (n as f64).sqrt().ceil() as i64;
-                (cols, (n + cols - 1) / cols)
-            }
-        }
-    }
-}
-
-pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
+pub fn render_svg(model: &Model) -> String {
     let mut elements = model.elements.clone();
 
     // R: the 8-lane scaffold is the board's structure, not a function of its contents. Every lane
@@ -514,45 +474,28 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
 
     // Two or more elements sharing a (lane, col) cell are *simultaneous* — `col` is the timeline,
     // not a per-lane slot — so we never spread them across fake columns (that would lie about when
-    // they happen). Instead each cell unpacks into a sub-grid (`Packing`): `sub_ord[i]` is element
-    // i's slot within its cell, `cell_total` the cell's count. Lever A (F-edge-routing) orders a
-    // crowded cell by its members' edge-neighbour barycenter — see `cell_sub_order`. `idx_of` (the
-    // id→index map) is reused below to resolve edge endpoints, so it is built once here.
+    // they happen). Each cell auto-stacks into sub-rows: `sub_ord[i]` is element i's slot within
+    // its cell, `cell_total` the cell's count. Lever A (F-edge-routing) orders a crowded cell by
+    // its members' edge-neighbour barycenter — see `cell_sub_order`. A stored `y` overrides its
+    // element's auto slot below (F-2d-placement). `idx_of` (the id→index map) is reused below to
+    // resolve edge endpoints, so it is built once here.
     let idx_of: HashMap<&str, usize> = elements
         .iter()
         .enumerate()
         .map(|(i, e)| (e.id.as_str(), i))
         .collect();
-    let (sub_ord, cell_total) = cell_sub_order(&elements, &model.edges, &idx_of, packing);
+    let (sub_ord, cell_total) = cell_sub_order(&elements, &model.edges, &idx_of);
 
-    // Each timeline column is as wide as its busiest cell's sub-columns demand; each lane as tall
-    // as its deepest cell's sub-rows. The chosen packing decides how a cell's count splits between
-    // the two, so the same board can grow tall (Rows), wide (Columns), or both modestly (Grid).
-    let mut col_subcols = vec![1i64; ncols];
+    // Every timeline column is one COL_W slot — one col, one x (no sub-columns; the interstice
+    // work of F-region-frontiers leans on this). A lane is as tall as its deepest cell's stack.
     let mut lane_rows: HashMap<&str, i64> = present.iter().map(|t| (*t, 1)).collect();
-    for ((kind, col), total) in &cell_total {
-        let (cc, cr) = packing.cell_grid(*total);
-        let c = &mut col_subcols[(*col - min_col) as usize];
-        *c = (*c).max(cc);
+    for ((kind, _), total) in &cell_total {
         let r = lane_rows.get_mut(kind.as_str()).unwrap();
-        *r = (*r).max(cr);
+        *r = (*r).max(*total);
     }
 
-    // Column x positions (cumulative widths) and lane y positions (cumulative heights).
-    let mut col_left = vec![0.0_f64; ncols];
-    let mut col_width = vec![COL_W; ncols];
-    let mut x = MARGIN_L;
-    for c in 0..ncols {
-        let w = if col_subcols[c] <= 1 {
-            COL_W
-        } else {
-            col_subcols[c] as f64 * SUBCOL_W
-        };
-        col_left[c] = x;
-        col_width[c] = w;
-        x += w;
-    }
-    let board_right = x;
+    let col_left = |c: usize| MARGIN_L + c as f64 * COL_W;
+    let board_right = col_left(ncols);
 
     let mut lane_top: HashMap<String, f64> = HashMap::new();
     let mut lane_h: HashMap<String, f64> = HashMap::new();
@@ -565,22 +508,22 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
     }
     let lanes_bottom = y;
 
-    // Resolve every element to an absolute centre. Its cell's sub-grid is centred within the room
-    // the column/lane reserved (`lead_*` slots of slack on each side), so a lone sticky keeps its
-    // classic mid-lane position and only crowded cells expand symmetrically around it.
+    // Resolve every element to an absolute centre. X is its column's midpoint — always. Y is a
+    // **grid slot**, never a free position: the cell's stack (ordered by stored `y`, see
+    // `cell_sub_order`) is centred within the room the lane reserved (`lead_r` rows of slack on
+    // each side), so a lone sticky keeps its classic mid-lane position whatever its `y`, and a
+    // shared cell splits its members onto distinct row centres (the lane grew to hold them).
     let centers: Vec<(f64, f64)> = elements
         .iter()
         .enumerate()
         .map(|(i, e)| {
             let col = e.col.unwrap();
-            let (cc, cr) = packing.cell_grid(cell_total[&(e.kind.clone(), col)]);
-            let (sc, sr) = (sub_ord[i] % cc, sub_ord[i] / cc);
-            let c = (col - min_col) as usize;
-            let slot_w = col_width[c] / col_subcols[c] as f64;
-            let lead_c = (col_subcols[c] - cc) as f64 / 2.0;
-            let cx = col_left[c] + (lead_c + sc as f64 + 0.5) * slot_w;
-            let lead_r = (lane_rows[e.kind.as_str()] - cr) as f64 / 2.0;
-            let cy = lane_top[&e.kind] + LANE_VPAD / 2.0 + (lead_r + sr as f64 + 0.5) * ROW_PITCH;
+            let cx = col_left((col - min_col) as usize) + COL_W / 2.0;
+            let band_top = lane_top[&e.kind] + LANE_VPAD / 2.0;
+            let rows = lane_rows[e.kind.as_str()];
+            let total = cell_total[&(e.kind.clone(), col)];
+            let lead_r = (rows - total) as f64 / 2.0;
+            let cy = band_top + (lead_r + sub_ord[i] as f64 + 0.5) * ROW_PITCH;
             (cx, cy)
         })
         .collect();
@@ -679,14 +622,14 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
     // regions below, so a live region's own rect/edges/tab paint over it and stay clickable for
     // their own gestures; the rail only "shows through" (hoverable) in the gaps — exactly the
     // create-region affordance, with no extra client-side membership logic.
-    for (idx, cw) in col_width.iter().enumerate() {
+    for idx in 0..ncols {
         p.push(format!(
             "<rect class=\"region-rail\" data-col=\"{}\" x=\"{:.1}\" y=\"{}\" width=\"{:.1}\" \
              height=\"{}\" fill=\"transparent\"/>",
             min_col + idx as i64,
-            col_left[idx],
+            col_left(idx),
             band_top,
-            cw,
+            COL_W,
             band_bot - band_top
         ));
     }
@@ -695,8 +638,8 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
         let a = clamp_idx(ph.from_col);
         let b = clamp_idx(ph.to_col);
         let (lo, hi) = (a.min(b), a.max(b));
-        let x = col_left[lo];
-        let right = col_left[hi] + col_width[hi];
+        let x = col_left(lo);
+        let right = col_left(hi) + COL_W;
         let w = right - x;
         // The *clamped* bound (review: a region drag desyncs if the client reads the raw stored
         // `ph.from_col`/`ph.to_col` — those can extend past `min_col..max_col` (the element-derived
@@ -845,35 +788,6 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
         }
     }
 
-    // Time-slot trays — a faint rounded backing hugging every cell that holds more than one sticky,
-    // so a fanned/stacked group still reads as "these are simultaneous" however it is packed. Sorted
-    // for deterministic output (HashMap order is not stable).
-    let mut cell_box: HashMap<(String, i64), (f64, f64, f64, f64)> = HashMap::new();
-    for (i, e) in elements.iter().enumerate() {
-        let (cx, cy) = centers[i];
-        let b = cell_box
-            .entry((e.kind.clone(), e.col.unwrap()))
-            .or_insert((cx, cy, cx, cy));
-        b.0 = b.0.min(cx);
-        b.1 = b.1.min(cy);
-        b.2 = b.2.max(cx);
-        b.3 = b.3.max(cy);
-    }
-    let mut cells: Vec<&(String, i64)> = cell_box.keys().filter(|k| cell_total[*k] > 1).collect();
-    cells.sort();
-    for k in cells {
-        let (minx, miny, maxx, maxy) = cell_box[k];
-        let pad = 9.0;
-        p.push(format!(
-            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"12\" \
-             fill=\"#90a4ae\" opacity=\"0.1\"/>",
-            minx - STICKY_W / 2.0 - pad,
-            miny - STICKY_H / 2.0 - pad,
-            (maxx - minx) + STICKY_W + 2.0 * pad,
-            (maxy - miny) + STICKY_H + 2.0 * pad,
-        ));
-    }
-
     // Faint horizontal lane rules — graph-paper bench lines that delimit lanes now that a busy
     // lane can span several rows.
     for t in present.iter().skip(1) {
@@ -885,15 +799,21 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
         ));
     }
 
-    // Lane labels — centred on each lane's (possibly multi-row) band.
+    // Lane labels — centred on each lane's (possibly multi-row) band. `data-band-top`/
+    // `data-band-h` expose the band *interior* (the `y` fraction's frame of reference) so the
+    // client's vertical drag converts a pixel drop into a stored fraction without re-deriving
+    // the lane geometry — render.rs stays the single source of truth for it (Composable).
     for t in &present {
         let y = lane_top[*t] + lane_h[*t] / 2.0;
         // `class`/`data-lane` let the client hang the lane-title `+` (inline-add prepend) on each
         // label; the rendered text content is unchanged.
         p.push(format!(
-            "<text class=\"lane-label\" data-lane=\"{}\" x=\"16\" y=\"{:.1}\" font-size=\"12\" \
+            "<text class=\"lane-label\" data-lane=\"{}\" data-band-top=\"{:.1}\" \
+             data-band-h=\"{:.1}\" x=\"16\" y=\"{:.1}\" font-size=\"12\" \
              font-weight=\"600\" fill=\"{}\">{}</text>",
             esc(t),
+            lane_top[*t] + LANE_VPAD / 2.0,
+            lane_h[*t] - LANE_VPAD,
             y + 4.0,
             AXIS_LABEL,
             esc(t)
@@ -1178,20 +1098,16 @@ pub fn render_svg_packed(model: &Model, packing: Packing) -> String {
     p.join("\n")
 }
 
-pub fn render_html(svg: &str, title: &str, packing: Packing) -> String {
+pub fn render_html(svg: &str, title: &str) -> String {
     // The client reuses these geometry constants to re-place a moved sticky and redraw its edges
-    // in the browser, and `pack` so its packing control opens on the mode the SVG was rendered in —
-    // keep render.rs the single source of truth for them. `regionTabH`/`regionTabCharW` do the same
-    // for the region-add editor's box (Composable — the client must not invent its own tab size).
+    // in the browser — keep render.rs the single source of truth for them. `regionTabH`/
+    // `regionTabCharW` do the same for the region-add editor's box (Composable — the client must
+    // not invent its own tab size).
+    // `rowPitch`/`laneVpad` let the drag preview place the lane-growth guide exactly one row
+    // below the lane's current bottom rule — the same numbers this renderer will use on commit.
     let cfg = format!(
-        "{{\"colW\":{},\"stickyW\":{},\"stickyH\":{},\"pack\":\"{}\",\"regionTabH\":{},\"regionTabCharW\":{},\"regionTabPad\":{}}}",
-        COL_W,
-        STICKY_W,
-        STICKY_H,
-        packing.as_str(),
-        REGION_TAB_H,
-        REGION_TAB_CHAR_W,
-        REGION_TAB_PAD
+        "{{\"colW\":{},\"stickyW\":{},\"stickyH\":{},\"rowPitch\":{},\"laneVpad\":{},\"regionTabH\":{},\"regionTabCharW\":{},\"regionTabPad\":{}}}",
+        COL_W, STICKY_W, STICKY_H, ROW_PITCH, LANE_VPAD, REGION_TAB_H, REGION_TAB_CHAR_W, REGION_TAB_PAD
     );
     HTML_TEMPLATE
         .replace("__TITLE__", &esc(title))
@@ -1281,7 +1197,7 @@ mod tests {
     // title is a hoverable add-target. Pin all 8 labels on a zero-element board.
     #[test]
     fn every_lane_renders_even_on_an_empty_board() {
-        let svg = render_svg_packed(&empty_board(), Packing::default());
+        let svg = render_svg(&empty_board());
         for lane in LANES {
             assert!(
                 svg.contains(&format!(">{lane}</text>")),
@@ -1292,7 +1208,7 @@ mod tests {
 
     #[test]
     fn sticky_group_exposes_layout_data_attributes() {
-        let svg = render_svg_packed(&one_event_at_col(2), Packing::default());
+        let svg = render_svg(&one_event_at_col(2));
         assert!(svg.contains("data-kind=\"event\""));
         assert!(svg.contains("data-col=\"2\""));
         assert!(svg.contains("data-cx="));
@@ -1303,7 +1219,7 @@ mod tests {
     // If these ever stop being emitted the board silently becomes mouse-only again — pin them.
     #[test]
     fn sticky_group_is_a_focusable_labelled_button() {
-        let svg = render_svg_packed(&one_event_at_col(2), Packing::default());
+        let svg = render_svg(&one_event_at_col(2));
         assert!(svg.contains("role=\"button\""));
         assert!(svg.contains("tabindex=\"0\""));
         assert!(svg.contains("aria-label=\"E1, L, event\""));
@@ -1341,15 +1257,23 @@ mod tests {
         }
     }
 
-    // The faithfulness contract: simultaneous stickies (same lane + col) must never render on top
-    // of one another. They stack into sub-rows, so every centre is unique — no element is hidden.
+    // The faithfulness contract: simultaneous stickies (same lane + col) with no stored `y` must
+    // never render on top of one another. They auto-stack into sub-rows down one column — one col,
+    // one x (the packing modes and their sub-columns are gone; F-2d-placement) — so every centre
+    // is unique and no element is hidden.
     #[test]
     fn simultaneous_stickies_stack_into_distinct_centres() {
-        let svg = render_svg_packed(&events_at_col(2, 5), Packing::default());
+        let svg = render_svg(&events_at_col(2, 5));
         let cys = attr_values(&svg, "data-cy");
         assert_eq!(cys.len(), 5);
         let unique: std::collections::HashSet<&String> = cys.iter().collect();
         assert_eq!(unique.len(), 5, "stacked stickies share a centre: {cys:?}");
+        assert_eq!(distinct(&svg, "data-cx"), 1, "one col = one x, always");
+        // The dark grey "time-slot tray" went with the packing modes — a poor 2D representation.
+        assert!(
+            !svg.contains("fill=\"#90a4ae\""),
+            "the grey cell tray must be gone"
+        );
     }
 
     fn distinct(svg: &str, attr: &str) -> usize {
@@ -1359,28 +1283,51 @@ mod tests {
             .len()
     }
 
-    // Each packing keeps every centre distinct (nothing hidden) but grows a different axis:
-    // Columns fans 4 stickies across 4 x-positions on one row; Rows stacks them down one column;
-    // Grid splits 4 into a 2×2 block. This is the whole point of the three modes.
+    // F-2d-placement (grid form): a stored `y` is an *ordering key*, never a free position —
+    // everything renders on row-slot centres. A lone element stays on the classic mid-line
+    // whatever its `y`; a shared cell splits its members top/bottom by their keys (an unplaced
+    // member holds the neutral middle), and an out-of-range log value clamps into the stack
+    // instead of drawing off-band.
     #[test]
-    fn packing_chooses_its_growth_axis() {
-        let cols = render_svg_packed(&events_at_col(0, 4), Packing::Columns);
-        assert_eq!(
-            (distinct(&cols, "data-cx"), distinct(&cols, "data-cy")),
-            (4, 1)
-        );
+    fn a_lone_element_stays_on_the_grid_mid_line_whatever_its_y() {
+        for y in [0.0, 0.5, 0.93] {
+            let mut m = one_event_at_col(0);
+            m.elements[0].y = Some(y);
+            assert_eq!(
+                attr_values(&render_svg(&m), "data-cy"),
+                vec!["494.0".to_string()],
+                "y={y} must still render on the single-slot centre"
+            );
+        }
+    }
 
-        let rows = render_svg_packed(&events_at_col(0, 4), Packing::Rows);
+    #[test]
+    fn a_stored_y_orders_a_shared_cell_top_or_bottom_on_slot_centres() {
+        // Two events share (event, col 2): the lane grows to 2 rows (band top 448, slots at
+        // 494 / 586). E1 carries the y; E0 is unplaced (neutral 0.5).
+        let place = |y: f64| {
+            let mut m = events_at_col(2, 2);
+            m.elements[1].y = Some(y);
+            (cy_of(&render_svg(&m), "E0"), cy_of(&render_svg(&m), "E1"))
+        };
+        assert_eq!(place(0.9), (494.0, 586.0), "dropped below → bottom slot");
+        assert_eq!(place(0.1), (586.0, 494.0), "dropped above → top slot");
         assert_eq!(
-            (distinct(&rows, "data-cx"), distinct(&rows, "data-cy")),
-            (1, 4)
+            place(7.0),
+            (494.0, 586.0),
+            "out-of-range clamps into the stack"
         );
+    }
 
-        let grid = render_svg_packed(&events_at_col(0, 4), Packing::Grid);
-        assert_eq!(
-            (distinct(&grid, "data-cx"), distinct(&grid, "data-cy")),
-            (2, 2)
-        );
+    // The client's vertical drag converts a pixel drop into a `y` fraction using the band frame
+    // the server itself rendered — pin the attributes it reads.
+    #[test]
+    fn lane_labels_expose_the_band_interior_geometry() {
+        let svg = render_svg(&empty_board());
+        // actor is the first lane: top = MARGIN_T + LANE_VPAD/2 = 124, interior = ROW_PITCH = 92.
+        assert!(svg.contains(
+            "class=\"lane-label\" data-lane=\"actor\" data-band-top=\"124.0\" data-band-h=\"92.0\""
+        ));
     }
 
     // A hand-authored negative or sparse `col` must render, not panic/OOM. Column geometry is
@@ -1399,21 +1346,11 @@ mod tests {
             diff: None,
             was: None,
         });
-        let svg = render_svg_packed(&m, Packing::Grid);
+        let svg = render_svg(&m);
         assert_eq!(distinct(&svg, "data-cx"), 2);
         // col -3 is the leftmost authored column → slot 0 → classic single-cell centre 255.0.
         let cxs = attr_values(&svg, "data-cx");
         assert!(cxs.contains(&"255.0".to_string()), "got {cxs:?}");
-    }
-
-    #[test]
-    fn packing_parses_aliases_and_falls_back_to_rows() {
-        assert_eq!(Packing::parse("columns"), Packing::Columns);
-        assert_eq!(Packing::parse("COL"), Packing::Columns);
-        assert_eq!(Packing::parse("grid"), Packing::Grid);
-        assert_eq!(Packing::parse("mix"), Packing::Grid);
-        assert_eq!(Packing::parse("nonsense"), Packing::Rows);
-        assert_eq!(Packing::Grid.as_str(), "grid");
     }
 
     // A lone sticky keeps its classic position: centred on a single-row lane, no horizontal fan.
@@ -1421,7 +1358,7 @@ mod tests {
     // above it), each an empty single-row band of height ROW_PITCH + LANE_VPAD = 108.
     #[test]
     fn a_lone_sticky_stays_on_the_lane_mid_line() {
-        let svg = render_svg_packed(&events_at_col(0, 1), Packing::default());
+        let svg = render_svg(&events_at_col(0, 1));
         // lane_top(event) = MARGIN_T + 3*108 = 440; + LANE_VPAD/2 + ROW_PITCH/2 = 440 + 8 + 46.
         assert_eq!(attr_values(&svg, "data-cy"), vec!["494.0".to_string()]);
         // col 0 centre, no stagger: MARGIN_L + COL_W/2 = 150 + 105.
@@ -1450,7 +1387,7 @@ mod tests {
             edges: vec![],
             diff_meta: None,
         };
-        let svg = render_svg_packed(&m, Packing::Rows);
+        let svg = render_svg(&m);
         assert!(svg.contains(">Context A<"), "region label tab is missing");
         // Both border edges carry the resize affordance, addressed by region id + side.
         assert!(svg.contains("class=\"region-edge\" data-region=\"K1\" data-edge=\"from\""));
@@ -1486,7 +1423,7 @@ mod tests {
             edges: vec![],
             diff_meta: None,
         };
-        let svg = render_svg_packed(&m, Packing::Rows);
+        let svg = render_svg(&m);
         for col in 0..=2 {
             assert!(
                 svg.contains(&format!("class=\"region-rail\" data-col=\"{col}\"")),
@@ -1507,7 +1444,7 @@ mod tests {
             edges: vec![],
             diff_meta: Some(("v1".into(), "v2".into())),
         };
-        let svg = render_svg_packed(&m, Packing::Rows);
+        let svg = render_svg(&m);
         assert!(
             svg.contains("<g opacity=\"0.45\">"),
             "removed region is not ghosted"
@@ -1579,7 +1516,7 @@ mod tests {
             ],
             diff_meta: None,
         };
-        let svg = render_svg_packed(&m, Packing::Rows);
+        let svg = render_svg(&m);
         assert!(
             cy_of(&svg, "E_lo") < cy_of(&svg, "E_hi"),
             "E_lo (up-neighbour) must take the upper sub-row"
@@ -1591,7 +1528,7 @@ mod tests {
     // centres must descend in file order E0..E4 (Rows packing stacks top→bottom).
     #[test]
     fn edge_free_cell_keeps_file_order() {
-        let svg = render_svg_packed(&events_at_col(2, 5), Packing::Rows);
+        let svg = render_svg(&events_at_col(2, 5));
         let cys: Vec<f64> = (0..5).map(|k| cy_of(&svg, &format!("E{k}"))).collect();
         assert!(
             cys.windows(2).all(|w| w[0] < w[1]),
@@ -1645,7 +1582,7 @@ mod tests {
             ],
             diff_meta: None,
         };
-        let svg = render_svg_packed(&m, Packing::Rows);
+        let svg = render_svg(&m);
         // Each edge path's start anchor Y (the M y-coord). They must differ by the fan spread.
         let starts: Vec<f64> = svg
             .match_indices("<path class=\"edge\"")
@@ -1687,7 +1624,7 @@ mod tests {
             edges,
             diff_meta: None,
         };
-        let svg = render_svg_packed(&m, Packing::Rows);
+        let svg = render_svg(&m);
         let cy = cy_of(&svg, "X1");
         let mut count = 0;
         for (i, _) in svg.match_indices("data-src=\"X1\"") {
@@ -1706,11 +1643,10 @@ mod tests {
 
     #[test]
     fn render_html_injects_the_geometry_config() {
-        let html = render_html("<svg></svg>", "t", Packing::Grid);
+        let html = render_html("<svg></svg>", "t");
         assert!(!html.contains("__CONFIG__"));
         assert!(html.contains("\"colW\":210"));
         assert!(html.contains("\"stickyW\":176"));
-        assert!(html.contains("\"pack\":\"grid\""));
     }
 
     #[test]
