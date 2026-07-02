@@ -37,15 +37,25 @@
   .edge, .sticky { transition: opacity .15s ease-out; }
   .edge.hl { stroke: #2f3c45; opacity: 1 !important; stroke-width: 2.4; }
   .sticky:hover .card { stroke: #1a1a1a; stroke-width: 2; }
-  /* Keyboard focus: a visible ring on the focused sticky (focus-visible so a mouse click doesn't
-     leave one behind). The whole sticky is a button — Enter opens its comment, ← / → move it. */
+  /* Selection ring: the focused sticky is the keyboard target (← / → move, F2 rename, c comment,
+     Delete remove), so focus must be visible however it arrived — click included. A mouse click's
+     whole payoff is this ring: "this box now answers the keyboard". */
   .sticky:focus { outline: none; }
-  .sticky:focus-visible .card { stroke: #1A6FAE; stroke-width: 3; }
+  .sticky:focus .card { stroke: #1A6FAE; stroke-width: 3; }
   .sticky.has-note .card { stroke: #1A6FAE; stroke-width: 2.5; }
   /* On box hover: spotlight its connectors + neighbours, recede the rest. */
   #board.dim .edge:not(.hl) { opacity: .07; }
   #board.dim .sticky:not(.adj) { opacity: .32; }
   .sticky.resolved { filter: grayscale(.85); opacity: .6; }  /* live resolve-comment feedback */
+  /* Write confirmation for your own edit: the box settles back onto the board — a brief fade-in
+     where the eye already is, instead of the diff banner announcing your own action as foreign
+     change. Reduced motion: no animation, the redraw itself is the confirmation. */
+  @keyframes settle { from { opacity: .35; } to { opacity: 1; } }
+  .sticky.settle { animation: settle .4s cubic-bezier(.22, 1, .36, 1); }
+  @media (prefers-reduced-motion: reduce) { .sticky.settle { animation: none; } }
+  /* Armed remove: the × turns alert-red for its confirm window (press again commits, Esc keeps).
+     Replaces window.confirm — the one native-chrome intrusion the register forbade. */
+  #remove-x.armed { display: block; color: #b4232a; opacity: 1; }
   /* Inline rename: an HTML input floated over the sticky's screen rect — the live pen writes
      directly on the box (DESIGN: the accent is used only where you are acting). Double-click or
      F2 a sticky to edit its label in place; Enter commits, Escape cancels. */
@@ -113,7 +123,7 @@
 <header>
   <b>__TITLE__</b>
   <span id="status">checking…</span>
-  <span id="note"></span>
+  <span id="note" aria-live="polite"></span>
   <span class="spacer"></span>
   <span class="seg" id="pack" role="group" aria-label="how overlapping stickies unpack">
     <button data-pack="rows" aria-pressed="true" title="stack overlapping stickies into rows — taller board">Rows</button>
@@ -164,9 +174,11 @@
 const LS_KEY = "facetoComments";
 const CFG = __CONFIG__;   // { colW, stickyW, stickyH, pack } — geometry + default packing, from render.rs
 // Structural ops change the board itself, not feedback on a box — kept out of the note badges,
-// counts and prior-comment list (and never resynced offline; the log is the truth).
+// counts and prior-comment list (and never resynced offline; the log is the truth). `rename`
+// belongs here: it edits the model's label, it is not a note — counting it as feedback painted
+// a permanent has-note ring and leaked "[rename]" lines into the channel the next session reads.
 const STRUCTURAL_KINDS = new Set([
-  "move", "add", "drop", "region-add", "region-resize", "region-rename", "region-remove",
+  "move", "add", "drop", "rename", "region-add", "region-resize", "region-rename", "region-remove",
 ]);
 // Of those, add/drop/region-* have no client-side fallback: there is no id to mint, or nothing to
 // remove/resize/rename locally without a server round-trip. `move` is the one exception — it
@@ -330,9 +342,26 @@ function replayMoves() {
 // the same lane. Shared by the ←/→ nudge (doMove) and drag-to-move — the single move contract.
 // A no-op if the target is the current column. `dir` (for the note/text) is derived from the
 // shift, so a single-step nudge and a multi-column drag both read naturally.
-function moveTo(id, target) {
+// Undo (Ctrl/Cmd+Z): each own move/rename pushes its inverse — one more POST, since the log is
+// append-only truth (history is never rewritten, the undo is itself an event). `add` and `drop`
+// have no inverse through this seam (ids are minted server-side and can't be re-asked), which is
+// why remove keeps its own armed-confirm guard below.
+const undoStack = [];
+function undoLast() {
+  const u = undoStack.pop();
+  if (!u) { note("nothing to undo"); return; }
+  if (u.kind === "move") {
+    moveTo(u.id, u.col, false);   // false: applying an inverse must not record a new undo entry
+  } else if (u.kind === "rename") {
+    note(`undid rename of ${u.id}`);
+    postComment({ elemId: u.id, kind: "rename", text: u.text, ts: new Date().toISOString(), status: "open" });
+  }
+}
+
+function moveTo(id, target, recordUndo = true) {
   if (colOf[id] === undefined || target === colOf[id]) return;
   const from = colOf[id];
+  if (recordUndo) undoStack.push({ kind: "move", id, col: from });   // a swap re-swaps on the way back
   // No fixed left edge: `col` is a global coordinate and the lane-title `+` (prepend) mints
   // negative cols, which the renderer draws on-board. Moving left grows the board left the same way.
   let swapId = null;
@@ -385,10 +414,13 @@ function startStickyDrag(e) {
   if (e.button !== 0 || gestureBusy()) return;
   const g = e.currentTarget;
   if (colOf[g.id] === undefined) return;
+  // Capture before any state: if the capture throws (torn-down pointerId, synthetic pointer) no
+  // flag has leaked — a leaked stickyDrag would gate gestureBusy() and load()'s whenNoDrag forever,
+  // silently killing every gesture including Reload. The press degrades to a plain click instead.
+  try { g.setPointerCapture(e.pointerId); } catch { g.focus(); return; }
   stickyDrag = { id: g.id, pointerId: e.pointerId, startX: e.clientX, fromCol: colOf[g.id], col: colOf[g.id], moved: false };
   // the pointer is captured now, so the hover glyphs' own mouseleave won't fire — hide them all
   hideGlyphs();
-  g.setPointerCapture(e.pointerId);
   g.addEventListener("pointermove", dragSticky);
   g.addEventListener("pointerup", endStickyDrag);
   g.addEventListener("pointercancel", endStickyDrag);
@@ -465,19 +497,37 @@ function endRename(commit) {
     return;
   }
   note("renamed");
+  undoStack.push({ kind: "rename", id, text: original.trim() });
   postComment({ elemId: id, kind: "rename", text, ts, status: "open" });
 }
 
 // ---- inline remove --------------------------------------------------------
-// Delete / Backspace on the hovered or focused sticky drops it. Destructive, so confirm first;
-// then persist kind:"drop" — in log mode the server folds ElementRemoved and the reload shows the
-// box gone (offline it is stashed, not applied — see postComment).
+// Delete / Backspace (or the × glyph) on the hovered or focused sticky drops it. Destructive and
+// not undoable through this seam (the id can't be re-minted), so it arms first: the same gesture
+// again within the window commits, Escape or the timeout keeps the box. In-place and in-register —
+// no window.confirm shattering the glass. In log mode the server folds ElementRemoved and the
+// reload shows the box gone (offline it is stashed, not applied — see postComment).
+let removeArm = null;   // { id, t } while the confirm window is open, else null
+function disarmRemove(quiet) {
+  if (!removeArm) return;
+  clearTimeout(removeArm.t);
+  removeArm = null;
+  $("#remove-x").classList.remove("armed");
+  note(quiet ? "" : "kept");   // quiet: the arm prompt must not linger after the window closes
+}
 function doRemove(id) {
   const g = document.getElementById(id);
   if (!g) return;
-  if (!window.confirm(`Remove "${g.dataset.hero || id}" from the board?`)) return;
-  note(`removed ${id}`);
-  postComment({ elemId: id, kind: "drop", text: "removed inline", ts: new Date().toISOString(), status: "open" });
+  if (removeArm?.id === id) {
+    disarmRemove(true);
+    note(`removed ${id}`);
+    postComment({ elemId: id, kind: "drop", text: "removed inline", ts: new Date().toISOString(), status: "open" });
+    return;
+  }
+  disarmRemove(true);   // arming a different box replaces the previous arm
+  removeArm = { id, t: setTimeout(() => disarmRemove(true), 3000) };
+  $("#remove-x").classList.add("armed");
+  note(`remove "${g.dataset.hero || id}"? — same gesture again to confirm, Esc to keep`);
 }
 
 // A hover glyph that acts on a stashed target id: a fixed ghost button (the × remove) that fades in
@@ -631,10 +681,12 @@ function startRegionResize(e) {
   if (!bounds) return;
   const otherCol = line.dataset.edge === "from" ? bounds.to : bounds.from;
   const svgLeft = document.querySelector("#board svg").getBoundingClientRect().left;
+  // Capture before any state — same leak guard as startStickyDrag: a throw here must not leave
+  // a regionDrag flag (or the guide) behind to gate every other gesture.
+  try { line.setPointerCapture(e.pointerId); } catch { return; }
   regionDrag = { regionId: line.dataset.region, edge: line.dataset.edge, otherCol, svgLeft, pointerId: e.pointerId };
   const bandRect = line.getBoundingClientRect();   // the edge line already spans band_top..band_bot
   Object.assign(dragGuide.style, { top: `${bandRect.top}px`, height: `${bandRect.height}px`, display: "block" });
-  line.setPointerCapture(e.pointerId);
   line.addEventListener("pointermove", dragRegionEdge);
   line.addEventListener("pointerup", endRegionResize);
   line.addEventListener("pointercancel", endRegionResize);
@@ -697,14 +749,32 @@ function bindRegions() {
 // `move`) never reach the log. Export keeps them; the user is told so below.
 // A live drag owns the board: swapping the SVG mid-gesture detaches the captured box (orphaning
 // the drag) and replayMoves clobbers its colOf preview. Board rewrites wait for the gesture's end.
-function whenNoDrag(fn) { stickyDrag || regionDrag ? setTimeout(() => whenNoDrag(fn), 150) : fn(); }
+// Last-resort leak check: a drag flag whose element no longer holds the pointer capture is dead
+// (element detached, capture torn down without its events) and would otherwise defer these
+// retries forever — turning Reload itself into a silent infinite no-op. Force-clear and move on.
+function whenNoDrag(fn) {
+  if (stickyDrag && !document.getElementById(stickyDrag.id)?.hasPointerCapture(stickyDrag.pointerId)) stickyDrag = null;
+  if (regionDrag && !document.querySelector(`.region-edge[data-region="${regionDrag.regionId}"][data-edge="${regionDrag.edge}"]`)?.hasPointerCapture(regionDrag.pointerId)) {
+    regionDrag = null;
+    dragGuide.style.display = "none";
+  }
+  stickyDrag || regionDrag ? setTimeout(() => whenNoDrag(fn), 150) : fn();
+}
+// The ids this client just wrote, so the next version bump reads as "my edit landed" (a plain
+// refresh + settle pulse) rather than foreign change (the diff overlay). The freshness window
+// keeps a stale marker from ever suppressing someone else's concurrent edit for long.
+let ownEdit = null;   // { ids: [..], at: ms } or null
 async function postComment(c) {
   let posted = false;
   try {
     const r = await fetch("/comment", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(c) });
     posted = r.ok;
   } catch {}
-  if (posted) { await load(); return; }
+  if (posted) {
+    ownEdit = { ids: [c.elemId, c.swapId, c.regionId].filter(Boolean), at: Date.now() };
+    await load();
+    return;
+  }
   const a = lsGet(); a.push(c); lsSet(a); comments = a;
   whenNoDrag(() => { replayMoves(); paint(); });
   // add/drop/region-* can't reach the board offline (no server to mint/remove/resize/rename);
@@ -725,10 +795,45 @@ async function load() {
   } catch {}
   if (!serverLive) { comments = lsGet(); replayMoves(); paint(); return; }
   const live = await liveVersion();
-  if (live && shownVersion && live !== shownVersion) await showDiff(shownVersion, live);
+  if (live && shownVersion && live !== shownVersion) {
+    // Your own edit never comes back to you as a diff: the overlay grammar means "changed since
+    // you last looked", and you were looking. A fresh own-write redraws plain with a settle pulse
+    // instead. An already-open diff session keeps accumulating (its baseline is still honest).
+    if (ownEdit && Date.now() - ownEdit.at < 4000 && !diffing) await refreshPlain(live, ownEdit.ids);
+    else await showDiff(shownVersion, live);
+  }
   else if (shownVersion === null) shownVersion = live;  // baseline the initial server-rendered board
+  ownEdit = null;
   replayMoves();
   paint();
+}
+
+// Every board swap replaces every node, which used to drop focus on <body> and make keyboard
+// editing one-shot (press, re-acquire focus through 141 tab stops, press again). `id` is the
+// stable identity, so focus survives the swap by id — and restoring it re-fires onfocus, which
+// brings the spotlight and the keyboard claim back with it.
+function swapBoard(html) {
+  const focused = document.activeElement?.classList?.contains("sticky") ? document.activeElement.id : null;
+  $("#board").innerHTML = html;
+  bindStickies();
+  if (focused) document.getElementById(focused)?.focus();
+}
+
+// Redraw the plain current board (own edit just landed): advance the baseline silently and let
+// the affected boxes settle where the eye already is — no banner, no overlay, no chore to clear.
+async function refreshPlain(live, ids = []) {
+  try {
+    const r = await fetch(boardSrc(), { cache: "no-store" });
+    if (!r.ok) return;
+    swapBoard(await r.text());
+    shownVersion = live;
+    for (const id of ids) {
+      const g = document.getElementById(id);
+      if (!g) continue;
+      g.classList.add("settle");
+      setTimeout(() => g.classList.remove("settle"), 500);
+    }
+  } catch {}
 }
 
 // Replace the board with one diffed against `base`; advance the baseline to `live`.
@@ -736,8 +841,7 @@ async function showDiff(base, live) {
   try {
     const r = await fetch(boardSrc({ base }), { cache: "no-store" });
     if (!r.ok) return;
-    $("#board").innerHTML = await r.text();
-    bindStickies();
+    swapBoard(await r.text());
     if (r.headers.get("X-Diff-Base")) {
       diffing = true;
       diffBase = base;
@@ -754,7 +858,7 @@ async function showDiff(base, live) {
 async function showPlain() {
   try {
     const r = await fetch(boardSrc(), { cache: "no-store" });
-    if (r.ok) { $("#board").innerHTML = await r.text(); bindStickies(); replayMoves(); }
+    if (r.ok) { swapBoard(await r.text()); replayMoves(); }
   } catch {}
   diffing = false;
   diffBase = null;
@@ -814,6 +918,10 @@ function bindStickies() {
     g.onmouseleave = () => {
       if (hoverId === g.id) hoverId = null;
       hoverOff(); hidePlusSoon(); removeXBtn.hideSoon(); commentBtn.hideSoon();
+      // The spotlight follows the mouse, but a focused sticky keeps its claim visible: drifting
+      // off a clicked box must not read as losing it (the keyboard still answers to it).
+      const f = document.activeElement;
+      if (f?.classList?.contains("sticky")) hoverOn(f.id);
     };
     // Keyboard parity with the mouse: focusing a sticky makes it the ← / → move target (same as
     // hover) and spotlights its connectors; Enter / Space opens its comment dialog.
@@ -840,7 +948,9 @@ function paint() {
   for (const id in byEl) document.getElementById(id)?.classList.add("has-note");
   // A resolve comment quiets its hotspot right away (model `resolved:true` does it durably).
   for (const c of feedback) if (c.kind === "resolve") document.getElementById(c.elemId)?.classList.add("resolved");
-  const open = feedback.filter((c) => c.status !== "resolved").length;
+  // A resolve is the act of closing, not a new open thread — counting it as open meant the
+  // counter read one MORE open item right after the user resolved a hotspot.
+  const open = feedback.filter((c) => c.status !== "resolved" && c.kind !== "resolve").length;
   $("#count").textContent = feedback.length ? `${feedback.length} comment(s), ${open} open` : "";
   window._byEl = byEl;
 }
@@ -895,25 +1005,63 @@ $("#rename-edit").addEventListener("keydown", (e) => {
   e.stopPropagation();   // keep edit keystrokes from reaching the board-level handler below
 });
 $("#rename-edit").addEventListener("blur", () => { adding ? endAdd(true) : endRename(true); });
+// The keyboard acts on the focused sticky first, the hovered one as fallback. Focus survives
+// mouse drift and scrolling; hover-only targeting silently dropped every keystroke the moment
+// the cursor slipped off a clicked box — the exact focus the click had just promised.
+function keyTarget() {
+  const ae = document.activeElement;
+  return ae?.classList?.contains("sticky") ? ae.id : hoverId;
+}
 document.addEventListener("keydown", (e) => {
+  // Undo is the one modified shortcut we own: Ctrl/Cmd+Z appends the inverse of the last own
+  // move/rename. Text fields keep their native undo; Shift (redo) passes through untouched.
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
+    const ae = document.activeElement;
+    if ($("#modal").open || gestureBusy() || (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName))) return;
+    e.preventDefault();
+    undoLast();
+    return;
+  }
   if (e.metaKey || e.ctrlKey || e.altKey) return;   // never shadow Cmd/Ctrl shortcuts (copy, back…)
+  if (e.key === "Escape" && removeArm) { e.preventDefault(); disarmRemove(); return; }
+  // Escape bails out of a live drag before anything else: snap back, release the pointer,
+  // nothing posted. Clearing the flag first makes the release's lostpointercapture a no-op.
+  if (e.key === "Escape" && (stickyDrag || regionDrag)) {
+    e.preventDefault();
+    if (stickyDrag) {
+      const d = stickyDrag, g = document.getElementById(d.id);
+      stickyDrag = null;
+      colOf[d.id] = d.fromCol;
+      try { g?.releasePointerCapture(d.pointerId); } catch {}
+      applyLayout();
+      g?.focus();
+    } else {
+      const d = regionDrag;
+      regionDrag = null;
+      dragGuide.style.display = "none";
+      const line = document.querySelector(`.region-edge[data-region="${d.regionId}"][data-edge="${d.edge}"]`);
+      try { line?.releasePointerCapture(d.pointerId); } catch {}
+    }
+    return;
+  }
   // gestureBusy: a drag captures the pointer but not the keyboard, so F2 or c could otherwise
   // fire mid-drag (review: no gesture guarded against the other's in-progress state).
-  if ($("#modal").open || gestureBusy() || !hoverId) return;
+  const target = keyTarget();
+  if ($("#modal").open || gestureBusy() || !target) return;
   const ae = document.activeElement;
   if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     e.preventDefault();
-    doMove(hoverId, e.key === "ArrowLeft" ? "left" : "right");
+    doMove(target, e.key === "ArrowLeft" ? "left" : "right");
   } else if (e.key === "F2") {
     e.preventDefault();
-    startRename(document.getElementById(hoverId));
+    startRename(document.getElementById(target));
   } else if (e.key === "c" || e.key === "C") {
     e.preventDefault();
-    openModal(document.getElementById(hoverId));
+    openModal(document.getElementById(target));
   } else if (e.key === "Delete" || e.key === "Backspace") {
     e.preventDefault();
-    doRemove(hoverId);
+    doRemove(target);
   }
 });
 
@@ -927,8 +1075,7 @@ async function renderPack() {
   try {
     const r = await fetch(boardSrc(diffing && diffBase ? { base: diffBase } : {}), { cache: "no-store" });
     if (!r.ok) return;
-    $("#board").innerHTML = await r.text();
-    bindStickies();
+    swapBoard(await r.text());
     if (!diffing) replayMoves();
     paint();
   } catch {}
