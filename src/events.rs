@@ -185,67 +185,74 @@ fn upcast(j: &Json) -> Cow<'_, Json> {
 /// One JSON object → an `Event`, or `None` for an unknown/ill-shaped event kind. The object is
 /// first run through [`upcast`], so a legacy on-disk shape is migrated to the current schema (H3)
 /// before any field is read.
-pub fn parse_event(j: &Json) -> Option<Event> {
-    let j = upcast(j);
-    let j = j.as_ref();
-    let s = |k: &str| j.get(k).and_then(Json::as_str).map(String::from);
-    let i = |k: &str| j.get(k).and_then(Json::as_f64).map(|n| n as i64);
-    let f = |k: &str| j.get(k).and_then(Json::as_f64);
-    Some(match j.get("event")?.as_str()? {
-        "BoardTitled" => Event::BoardTitled { title: s("title")? },
+pub fn parse_event(raw: &Json) -> Option<Event> {
+    let event = upcast(raw);
+    let event = event.as_ref();
+    // Typed field accessors over the (upcast) event object: absent or mis-typed → `None`.
+    let str_field = |key: &str| event.get(key).and_then(Json::as_str).map(String::from);
+    let int_field = |key: &str| event.get(key).and_then(Json::as_f64).map(|n| n as i64);
+    let num_field = |key: &str| event.get(key).and_then(Json::as_f64);
+    Some(match event.get("event")?.as_str()? {
+        "BoardTitled" => Event::BoardTitled {
+            title: str_field("title")?,
+        },
         "PhaseAdded" => Event::PhaseAdded {
-            id: s("id"),
-            label: s("label")?,
-            from_col: i("fromCol")?,
-            to_col: i("toCol")?,
+            id: str_field("id"),
+            label: str_field("label")?,
+            from_col: int_field("fromCol")?,
+            to_col: int_field("toCol")?,
         },
         "PhaseResized" => Event::PhaseResized {
-            id: s("id")?,
-            from_col: i("fromCol")?,
-            to_col: i("toCol")?,
+            id: str_field("id")?,
+            from_col: int_field("fromCol")?,
+            to_col: int_field("toCol")?,
         },
         "PhaseRenamed" => Event::PhaseRenamed {
-            id: s("id")?,
-            label: s("label")?,
+            id: str_field("id")?,
+            label: str_field("label")?,
         },
-        "PhaseRemoved" => Event::PhaseRemoved { id: s("id")? },
+        "PhaseRemoved" => Event::PhaseRemoved {
+            id: str_field("id")?,
+        },
         "ElementAdded" => Event::ElementAdded {
-            id: s("id")?,
-            kind: s("type")?,
-            label: s("label")?,
-            col: i("col"),
-            detail: s("detail"),
-            y: f("y"),
+            id: str_field("id")?,
+            kind: str_field("type")?,
+            label: str_field("label")?,
+            col: int_field("col"),
+            detail: str_field("detail"),
+            y: num_field("y"),
         },
         "ElementRenamed" => Event::ElementRenamed {
-            id: s("id")?,
-            label: s("label")?,
+            id: str_field("id")?,
+            label: str_field("label")?,
         },
         "ElementMoved" => Event::ElementMoved {
-            id: s("id")?,
-            col: i("col"),
-            kind: s("type"),
-            y: f("y"),
+            id: str_field("id")?,
+            col: int_field("col"),
+            kind: str_field("type"),
+            y: num_field("y"),
         },
         "ElementAnnotated" => Event::ElementAnnotated {
-            id: s("id")?,
-            text: s("text")?,
+            id: str_field("id")?,
+            text: str_field("text")?,
         },
         "HotspotResolved" => Event::HotspotResolved {
-            id: s("id")?,
-            resolution: s("resolution")?,
+            id: str_field("id")?,
+            resolution: str_field("resolution")?,
         },
-        "ElementRemoved" => Event::ElementRemoved { id: s("id")? },
+        "ElementRemoved" => Event::ElementRemoved {
+            id: str_field("id")?,
+        },
         "EdgeAdded" => Event::EdgeAdded {
-            src: s("src")?,
-            dst: s("dst")?,
+            src: str_field("src")?,
+            dst: str_field("dst")?,
         },
         "EdgeRemoved" => Event::EdgeRemoved {
-            src: s("src")?,
-            dst: s("dst")?,
+            src: str_field("src")?,
+            dst: str_field("dst")?,
         },
         "LogCompacted" => Event::LogCompacted {
-            folded: i("folded").unwrap_or(0),
+            folded: int_field("folded").unwrap_or(0),
         },
         _ => return None,
     })
