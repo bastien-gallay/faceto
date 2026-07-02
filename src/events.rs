@@ -61,6 +61,10 @@ pub enum Event {
         label: String,
         col: Option<i64>,
         detail: Option<String>,
+        /// Stored vertical sub-position within the lane band (F-2d-placement): a fraction of the
+        /// band interior in `[0, 1]`, `None` = auto-stacked. Carried on add so `compact`/genesis
+        /// round-trips a placed board (additive field — an old log simply never has it).
+        y: Option<f64>,
     },
     ElementRenamed {
         id: String,
@@ -70,6 +74,9 @@ pub enum Event {
         id: String,
         col: Option<i64>,
         kind: Option<String>,
+        /// New vertical sub-position (fraction of the lane-band interior, `[0, 1]`). `None`
+        /// leaves the stored sub-position untouched — a col-only nudge never resets the Y.
+        y: Option<f64>,
     },
     ElementAnnotated {
         id: String,
@@ -178,64 +185,74 @@ fn upcast(j: &Json) -> Cow<'_, Json> {
 /// One JSON object → an `Event`, or `None` for an unknown/ill-shaped event kind. The object is
 /// first run through [`upcast`], so a legacy on-disk shape is migrated to the current schema (H3)
 /// before any field is read.
-pub fn parse_event(j: &Json) -> Option<Event> {
-    let j = upcast(j);
-    let j = j.as_ref();
-    let s = |k: &str| j.get(k).and_then(Json::as_str).map(String::from);
-    let i = |k: &str| j.get(k).and_then(Json::as_f64).map(|n| n as i64);
-    Some(match j.get("event")?.as_str()? {
-        "BoardTitled" => Event::BoardTitled { title: s("title")? },
+pub fn parse_event(raw: &Json) -> Option<Event> {
+    let event = upcast(raw);
+    let event = event.as_ref();
+    // Typed field accessors over the (upcast) event object: absent or mis-typed → `None`.
+    let str_field = |key: &str| event.get(key).and_then(Json::as_str).map(String::from);
+    let int_field = |key: &str| event.get(key).and_then(Json::as_f64).map(|n| n as i64);
+    let num_field = |key: &str| event.get(key).and_then(Json::as_f64);
+    Some(match event.get("event")?.as_str()? {
+        "BoardTitled" => Event::BoardTitled {
+            title: str_field("title")?,
+        },
         "PhaseAdded" => Event::PhaseAdded {
-            id: s("id"),
-            label: s("label")?,
-            from_col: i("fromCol")?,
-            to_col: i("toCol")?,
+            id: str_field("id"),
+            label: str_field("label")?,
+            from_col: int_field("fromCol")?,
+            to_col: int_field("toCol")?,
         },
         "PhaseResized" => Event::PhaseResized {
-            id: s("id")?,
-            from_col: i("fromCol")?,
-            to_col: i("toCol")?,
+            id: str_field("id")?,
+            from_col: int_field("fromCol")?,
+            to_col: int_field("toCol")?,
         },
         "PhaseRenamed" => Event::PhaseRenamed {
-            id: s("id")?,
-            label: s("label")?,
+            id: str_field("id")?,
+            label: str_field("label")?,
         },
-        "PhaseRemoved" => Event::PhaseRemoved { id: s("id")? },
+        "PhaseRemoved" => Event::PhaseRemoved {
+            id: str_field("id")?,
+        },
         "ElementAdded" => Event::ElementAdded {
-            id: s("id")?,
-            kind: s("type")?,
-            label: s("label")?,
-            col: i("col"),
-            detail: s("detail"),
+            id: str_field("id")?,
+            kind: str_field("type")?,
+            label: str_field("label")?,
+            col: int_field("col"),
+            detail: str_field("detail"),
+            y: num_field("y"),
         },
         "ElementRenamed" => Event::ElementRenamed {
-            id: s("id")?,
-            label: s("label")?,
+            id: str_field("id")?,
+            label: str_field("label")?,
         },
         "ElementMoved" => Event::ElementMoved {
-            id: s("id")?,
-            col: i("col"),
-            kind: s("type"),
+            id: str_field("id")?,
+            col: int_field("col"),
+            kind: str_field("type"),
+            y: num_field("y"),
         },
         "ElementAnnotated" => Event::ElementAnnotated {
-            id: s("id")?,
-            text: s("text")?,
+            id: str_field("id")?,
+            text: str_field("text")?,
         },
         "HotspotResolved" => Event::HotspotResolved {
-            id: s("id")?,
-            resolution: s("resolution")?,
+            id: str_field("id")?,
+            resolution: str_field("resolution")?,
         },
-        "ElementRemoved" => Event::ElementRemoved { id: s("id")? },
+        "ElementRemoved" => Event::ElementRemoved {
+            id: str_field("id")?,
+        },
         "EdgeAdded" => Event::EdgeAdded {
-            src: s("src")?,
-            dst: s("dst")?,
+            src: str_field("src")?,
+            dst: str_field("dst")?,
         },
         "EdgeRemoved" => Event::EdgeRemoved {
-            src: s("src")?,
-            dst: s("dst")?,
+            src: str_field("src")?,
+            dst: str_field("dst")?,
         },
         "LogCompacted" => Event::LogCompacted {
-            folded: i("folded").unwrap_or(0),
+            folded: int_field("folded").unwrap_or(0),
         },
         _ => return None,
     })
@@ -291,6 +308,7 @@ pub fn replay(events: &[Event]) -> Model {
                 label,
                 col,
                 detail,
+                y,
             } => {
                 if !m.elements.iter().any(|e| &e.id == id) {
                     m.elements.push(Element {
@@ -299,6 +317,7 @@ pub fn replay(events: &[Event]) -> Model {
                         label: label.clone(),
                         col: *col,
                         detail: detail.clone(),
+                        y: *y,
                         resolved: false,
                         diff: None,
                         was: None,
@@ -310,13 +329,16 @@ pub fn replay(events: &[Event]) -> Model {
                     e.label = label.clone();
                 }
             }
-            Event::ElementMoved { id, col, kind } => {
+            Event::ElementMoved { id, col, kind, y } => {
                 if let Some(e) = find(&mut m, id) {
                     if col.is_some() {
                         e.col = *col;
                     }
                     if let Some(k) = kind {
                         e.kind = k.clone();
+                    }
+                    if y.is_some() {
+                        e.y = *y;
                     }
                 }
             }
@@ -385,6 +407,7 @@ pub fn from_model(m: &Model) -> Vec<Event> {
             label: e.label.clone(),
             col: e.col,
             detail: if e.resolved { None } else { e.detail.clone() },
+            y: e.y,
         });
         if e.resolved {
             ev.push(Event::HotspotResolved {
@@ -422,6 +445,14 @@ pub fn valid_span(from_col: i64, to_col: i64) -> bool {
     from_col < to_col
 }
 
+/// Normalise a posted vertical sub-position to its stored form: clamped into `[0, 1]` and
+/// rounded to 4 decimals so the log carries a clean human-readable number, not a float's full
+/// noise. This is the **write-seam** half of the rule; the **read** half — how a stored `y`
+/// (or its absence) is interpreted as an ordering key — is `model::y_key`.
+pub fn clamp_y(y: f64) -> f64 {
+    (y.clamp(0.0, 1.0) * 10_000.0).round() / 10_000.0
+}
+
 /// Map one posted/stored comment object to the event(s) it persists — the single source of
 /// truth for the comment→event translation, shared by the live server (`POST /comment` in log
 /// mode) and the `comments.jsonl` migration ([`from_comments`]). `move`/`resolve`/`rename`/`drop`
@@ -447,24 +478,34 @@ pub fn comment_to_events(v: &Json) -> Vec<Event> {
     let text = v.get_str("text").unwrap_or("").to_string();
     match kind {
         "move" => {
-            // A move is a column change; a missing target col would replay as a no-op, so reject
-            // it (empty vec) rather than logging a phantom move.
-            let Some(col) = v.get_i64("col") else {
+            // A move relocates along the timeline (`col`) and/or within the lane band (`y`,
+            // F-2d-placement). Carrying neither would replay as a no-op, so reject it (empty
+            // vec) rather than logging a phantom move.
+            let col = v.get_i64("col");
+            let y = v
+                .get("y")
+                .and_then(Json::as_f64)
+                .filter(|y| y.is_finite())
+                .map(clamp_y);
+            if col.is_none() && y.is_none() {
                 return Vec::new();
-            };
+            }
             let mut evs = vec![Event::ElementMoved {
                 id: id.clone(),
-                col: Some(col),
+                col,
                 kind: None,
+                y,
             }];
             // A swap also relocates the displaced sticky — but only a *different* one, to a real
             // col. Guard against a self-swap or a swap missing its target col (would no-op).
+            // Kept for old clients / stashed offline moves; the 2D client no longer swaps.
             if let (Some(swap_id), Some(swap_col)) = (v.get_str("swapId"), v.get_i64("swapCol")) {
                 if swap_id != id.as_str() {
                     evs.push(Event::ElementMoved {
                         id: swap_id.to_string(),
                         col: Some(swap_col),
                         kind: None,
+                        y: None,
                     });
                 }
             }
@@ -609,6 +650,7 @@ pub fn to_json(ev: &Event) -> Json {
             label,
             col,
             detail,
+            y,
         } => {
             let mut p = vec![
                 ("event", s("ElementAdded")),
@@ -622,6 +664,9 @@ pub fn to_json(ev: &Event) -> Json {
             if let Some(d) = detail {
                 p.push(("detail", s(d)));
             }
+            if let Some(y) = y {
+                p.push(("y", Json::Num(*y)));
+            }
             obj(p)
         }
         Event::ElementRenamed { id, label } => obj(vec![
@@ -629,13 +674,16 @@ pub fn to_json(ev: &Event) -> Json {
             ("id", s(id)),
             ("label", s(label)),
         ]),
-        Event::ElementMoved { id, col, kind } => {
+        Event::ElementMoved { id, col, kind, y } => {
             let mut p = vec![("event", s("ElementMoved")), ("id", s(id))];
             if let Some(c) = col {
                 p.push(("col", n(*c)));
             }
             if let Some(k) = kind {
                 p.push(("type", s(k)));
+            }
+            if let Some(y) = y {
+                p.push(("y", Json::Num(*y)));
             }
             obj(p)
         }
@@ -896,6 +944,7 @@ mod tests {
                 label: format!("seed-{id}"),
                 col: Some(0),
                 detail: None,
+                y: None,
             })
             .collect();
         (evs, ids)
@@ -1187,11 +1236,86 @@ mod tests {
             id: "E1".into(),
             col: Some(4),
             kind: None,
+            y: None,
         };
         assert_eq!(
             line(&moved),
             r#"{"event":"ElementMoved","id":"E1","col":4}"#
         );
+    }
+
+    // ---- F-2d-placement: the stored vertical sub-position ---------------------------------
+    // `y` is a fraction of the lane-band interior in [0, 1] — never identity (`id`), never the
+    // lane (`type`), never the timeline (`col`). It evolves the schema additively: an old log
+    // simply has no `y` and replays exactly as before.
+
+    #[test]
+    fn element_moved_round_trips_its_y() {
+        let e = ev(r#"{"event":"ElementMoved","id":"E1","y":0.35}"#);
+        assert!(
+            matches!(&e, Event::ElementMoved { id, col: None, y: Some(y), .. }
+            if id == "E1" && *y == 0.35)
+        );
+        assert_eq!(line(&e), r#"{"event":"ElementMoved","id":"E1","y":0.35}"#);
+    }
+
+    #[test]
+    fn replay_applies_y_and_a_col_only_move_preserves_it() {
+        let log = [
+            ev(r#"{"event":"ElementAdded","id":"E1","type":"event","label":"A","col":0}"#),
+            ev(r#"{"event":"ElementMoved","id":"E1","y":0.8}"#),
+            ev(r#"{"event":"ElementMoved","id":"E1","col":3}"#),
+        ];
+        let e1 = &replay(&log).elements[0];
+        assert_eq!(e1.col, Some(3));
+        assert_eq!(e1.y, Some(0.8), "a col-only nudge must not reset the Y");
+    }
+
+    #[test]
+    fn a_placed_elements_y_survives_compact() {
+        // `compact` folds the projection into ElementAdded lines; without `y` on the add the
+        // whole 2D placement would silently flatten on every snapshot.
+        let log = [
+            ev(r#"{"event":"ElementAdded","id":"E1","type":"event","label":"A","col":0}"#),
+            ev(r#"{"event":"ElementMoved","id":"E1","y":0.25}"#),
+        ];
+        let folded = compact(&log);
+        let reparsed = parse_log(&to_jsonl(&folded)).unwrap();
+        assert_eq!(replay(&reparsed).elements[0].y, Some(0.25));
+    }
+
+    #[test]
+    fn move_comment_with_y_only_persists_one_moved_event() {
+        let v = json::parse(r#"{"elemId":"E1","kind":"move","y":0.6}"#).unwrap();
+        let evs = comment_to_events(&v);
+        assert!(
+            matches!(&evs[..], [Event::ElementMoved { id, col: None, y: Some(y), .. }]
+                if id == "E1" && *y == 0.6),
+            "got {evs:?}"
+        );
+    }
+
+    #[test]
+    fn move_comment_with_neither_col_nor_y_is_rejected() {
+        let v = json::parse(r#"{"elemId":"E1","kind":"move"}"#).unwrap();
+        assert!(
+            comment_to_events(&v).is_empty(),
+            "a move carrying no target would replay as a no-op"
+        );
+    }
+
+    #[test]
+    fn move_comment_clamps_and_rounds_its_y() {
+        // Out-of-band fractions would draw off the lane; float noise would dirty the log.
+        for (posted, stored) in [("1.7", 1.0), ("-0.3", 0.0), ("0.333333333333", 0.3333)] {
+            let v =
+                json::parse(&format!(r#"{{"elemId":"E1","kind":"move","y":{posted}}}"#)).unwrap();
+            let evs = comment_to_events(&v);
+            assert!(
+                matches!(&evs[..], [Event::ElementMoved { y: Some(y), .. }] if *y == stored),
+                "posted {posted}: got {evs:?}"
+            );
+        }
     }
 
     #[test]

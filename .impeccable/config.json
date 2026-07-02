@@ -1,0 +1,14 @@
+{
+  "hook": {
+    "enabled": true,
+    "ignoreRules": [
+      "flat-type-hierarchy"
+    ],
+    "ignoreFiles": [],
+    "ignoreValues": [],
+    "limits": {
+      "maxFindings": 5,
+      "maxChars": 8000
+    }
+  }
+}

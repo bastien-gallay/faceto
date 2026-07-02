@@ -7,5 +7,6 @@
     // CHANGELOG.md repeats "Added" under each release; only sibling clashes matter.
     "MD024": { "siblings_only": true }
   },
-  "ignores": ["target/**", "node_modules/**"]
+  // .impeccable/critique/ holds generated design-review snapshots, not authored docs.
+  "ignores": ["target/**", "node_modules/**", ".impeccable/**"]
 }
