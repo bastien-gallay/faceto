@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `rename` now obeys the same non-blank-label rule as `add` (new shared
   `events::nonblank`): a blank or whitespace-only rename persists nothing, so direct
   editing can't blank a label into a permanent, never-renumbered empty box.
+- **Richer board gestures** (F-board-gestures): the box itself is the edit surface —
+  single-click focuses, **double-click / F2** renames, and a **drag left/right** moves
+  it along its lane (the mouse counterpart to ← / →). Hovering reveals three bare ghost
+  glyphs — `+` add, `×` remove, and a speech-bubble comment — individually anchored at
+  the box's edges, never a floating toolbar. The comment modal is now **prose-only**
+  (comment / split / open question / resolve); rename, drop and move became gestures,
+  and `resolve` shows only on a hotspot or an element carrying an open question. Comment
+  is also the **`c`** key.
 - **Event-sourced spine** (`src/events.rs`): an append-only `event-log.jsonl` is the
   durable record; the `Model` is a projection replayed from it. `render` and `serve`
   accept a log by extension. Comments become first-class events.
