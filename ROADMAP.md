@@ -16,7 +16,8 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | F-inline-add | UI · direct edit | ✅ | **Now** | Direct on-board element creation (the `add` substrate already exists end-to-end via the modal). Hover-element `+` and an empty-board affordance replace the modal dropdown's `add` option. Lane-only, client-only. Shipped PR #5. |
 | F-edge-routing | UI · legibility | ✅ | **Now** | Reduce edge crossings via a layout heuristic in `render.rs`. Self-contained, no model-spine change. Two levers: barycenter within-cell ordering + fan-out edge anchoring (both ports kept in lockstep). Shipped PR #6. |
 | F-container | model · grouping | ✅ | **Now** | The missing bounded-context / region primitive (vertical bands; spatial membership; derived pivotal). Model brick (PR #8), render (PR #9), serve mint/append (PR #10), client gestures (PR #11) — create/resize/rename a region directly on the board. Decisions + plan in [`docs/F-container-scope.md`](docs/F-container-scope.md) / [`docs/F-container-plan.md`](docs/F-container-plan.md). Unlocks F-model-smells and F-ddd-process. |
-| F-mcp-narrative | AI · participant | ☐ | Later | MCP server (stdio JSON-RPC, std-only) + a reverse-narrative / discovery skill so an LLM reads the log and proposes events. On product-thesis; the real answer to "solo & stuck". Revisit when momentum, not legibility, ends sessions. |
+| F-narrative-skill | AI · participant | ☐ | **Now** | *(was F-mcp-narrative — reshaped by feature-torture 2026-07-02.)* Reverse-narrative / discovery skill: an LLM agent reads `event-log.jsonl` directly and proposes events through the existing `POST /comment` seam (server-side minting + guards + append mutex, all shipped). Prompt-ware only — **no new Rust**; the participation seams already exist (`serve.rs` re-reads the log per request, so agent appends show live). The on-thesis answer to "solo & stuck". Spec: [`docs/F-narrative-skill-spec.md`](docs/F-narrative-skill-spec.md); torture report: `.personal/feature-torture/reports/F-mcp-narrative.md`. |
+| F-mcp-server | AI · interop | ☐ | Parked | std-only stdio JSON-RPC MCP server exposing read-log / propose-event tools. Spawned from the F-mcp-narrative torture (2026-07-02): redundant while the dogfood agent has file + shell tools. Revisit when a shell-less client (claude.ai, Claude Desktop) becomes a real usage context, or a second agent platform needs typed tool discovery. |
 | F-multiplayer | collab · network | ☐ | Parked | Multi-collaborator over network + event reconciliation + user naming. Heaviest std-only lift; fixes *crowded*, not *solo* — out of slice until a real multi-user need appears. |
 | F-format-interop | interop | ☐ | Parked | Import/export to known event-storming formats and visual tools (Excalidraw, Miro). Not felt pain today. |
 | F-es-vocabulary | modelling fidelity | ☐ | Parked | Deeper pure event-storming vocabulary — parallel / recurrent events, out-of-lane elements. Open when the model can't express something a real session needs. |
@@ -186,6 +187,9 @@ Two deferred items are named on purpose:
 - **F-container** is a hidden hub — UI bounded-context editing, F-model-smells, and
   F-ddd-process all silently depend on it, and the model has no container concept
   today. Cheap to add now, expensive to retrofit; build it when grouping is the pain.
-- **F-mcp-narrative** is the on-thesis answer to "solo & stuck" (faceto is "a simple
-  typed file you think through with an LLM"). F-multiplayer is parked because it
-  solves a different problem — crowded, not solo.
+- **F-narrative-skill** (né F-mcp-narrative) is the on-thesis answer to "solo & stuck"
+  (faceto is "a simple typed file you think through with an LLM"). Reshaped 2026-07-02:
+  the write seam an MCP server would expose already ships (`POST /comment` + per-request
+  log re-read), so the slice is a skill, not a server — the server is parked as
+  **F-mcp-server**. F-multiplayer stays parked because it solves a different problem —
+  crowded, not solo.
