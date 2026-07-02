@@ -28,6 +28,9 @@
   #status { font-size: 11px; padding: 3px 9px; border-radius: 999px; background: #eef; color: #557; }
   #status.live { background: #e6f7ec; color: #1b7a3d; }
   #note { font-size: 11px; color: #1b7a3d; }
+  /* A destructive-confirm prompt must not wear the success-green: the one moment the text channel
+     carries danger, it says so in red. Set by doRemove / armRegion, cleared on disarm. */
+  #note[data-tone="danger"] { color: #b4232a; }
   #board { overflow: auto; padding: 12px; }
   /* Drag-to-move owns horizontal touch travel on a box or a region edge — without this the browser
      claims the gesture to pan #board and pointercancels the drag. Labels are UI glass, not a text
@@ -219,7 +222,7 @@
     <div><kbd>⌘/Ctrl</kbd> <kbd>Z</kbd></div><div class="act">undo the last move or rename</div>
     <div><kbd>Esc</kbd></div><div class="act">cancel a drag, a rename, or an armed remove</div>
     <div><kbd>drag</kbd></div><div class="act">a box moves along its lane; a region edge resizes</div>
-    <div><kbd>region</kbd></div><div class="act">click a tab to rename, <kbd>Delete</kbd> or hover × to remove</div>
+    <div><kbd>region</kbd></div><div class="act">tab: click renames, <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> resizes, <kbd>Delete</kbd> removes; hover a gap to add</div>
     <div><kbd>?</kbd></div><div class="act">this sheet</div>
   </div>
 </dialog>
@@ -254,7 +257,11 @@ const boardSrc = (extra = {}) =>
 const $ = (s) => document.querySelector(s);
 const lsGet = () => { try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); } catch { return []; } };
 const lsSet = (a) => localStorage.setItem(LS_KEY, JSON.stringify(a));
-const note = (msg) => { $("#note").textContent = msg || ""; };
+const note = (msg, tone) => {
+  const n = $("#note");
+  n.textContent = msg || "";
+  if (tone) n.dataset.tone = tone; else delete n.dataset.tone;   // tone classes the message (danger)
+};
 const liveVersion = async () => {
   try { const v = await fetch("/model-version", { cache: "no-store" }); if (v.ok) return (await v.json()).version; } catch {}
   return null;
@@ -592,7 +599,7 @@ function doRemove(id) {
   removeXBtn.at(r.right - 3, r.top - 9, id);
   $("#remove-x").classList.add("armed");
   g.classList.add("arming");
-  note(`remove "${g.dataset.hero || id}"? — same gesture again to confirm, Esc to keep`);
+  note(`remove "${g.dataset.hero || id}"? — same gesture again to confirm, Esc to keep`, "danger");
 }
 
 // A hover glyph that acts on a stashed target id: a fixed ghost button (the × remove) that fades in
@@ -656,10 +663,23 @@ function armRegion(regionId, tab) {
     tab.classList.add("arming");
   }
   $("#region-x").classList.add("armed");
-  note(`remove region "${tab?.dataset.label || regionId}"? — same gesture again to confirm, Esc to keep`);
+  note(`remove region "${tab?.dataset.label || regionId}"? — same gesture again to confirm, Esc to keep`, "danger");
 }
 const regionXBtn = graceGlyph($("#region-x"),
   (rid) => armRegion(rid, document.querySelector(`.region-tab[data-region="${rid}"]`)));
+
+// Keyboard resize parity for regions: Shift+←/→ on a focused region tab nudges its right (`to`)
+// edge in/out one column, posting the same kind:"region-resize" the edge-drag posts. Clamped so the
+// edge can't cross the region's start (mirrors events::valid_span). Region *create* stays a mouse
+// gesture — the rail has no single focus target — and is disclosed in the shortcut sheet.
+function resizeRegionByKey(regionId, delta) {
+  const b = regionBounds[regionId];
+  if (!b) return;
+  const toCol = b.to + delta;
+  if (toCol <= b.from) { note("region already at its smallest"); return; }
+  note("region resized");
+  postComment({ regionId, kind: "region-resize", fromCol: b.from, toCol, ts: new Date().toISOString(), status: "open" });
+}
 
 // ---- inline add (the + affordance) ----------------------------------------
 // A ghost ink-blue + fades in on sticky hover (its right edge → add-after, same lane, col+1) and on
@@ -841,6 +861,10 @@ function bindRegions() {
     g.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startRename(g, true); }
       else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); e.stopPropagation(); armRegion(g.dataset.region, g); }
+      else if (e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        e.preventDefault(); e.stopPropagation();
+        resizeRegionByKey(g.dataset.region, e.key === "ArrowRight" ? 1 : -1);
+      }
     };
     g.onmouseenter = () => {
       if (gestureBusy()) return;   // a drag / edit owns the board — no region × meanwhile
@@ -925,12 +949,19 @@ async function load() {
 // brings the spotlight and the keyboard claim back with it.
 let suppressFocusNote = false;   // true while re-focusing after a board swap — see onfocus
 function swapBoard(html) {
-  const focused = document.activeElement?.classList?.contains("sticky") ? document.activeElement.id : null;
+  // Focus survives the swap by stable identity — a sticky by id, a region tab by data-region — so a
+  // repeated keyboard edit (arrow-move, Shift+arrow region resize) doesn't die after every commit.
+  const ae = document.activeElement;
+  const sticky = ae?.classList?.contains("sticky") ? ae.id : null;
+  const region = ae?.classList?.contains("region-tab") ? ae.dataset.region : null;
   $("#board").innerHTML = html;
   bindStickies();
-  // Restore focus, but suppress the focus connection-count note so it can't clobber an action
-  // confirmation ("moved", "renamed") that the swap is landing.
-  if (focused) { suppressFocusNote = true; document.getElementById(focused)?.focus(); suppressFocusNote = false; }
+  // Suppress the focus connection-count note so it can't clobber an action confirmation
+  // ("moved", "renamed", "region resized") that the swap is landing.
+  suppressFocusNote = true;
+  if (sticky) document.getElementById(sticky)?.focus();
+  else if (region) document.querySelector(`.region-tab[data-region="${region}"]`)?.focus();
+  suppressFocusNote = false;
 }
 
 // Redraw the plain current board (own edit just landed): advance the baseline silently and let
