@@ -312,15 +312,21 @@ widths). **One col = one x slot** now holds unconditionally — the second shapi
 intra-cell X spread), and exactly the ground the F-region-frontiers interstice column assumes.
 This also buries the stale "packing buttons don't switch" note under F-edge-routing.
 
-**Gesture.** Drag is 2D: x snaps to columns as before, y rides the pointer clamped to the lane
-band (`type` = lane is untouchable — the drag cannot cross into another band). A drop posts the
-`y` key **only when the target cell is shared** (above / below its occupants); into an empty cell
-it posts col-only, so the box stays auto-placed. While the drag hovers a cell that would deepen
-the lane, a horizontal **lane-growth guide** (`#lane-grow-guide`, the region-resize live-pen blue)
-marks where the lane's bottom rule will land on release. ←/→ still posts col-only. The
-**force-swap is removed** (dogfood bug #1): nothing is displaced, stickies sharing a cell are
-simultaneous and stack on the grid. The server keeps *parsing* `swapId` so old logs and stashed
-offline moves replay faithfully. A y-only change diffs as `moved` ("repositioned in its lane").
+**Gesture.** Drag is 2D: x snaps to columns as before, and the pointer's y (clamped to the lane
+band — `type` = lane is untouchable) becomes an ordering key whose **preview snaps to the same
+grid slots the commit will produce**: the client mirrors the renderer's cell-stack placement
+(`computeGrid`, fed by the `data-y` keys render.rs emits), so a drop never "jumps" on the
+authoritative re-render and legacy/offline replays land on the grid too. A drop posts the `y`
+key **only when the target cell is shared**; into an empty cell it posts col-only, so the box
+stays auto-placed. While the drag hovers a cell that would deepen the lane, a horizontal
+**lane-growth guide** (`#lane-grow-guide`, the region-resize live-pen blue) marks where the
+lane's bottom rule will land on release. ←/→ still posts col-only. The **force-swap is removed**
+(dogfood bug #1): nothing is displaced, stickies sharing a cell are simultaneous and stack on
+the grid. The server keeps *parsing* `swapId` so old logs and stashed offline moves replay
+faithfully. Undo of a placement restores the prior key — the neutral `0.5` for a
+previously-unplaced box, which `model::y_key` makes indistinguishable from "no y" — and a
+y-only change diffs as `moved` through that same key, so a neutralised placement never reads
+as a phantom move.
 
 ## Why this slice
 

@@ -355,9 +355,8 @@ fn cell_sub_order(
             .or_default()
             .push(i);
     }
-    // A member's placement key: its stored `y` clamped into the band (an out-of-range log value
-    // must still sort *inside* the stack), 0.5 — the neutral middle — when unplaced.
-    let key = |j: usize| elements[j].y.map(|y| y.clamp(0.0, 1.0)).unwrap_or(0.5);
+    // A member's placement key — `model::y_key`, the single home of the ordering-key rule.
+    let key = |j: usize| crate::model::y_key(elements[j].y);
     let mut sub_ord = vec![0i64; elements.len()];
     for members in cell_members.values_mut() {
         // Members enter in file order; the stable sort keeps that order for equal keys.
@@ -928,11 +927,17 @@ pub fn render_svg(model: &Model) -> String {
             aria.push_str(", resolved");
         }
         // data-kind / data-col / data-cx / data-cy let the client replay a move (translate the
-        // group, recompute its edges) without a server round-trip — see template.html.
+        // group, recompute its edges) without a server round-trip — see template.html. A placed
+        // element also exposes its normalised ordering key (`data-y`), so the client's grid
+        // preview sorts a dragged box against its occupants exactly as this renderer will.
+        let data_y = match e.y {
+            Some(_) => format!(" data-y=\"{}\"", crate::model::y_key(e.y)),
+            None => String::new(),
+        };
         p.push(format!(
             "<g id=\"{}\" class=\"{}\" role=\"button\" tabindex=\"0\" aria-label=\"{}\" \
              data-hero=\"{}\" data-detail=\"{}\" data-kind=\"{}\" \
-             data-col=\"{}\" data-cx=\"{:.1}\" data-cy=\"{:.1}\" style=\"cursor:pointer\"{}>",
+             data-col=\"{}\" data-cx=\"{:.1}\" data-cy=\"{:.1}\"{} style=\"cursor:pointer\"{}>",
             esc(&e.id),
             cls,
             esc(&aria),
@@ -942,6 +947,7 @@ pub fn render_svg(model: &Model) -> String {
             e.col.unwrap(),
             cx,
             cy,
+            data_y,
             g_op
         ));
         if let (Some(_), Some(meta)) = (status, &diff_meta) {

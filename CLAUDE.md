@@ -115,7 +115,9 @@ come from violating them:
   this set in sync.
 
 `diff_models` joins old vs new on `id` and tags each element `added` / `removed` / `changed`
-(label differs) / `moved` (col or type differs) / `unchanged`; layout follows the new side.
+(label differs) / `moved` (col, type, or in-lane `y` key differs — compared through
+`model::y_key`, so "no y" and the neutral `0.5` are one state) / `unchanged`; layout follows
+the new side.
 
 ### Event-sourced spine (do not break these)
 

@@ -183,6 +183,15 @@ pub fn region_of(m: &Model, col: i64) -> Option<&Phase> {
         .min_by_key(|p| p.to_col - p.from_col)
 }
 
+/// The ordering key an element's stored `y` denotes: clamped into `[0, 1]` (an out-of-range log
+/// value must still sort *inside* its stack) with `0.5` — the neutral middle — for an unplaced
+/// element. The single Rust home of the "y is an ordering key, not a position" rule: the renderer
+/// sorts cell members by it and the diff compares through it, so `y: 0.5` and "no y" are one
+/// state everywhere (which is also what lets an undo neutralise a placement by posting `0.5`).
+pub fn y_key(y: Option<f64>) -> f64 {
+    y.map(|y| y.clamp(0.0, 1.0)).unwrap_or(0.5)
+}
+
 /// Whether an element is a **pivotal event** — derived from geometry, never a stored flag
 /// (F-container scope D3). The rule is type-gated and positional: an `event`-lane element whose
 /// `col` sits on a region edge (`from_col` or `to_col` of any band). A pivotal event is the hinge
@@ -214,9 +223,11 @@ pub fn diff_models(a: &Model, b: &Model, meta: (String, String)) -> Model {
                         kind: old.kind.clone(),
                         y: old.y,
                     });
-                } else if old.col != e.col || old.kind != e.kind || old.y != e.y {
+                } else if old.col != e.col || old.kind != e.kind || y_key(old.y) != y_key(e.y) {
                     // `y` counts: a re-placement within the lane is a position change the
-                    // since-you-last-looked overlay must report, same as a col shift.
+                    // since-you-last-looked overlay must report, same as a col shift. Compared
+                    // through `y_key`, so "no y" vs the neutral 0.5 (an undone placement) never
+                    // reads as a phantom move — only a key the renderer would order differently.
                     el.diff = Some("moved".into());
                     el.was = Some(Was {
                         label: old.label.clone(),
@@ -527,5 +538,24 @@ mod tests {
         assert_eq!(b.elements[0].y, Some(0.75), "y reads from the file");
         let d = diff_models(&a, &b, ("old".into(), "new".into()));
         assert_eq!(tag(&d, "E1"), Some("moved"));
+    }
+
+    // The diff compares y through `y_key`, where "no y" and the neutral 0.5 are one state (an
+    // undone placement posts 0.5) — the overlay must not announce a phantom "repositioned".
+    #[test]
+    fn a_neutral_y_vs_no_y_reads_as_unchanged() {
+        let a = model_of(r#"{"elements":[{"id":"E1","type":"event","label":"X","col":1}]}"#);
+        let b =
+            model_of(r#"{"elements":[{"id":"E1","type":"event","label":"X","col":1,"y":0.5}]}"#);
+        let d = diff_models(&a, &b, ("old".into(), "new".into()));
+        assert_eq!(tag(&d, "E1"), Some("unchanged"));
+    }
+
+    #[test]
+    fn y_key_clamps_and_defaults_to_the_neutral_middle() {
+        assert_eq!(y_key(None), 0.5);
+        assert_eq!(y_key(Some(0.2)), 0.2);
+        assert_eq!(y_key(Some(7.0)), 1.0, "out-of-range clamps into the stack");
+        assert_eq!(y_key(Some(-3.0)), 0.0);
     }
 }

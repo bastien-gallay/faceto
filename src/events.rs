@@ -445,11 +445,10 @@ pub fn valid_span(from_col: i64, to_col: i64) -> bool {
     from_col < to_col
 }
 
-/// Normalise a posted vertical sub-position to its stored form: clamped into `[0, 1]` (a
-/// fraction of the lane-band interior — anything outside would draw off-band) and rounded to
-/// 4 decimals so the log carries a clean human-readable number, not a float's full noise.
-/// The one place the "y is a bounded fraction" rule lives, shared by the `move` seam here and
-/// any future poster.
+/// Normalise a posted vertical sub-position to its stored form: clamped into `[0, 1]` and
+/// rounded to 4 decimals so the log carries a clean human-readable number, not a float's full
+/// noise. This is the **write-seam** half of the rule; the **read** half — how a stored `y`
+/// (or its absence) is interpreted as an ordering key — is `model::y_key`.
 pub fn clamp_y(y: f64) -> f64 {
     (y.clamp(0.0, 1.0) * 10_000.0).round() / 10_000.0
 }
