@@ -266,6 +266,9 @@ fn diff_tooltip(e: &Element, meta: &(String, String)) -> String {
                         opt_col(e.col)
                     ));
                 }
+                if w.y != e.y {
+                    bits.push("repositioned in its lane".to_string());
+                }
             }
             format!("moved: {}", bits.join(", "))
         }
@@ -1243,6 +1246,7 @@ mod tests {
                 label: "L".into(),
                 col: Some(col),
                 detail: None,
+                y: None,
                 resolved: false,
                 diff: None,
                 was: None,
@@ -1326,6 +1330,7 @@ mod tests {
                     label: format!("L{k}"),
                     col: Some(col),
                     detail: None,
+                    y: None,
                     resolved: false,
                     diff: None,
                     was: None,
@@ -1389,6 +1394,7 @@ mod tests {
             label: "far".into(),
             col: Some(2),
             detail: None,
+            y: None,
             resolved: false,
             diff: None,
             was: None,
@@ -1536,6 +1542,7 @@ mod tests {
             label: "L".into(),
             col: Some(col),
             detail: None,
+            y: None,
             resolved: false,
             diff: None,
             was: None,

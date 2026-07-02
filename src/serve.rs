@@ -116,6 +116,7 @@ impl Ctx {
             label,
             col,
             detail,
+            y: None,
         };
         Self::write_line(&self.model_path, &events::line(&ev)).map_err(|e| e.to_string())?;
         Ok(ev)
@@ -692,6 +693,7 @@ mod tests {
             label: id.into(),
             col: None,
             detail: None,
+            y: None,
         }
     }
 

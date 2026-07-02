@@ -26,6 +26,7 @@ pub struct Was {
     pub label: String,
     pub col: Option<i64>,
     pub kind: String,
+    pub y: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -35,6 +36,10 @@ pub struct Element {
     pub label: String,
     pub col: Option<i64>,
     pub detail: Option<String>,
+    /// Stored vertical sub-position within the lane band (F-2d-placement): a fraction of the
+    /// band interior in `[0, 1]`. `None` = auto-stacked by the renderer. Never part of identity
+    /// (`id` is) and never a lane choice (`type` is) — it only places the sticky *within* its band.
+    pub y: Option<f64>,
     pub resolved: bool,
     // diff annotations (not in the file)
     pub diff: Option<String>,
@@ -136,6 +141,7 @@ fn element_from(j: &Json) -> Option<Element> {
         label: j.get("label")?.as_str()?.to_string(),
         col: j.get("col").and_then(|v| v.as_f64()).map(|n| n as i64),
         detail: j.get("detail").and_then(|v| v.as_str()).map(String::from),
+        y: j.get("y").and_then(|v| v.as_f64()),
         resolved: j.get("resolved").and_then(|v| v.as_bool()).unwrap_or(false),
         diff: None,
         was: None,
@@ -206,13 +212,17 @@ pub fn diff_models(a: &Model, b: &Model, meta: (String, String)) -> Model {
                         label: old.label.clone(),
                         col: old.col,
                         kind: old.kind.clone(),
+                        y: old.y,
                     });
-                } else if old.col != e.col || old.kind != e.kind {
+                } else if old.col != e.col || old.kind != e.kind || old.y != e.y {
+                    // `y` counts: a re-placement within the lane is a position change the
+                    // since-you-last-looked overlay must report, same as a col shift.
                     el.diff = Some("moved".into());
                     el.was = Some(Was {
                         label: old.label.clone(),
                         col: old.col,
                         kind: old.kind.clone(),
+                        y: old.y,
                     });
                 } else {
                     el.diff = Some("unchanged".into());
@@ -504,5 +514,18 @@ mod tests {
         assert_eq!(e.col, None);
         assert!(!e.resolved);
         assert!(e.detail.is_none());
+        assert!(e.y.is_none());
+    }
+
+    // F-2d-placement: `y` reads from the file and a y-only re-placement is a *position* change —
+    // the overlay must report it as moved, keyed on the same stable id as every other verdict.
+    #[test]
+    fn a_y_only_change_reads_as_moved() {
+        let a = model_of(r#"{"elements":[{"id":"E1","type":"event","label":"X","col":1}]}"#);
+        let b =
+            model_of(r#"{"elements":[{"id":"E1","type":"event","label":"X","col":1,"y":0.75}]}"#);
+        assert_eq!(b.elements[0].y, Some(0.75), "y reads from the file");
+        let d = diff_models(&a, &b, ("old".into(), "new".into()));
+        assert_eq!(tag(&d, "E1"), Some("moved"));
     }
 }
