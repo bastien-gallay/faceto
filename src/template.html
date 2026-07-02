@@ -17,14 +17,6 @@
   button { font: inherit; padding: 5px 11px; border: 1px solid #cfcfda; border-radius: 7px;
            background: #fff; cursor: pointer; }
   button:hover { background: #f2f2f7; }
-  /* Packing control: how crowded time-slots unpack (rows / columns / grid). A connected
-     segmented control — one standard affordance, the active mode carries the accent. */
-  .seg { display: inline-flex; border: 1px solid #cfcfda; border-radius: 7px; overflow: hidden; }
-  .seg button { border: none; border-radius: 0; border-left: 1px solid #e6e6ee; padding: 5px 10px;
-                color: #557; background: #fff; }
-  .seg button:first-child { border-left: none; }
-  .seg button[aria-pressed="true"] { background: #1A6FAE; color: #fff; }
-  .seg button[aria-pressed="true"]:hover { background: #1A6FAE; }
   #status { font-size: 11px; padding: 3px 9px; border-radius: 999px; background: #eef; color: #557; }
   #status.live { background: #e6f7ec; color: #1b7a3d; }
   #note { font-size: 11px; color: #1b7a3d; }
@@ -114,14 +106,18 @@
      a label). No transition — a drag must track the cursor instantly. */
   #region-drag-guide { position: fixed; display: none; z-index: 18; width: 2px; background: #1A6FAE;
                         opacity: .8; pointer-events: none; }
+  /* Lane-growth guide: the horizontal twin — while a drag hovers a cell that already holds a
+     sticky, this line marks where the lane's bottom rule will move to once the drop lands and
+     the lane grows a row. Same live-pen accent, same instant tracking. */
+  #lane-grow-guide { position: fixed; display: none; z-index: 18; height: 2px; background: #1A6FAE;
+                     opacity: .8; pointer-events: none; }
   @media (prefers-reduced-motion: reduce) { .edge, .sticky, .hovglyph { transition: none; } }
-  /* Narrow widths: let the header wrap instead of clipping. Without this the packing control
-     (Rows / Columns / Grid) and the Reload button slide off-screen and become unreachable. */
+  /* Narrow widths: let the header wrap instead of clipping. Without this the Reload button
+     slides off-screen and becomes unreachable. */
   @media (max-width: 680px) {
     header { flex-wrap: wrap; gap: 8px 10px; }
     header b { flex-basis: 100%; font-size: 17px; }
     header .spacer { display: none; }
-    .seg button { padding: 5px 9px; }
   }
   dialog { border: none; border-radius: 12px; padding: 0; width: min(440px, 92vw);
            box-shadow: 0 18px 50px #0003; }
@@ -163,11 +159,6 @@
   <span id="status">checking…</span>
   <span id="note" aria-live="polite"></span>
   <span class="spacer"></span>
-  <span class="seg" id="pack" role="group" aria-label="how overlapping stickies unpack">
-    <button data-pack="rows" aria-pressed="true" title="stack overlapping stickies into rows — taller board">Rows</button>
-    <button data-pack="columns" aria-pressed="false" title="fan overlapping stickies into columns — wider board">Columns</button>
-    <button data-pack="grid" aria-pressed="false" title="pack overlapping stickies into a grid — balanced">Grid</button>
-  </span>
   <span id="count" class="prior"></span>
   <button id="plain" style="display:none" title="clear the diff overlay and show the current board">Plain</button>
   <button id="export">Export comments</button>
@@ -181,6 +172,7 @@
 <button id="comment-c" class="hovglyph" type="button" aria-label="comment on this element (or press c)" title="comment (c)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5c-3.9 0-7 2.24-7 5 0 1.58 1.02 2.99 2.6 3.9-.14.86-.57 1.8-1.3 2.55 1.35-.14 2.55-.66 3.46-1.38.7.18 1.46.28 2.24.28 3.9 0 7-2.24 7-5.35C15 3.74 11.9 1.5 8 1.5z"/></svg></button>
 <button id="region-x" class="hovglyph" type="button" aria-label="remove this region" title="remove region">×</button>
 <div id="region-drag-guide" aria-hidden="true"></div>
+<div id="lane-grow-guide" aria-hidden="true"></div>
 
 <dialog id="modal">
   <form method="dialog">
@@ -224,7 +216,7 @@
     <div><kbd>Delete</kbd></div><div class="act">remove — press again to confirm, Esc keeps</div>
     <div><kbd>⌘/Ctrl</kbd> <kbd>Z</kbd></div><div class="act">undo the last move or rename</div>
     <div><kbd>Esc</kbd></div><div class="act">cancel a drag, a rename, or an armed remove</div>
-    <div><kbd>drag</kbd></div><div class="act">a box moves along its lane; a region edge resizes</div>
+    <div><kbd>drag</kbd></div><div class="act">a box moves along the timeline; drop on an occupied slot to stack above / below (the lane grows); a region edge resizes</div>
     <div><kbd>region</kbd></div><div class="act">tab: click renames, <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> resizes, <kbd>Delete</kbd> removes; hover a gap to add</div>
     <div><kbd>?</kbd></div><div class="act">this sheet</div>
   </div>
@@ -232,7 +224,7 @@
 
 <script>
 const LS_KEY = "facetoComments";
-const CFG = __CONFIG__;   // { colW, stickyW, stickyH, pack } — geometry + default packing, from render.rs
+const CFG = __CONFIG__;   // { colW, stickyW, stickyH, regionTab… } — geometry constants, from render.rs
 // Structural ops change the board itself, not feedback on a box — kept out of the note badges,
 // counts and prior-comment list (and never resynced offline; the log is the truth). `rename`
 // belongs here: it edits the model's label, it is not a note — counting it as feedback painted
@@ -251,11 +243,10 @@ let comments = [];        // {elemId, kind, text, ts}  (kind:"move" carries col/
 let shownVersion = null;  // model hash the board currently displays — the diff baseline
 let diffing = false;
 let diffBase = null;      // baseline hash the current diff overlay is drawn against (if diffing)
-// How crowded time-slots unpack: rows (taller) | columns (wider) | grid (balanced). The board the
-// server first sent is CFG.pack; a saved preference wins. Every /board.svg request carries it.
-let pack = localStorage.getItem("facetoPack") || CFG.pack || "rows";
-const boardSrc = (extra = {}) =>
-  "/board.svg?" + new URLSearchParams({ pack, ...extra }).toString();
+const boardSrc = (extra = {}) => {
+  const q = new URLSearchParams(extra).toString();
+  return "/board.svg" + (q ? "?" + q : "");
+};
 
 const $ = (s) => document.querySelector(s);
 const lsGet = () => { try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); } catch { return []; } };
@@ -270,20 +261,26 @@ const liveVersion = async () => {
   return null;
 };
 
-// ---- moving stickies left / right -----------------------------------------
-// A move never touches edges' endpoints (identity is `id`); it only shifts a sticky along the
-// shared column axis. Persistence is a kind:"move" comment in comments.jsonl — the model file is
-// left untouched for now — and the client replays those comments so a move survives reloads.
+// ---- moving stickies (2D: along the timeline + within the lane band) --------
+// A move never touches edges' endpoints (identity is `id`); it shifts a sticky along the shared
+// column axis (x = col, snapped) and/or within its lane band (a stored `y` fraction — never a
+// lane change, `type` selects the lane). Persistence is a kind:"move" comment; in log mode the
+// server folds it into ElementMoved, in legacy mode the client replays comments so a move
+// survives reloads.
 let hoverId = null;                              // sticky under the cursor, target of ← / →
 let baseCol = {}, baseCx = {}, cyOf = {}, kindOf = {}, colOf = {};
-let colX = {};   // authored column -> its centre x, read from the rendered stickies. Columns/Grid
-                 // packing give a column the width of its busiest cell, so the pitch is NOT uniform
-                 // and CFG.colW would lie — we measure the real centres instead.
+let yFrac = {};  // element id -> replayed y fraction of its band interior (undefined = server truth)
+let bandTop = {}, bandH = {};   // lane -> its band interior's top / height, in SVG user units —
+                                // read from the lane labels; render.rs is the single source of
+                                // truth for the frame the `y` fraction lives in.
+let colX = {};   // authored column -> its centre x, read from the rendered stickies (robust to
+                 // any future non-uniform pitch, and the source for empty-gap interpolation).
 
-// Snapshot the server-rendered layout: each sticky's authored column, lane and centre, plus each
-// column's real centre x (a crowded column's centre is the midpoint of its sub-columns' spread).
+// Snapshot the server-rendered layout: each sticky's authored column, lane and centre, each
+// column's real centre x, and each lane's band interior.
 function readLayout() {
   baseCol = {}; baseCx = {}; cyOf = {}; kindOf = {}; colOf = {}; colX = {};
+  bandTop = {}; bandH = {};
   const span = {};   // col -> [minCx, maxCx]
   document.querySelectorAll(".sticky").forEach((g) => {
     const col = +g.dataset.col, cx = +g.dataset.cx;
@@ -296,6 +293,10 @@ function readLayout() {
     s[0] = Math.min(s[0], cx); s[1] = Math.max(s[1], cx);
   });
   for (const c in span) colX[c] = (span[c][0] + span[c][1]) / 2;
+  document.querySelectorAll(".lane-label").forEach((t) => {
+    bandTop[t.dataset.lane] = +t.dataset.bandTop;
+    bandH[t.dataset.lane] = +t.dataset.bandH;
+  });
 }
 
 // The centre x of an authored column. An empty column (a move into a gap) is interpolated from the
@@ -309,9 +310,15 @@ function colCenter(col) {
   return colX[near] + (col - near) * CFG.colW;
 }
 
-// A moved sticky keeps its sub-column offset and shifts by the gap between real column centres —
-// exact in Rows, correct under the variable widths of Columns/Grid.
-const centerOf = (id) => [baseCx[id] + (colCenter(colOf[id]) - colCenter(baseCol[id])), cyOf[id]];
+// The effective centre-y of a sticky: its replayed `y` fraction mapped into its lane's band
+// interior when one is set, else the server-rendered centre (auto-stacked).
+const effCy = (id) => {
+  const f = yFrac[id], k = kindOf[id];
+  return f !== undefined && bandH[k] !== undefined ? bandTop[k] + f * bandH[k] : cyOf[id];
+};
+// A moved sticky shifts by the gap between real column centres in x, and to its effective
+// band position in y.
+const centerOf = (id) => [baseCx[id] + (colCenter(colOf[id]) - colCenter(baseCol[id])), effCy(id)];
 
 // Port of render.rs `edge_path`: a smooth connector anchored on the boxes' facing edges. `o1`/`o2`
 // slide each anchor along its facing edge (Lever B fan-out) — Y for a left/right face, X for a
@@ -379,7 +386,8 @@ function applyLayout() {
   document.querySelectorAll(".sticky").forEach((g) => {
     if (colOf[g.id] === undefined) return;
     const dx = colCenter(colOf[g.id]) - colCenter(baseCol[g.id]);
-    g.setAttribute("transform", dx ? `translate(${dx.toFixed(1)},0)` : "");
+    const dy = effCy(g.id) - cyOf[g.id];
+    g.setAttribute("transform", dx || dy ? `translate(${dx.toFixed(1)},${dy.toFixed(1)})` : "");
   });
   const { edges, off } = fanOffsets();
   edges.forEach((p, ei) => {
@@ -394,18 +402,22 @@ function applyLayout() {
 // `comments.jsonl` mode, where the board SVG is the authored layout and moves ride on top.
 function replayMoves() {
   for (const id in baseCol) colOf[id] = baseCol[id];
+  yFrac = {};
   for (const c of comments) {
     if (c.kind !== "move" || colOf[c.elemId] === undefined) continue;
-    colOf[c.elemId] = c.col;
+    if (c.col !== undefined) colOf[c.elemId] = c.col;
+    if (c.y !== undefined) yFrac[c.elemId] = c.y;
+    // Swaps are legacy (the 2D client no longer displaces an occupant), but a stashed offline
+    // move from an old session may still carry one — keep replaying it faithfully.
     if (c.swapId !== undefined && colOf[c.swapId] !== undefined) colOf[c.swapId] = c.swapCol;
   }
   applyLayout();
 }
 
-// Move a sticky to an absolute target column, swapping with any sticky already in that column in
-// the same lane. Shared by the ←/→ nudge (doMove) and drag-to-move — the single move contract.
-// A no-op if the target is the current column. `dir` (for the note/text) is derived from the
-// shift, so a single-step nudge and a multi-column drag both read naturally.
+// Move a sticky to an absolute target column and (optionally) a `y` fraction within its band.
+// Shared by the ←/→ nudge (doMove) and drag-to-move — the single move contract. Nothing is
+// displaced: two stickies may share a (lane, col) cell (they are simultaneous; the renderer
+// stacks the unplaced ones), so the old force-swap is gone. A no-op if neither axis changes.
 // Undo (Ctrl/Cmd+Z): each own move/rename pushes its inverse — one more POST, since the log is
 // append-only truth (history is never rewritten, the undo is itself an event). `add` and `drop`
 // have no inverse through this seam (ids are minted server-side and can't be re-asked), which is
@@ -415,31 +427,38 @@ function undoLast() {
   const u = undoStack.pop();
   if (!u) { note("nothing to undo"); return; }
   if (u.kind === "move") {
-    moveTo(u.id, u.col, false);   // false: applying an inverse must not record a new undo entry
+    moveTo(u.id, u.col, u.y, false);   // false: applying an inverse must not record a new undo entry
   } else if (u.kind === "rename") {
     note(`undid rename of ${u.id}`);
     postComment({ elemId: u.id, kind: "rename", text: u.text, ts: new Date().toISOString(), status: "open" });
   }
 }
 
-function moveTo(id, target, recordUndo = true) {
-  if (colOf[id] === undefined || target === colOf[id]) return;
+// The effective y fraction a sticky currently shows — what a drag starts from, and what an undo
+// must restore to put the box back where the eye saw it.
+const effFrac = (id) => {
+  const k = kindOf[id];
+  return bandH[k] ? +(((effCy(id) - bandTop[k]) / bandH[k]).toFixed(4)) : undefined;
+};
+
+function moveTo(id, target, frac, recordUndo = true) {
+  if (colOf[id] === undefined) return;
   const from = colOf[id];
-  if (recordUndo) undoStack.push({ kind: "move", id, col: from });   // a swap re-swaps on the way back
+  if (target === from && frac === undefined) return;
+  // Record the effective y only when this move changes it — undoing a pure column nudge must
+  // not pin an auto-stacked box's vertical position as a side effect.
+  if (recordUndo) undoStack.push({ kind: "move", id, col: from, y: frac !== undefined ? effFrac(id) : undefined });
   // No fixed left edge: `col` is a global coordinate and the lane-title `+` (prepend) mints
   // negative cols, which the renderer draws on-board. Moving left grows the board left the same way.
-  let swapId = null;
-  for (const oid in colOf) {
-    if (oid !== id && kindOf[oid] === kindOf[id] && colOf[oid] === target) { swapId = oid; break; }
-  }
   colOf[id] = target;
-  if (swapId) colOf[swapId] = from;
+  if (frac !== undefined) yFrac[id] = frac;
   applyLayout();
-  const dir = target < from ? "left" : "right";
+  const dir = target < from ? "left" : target > from ? "right" : "within its lane";
   const c = { elemId: id, kind: "move", col: target, prevCol: from,
-              text: `moved ${dir} to col ${target}`, ts: new Date().toISOString(), status: "open" };
-  if (swapId) { c.swapId = swapId; c.swapCol = from; c.swapPrevCol = target; }
-  note(swapId ? `swapped with ${swapId}` : `moved ${dir}`);
+              text: dir === "within its lane" ? "moved within its lane" : `moved ${dir} to col ${target}`,
+              ts: new Date().toISOString(), status: "open" };
+  if (frac !== undefined) c.y = frac;
+  note(`moved ${dir}`);
   postComment(c);
 }
 
@@ -449,15 +468,21 @@ function doMove(id, dir) {
   moveTo(id, colOf[id] + (dir === "left" ? -1 : 1));
 }
 
-// ---- drag a sticky along its lane -----------------------------------------
-// The mouse counterpart to the ←/→ nudge: grab a box and drag it left/right to a new column, the
-// same kind:"move" the arrows post (via moveTo). Horizontal only — `type` selects the lane and a
-// move never changes it. Pointer Events + setPointerCapture (like the region-resize drag): once
-// captured, every event including pointerup lands on the box even if the button releases off-window,
-// so the drag can't leak (the fix the PR #11 review pinned for region resize). A press that never
-// crosses DRAG_THRESHOLD is a plain click, which just focuses the box (single-click is benign).
+// ---- drag a sticky (2D, grid) ------------------------------------------------
+// The mouse counterpart to the ←/→ nudge: grab a box and drag it to a new column (x snaps to the
+// timeline grid); the y travel, clamped to the lane band (`type` selects the lane and a move
+// never crosses it), decides where the box lands *within a shared cell* — above or below its
+// occupants. Placement is a grid, not a free canvas: the drop posts the `y` fraction only when
+// the target cell is shared (it is an ordering key — the renderer snaps everyone onto row-slot
+// centres and grows the lane to hold them; #lane-grow-guide previews that growth in the live-pen
+// blue during the drag). A drop into an empty cell posts col-only, so the box stays auto-placed.
+// Pointer Events + setPointerCapture (like the region-resize drag): once captured, every event
+// including pointerup lands on the box even if the button releases off-window, so the drag can't
+// leak (the fix the PR #11 review pinned for region resize). A press that never crosses
+// DRAG_THRESHOLD on either axis is a plain click, which just focuses the box.
 const DRAG_THRESHOLD = 4;   // px of travel before a press becomes a drag rather than a click
-let stickyDrag = null;      // { id, pointerId, startX, fromCol, col, moved } while dragging, else null
+let stickyDrag = null;      // { id, pointerId, startX, startY, startCy, fromCol, fromFrac,
+                            //   col, frac, moved } while dragging, else null
 // One predicate for "a gesture owns the board" (inline edit, add, either drag): every gesture
 // entry point checks it, so mutual exclusion is one flag added here — not an edit at five sites.
 function gestureBusy() { return !!(renaming || adding || regionDrag || stickyDrag); }
@@ -482,7 +507,9 @@ function startStickyDrag(e) {
   // flag has leaked — a leaked stickyDrag would gate gestureBusy() and load()'s whenNoDrag forever,
   // silently killing every gesture including Reload. The press degrades to a plain click instead.
   try { g.setPointerCapture(e.pointerId); } catch { g.focus(); return; }
-  stickyDrag = { id: g.id, pointerId: e.pointerId, startX: e.clientX, fromCol: colOf[g.id], col: colOf[g.id], moved: false };
+  stickyDrag = { id: g.id, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY,
+                 startCy: effCy(g.id), fromCol: colOf[g.id], fromFrac: yFrac[g.id],
+                 col: colOf[g.id], frac: undefined, moved: false };
   // the pointer is captured now, so the hover glyphs' own mouseleave won't fire — hide them all
   hideGlyphs();
   g.addEventListener("pointermove", dragSticky);
@@ -492,16 +519,52 @@ function startStickyDrag(e) {
   // delivers its pointerup — without this the stuck stickyDrag would gate every gesture forever.
   g.addEventListener("lostpointercapture", endStickyDrag);
 }
+// The other stickies already in a (lane, col) cell — the dragged one excluded, so a drag inside
+// its own cell counts only its neighbours.
+function occupantsOf(kind, col, exceptId) {
+  let n = 0;
+  for (const oid in colOf) {
+    if (oid !== exceptId && kindOf[oid] === kind && colOf[oid] === col) n++;
+  }
+  return n;
+}
+const growGuide = $("#lane-grow-guide");
 function dragSticky(e) {
   // Only the captured pointer steers the drag — a second finger resting on the same box is ignored.
   if (!stickyDrag || e.pointerId !== stickyDrag.pointerId) return;
-  if (!stickyDrag.moved && Math.abs(e.clientX - stickyDrag.startX) < DRAG_THRESHOLD) return;
+  if (!stickyDrag.moved
+      && Math.abs(e.clientX - stickyDrag.startX) < DRAG_THRESHOLD
+      && Math.abs(e.clientY - stickyDrag.startY) < DRAG_THRESHOLD) return;
   stickyDrag.moved = true;
-  const svgLeft = document.querySelector("#board svg").getBoundingClientRect().left;
-  const target = nearestCol(e.clientX - svgLeft);
-  if (target === stickyDrag.col) return;
+  const svgRect = document.querySelector("#board svg").getBoundingClientRect();
+  const target = nearestCol(e.clientX - svgRect.left);
+  // Y rides the pointer's travel from the grab point (no jump), clamped to the lane band —
+  // the drag can place a box anywhere within its lane, never in another one.
+  const k = kindOf[stickyDrag.id];
+  const cy = Math.min(bandTop[k] + bandH[k],
+    Math.max(bandTop[k], stickyDrag.startCy + (e.clientY - stickyDrag.startY)));
+  const frac = +(((cy - bandTop[k]) / bandH[k]).toFixed(4));
+  // The lane-growth preview: when the drop cell already holds a sticky and the lane has no spare
+  // row for one more, the lane will grow on release — show where its bottom rule will land
+  // (one row below the current one), the same live-pen guide the region resize draws.
+  const occupants = occupantsOf(k, target, stickyDrag.id);
+  const rows = Math.round(bandH[k] / CFG.rowPitch);
+  if (occupants + 1 > rows) {
+    const bottom = svgRect.top + bandTop[k] + bandH[k] + CFG.laneVpad / 2 + CFG.rowPitch;
+    Object.assign(growGuide.style, {
+      left: `${svgRect.left + 12}px`,
+      width: `${Math.max(0, svgRect.width - 32)}px`,
+      top: `${bottom}px`,
+      display: "block",
+    });
+  } else {
+    growGuide.style.display = "none";
+  }
+  if (target === stickyDrag.col && frac === stickyDrag.frac) return;
   stickyDrag.col = target;
+  stickyDrag.frac = frac;
   colOf[stickyDrag.id] = target;   // live preview through the shared applyLayout (box + its edges)
+  yFrac[stickyDrag.id] = frac;
   applyLayout();
 }
 function endStickyDrag(e) {
@@ -511,13 +574,19 @@ function endStickyDrag(e) {
   g.removeEventListener("pointerup", endStickyDrag);
   g.removeEventListener("pointercancel", endStickyDrag);
   g.removeEventListener("lostpointercapture", endStickyDrag);
+  growGuide.style.display = "none";
   const d = stickyDrag;
   stickyDrag = null;
   if (!d) return;
   if (!g.isConnected) return;  // detached by a board swap mid-drag — state dropped, nothing to commit
-  colOf[d.id] = d.fromCol;   // undo the preview so moveTo re-derives the true origin (and swaps)
-  if (d.moved && d.col !== d.fromCol) {
-    moveTo(d.id, d.col);     // sets colOf=target + applyLayout (with swap) + posts — no snap-back
+  // Undo the preview so moveTo re-derives the true origin (and records an honest undo entry).
+  colOf[d.id] = d.fromCol;
+  if (d.fromFrac === undefined) delete yFrac[d.id]; else yFrac[d.id] = d.fromFrac;
+  // The `y` ordering key only means something in a *shared* cell (above/below the occupants);
+  // a drop into an empty cell posts col-only so the box stays auto-placed on the grid.
+  const frac = occupantsOf(kindOf[d.id], d.col, d.id) > 0 ? d.frac : undefined;
+  if (d.moved && (d.col !== d.fromCol || frac !== undefined)) {
+    moveTo(d.id, d.col, frac);     // sets colOf/yFrac + applyLayout + posts — no snap-back
   } else {
     applyLayout();           // sub-threshold / no-op: snap the box back to where it started
     g.focus();               // the single click's promised focus, not left to browser defaults
@@ -1043,7 +1112,7 @@ function bindStickies() {
   hoverId = null;
   hideGlyphs();
   hoverOff();
-  stickyDrag = null;
+  if (stickyDrag) { stickyDrag = null; growGuide.style.display = "none"; }
   if (regionDrag) { regionDrag = null; dragGuide.style.display = "none"; }
   buildGraph();
   readLayout();
@@ -1138,10 +1207,7 @@ function openModal(g) {
   window._activeId = id;
 }
 
-syncPackUI();
 bindStickies();
-// The server first rendered CFG.pack; if a saved preference differs, switch to it before loading.
-if (pack !== CFG.pack) renderPack();
 
 $("#modal").addEventListener("close", () => {
   if ($("#modal").returnValue !== "save") return;
@@ -1198,7 +1264,9 @@ document.addEventListener("keydown", (e) => {
     if (stickyDrag) {
       const d = stickyDrag, g = document.getElementById(d.id);
       stickyDrag = null;
+      growGuide.style.display = "none";
       colOf[d.id] = d.fromCol;
+      if (d.fromFrac === undefined) delete yFrac[d.id]; else yFrac[d.id] = d.fromFrac;
       try { g?.releasePointerCapture(d.pointerId); } catch {}
       applyLayout();
       g?.focus();
@@ -1237,30 +1305,6 @@ document.addEventListener("keydown", (e) => {
     const g = document.getElementById(target), r = g.getBoundingClientRect();
     startAdd({ type: g.dataset.kind, col: +g.dataset.col + 1, sx: r.right + 12, sy: r.top });
   }
-});
-
-// ---- packing control (rows / columns / grid) ------------------------------
-function syncPackUI() {
-  document.querySelectorAll("#pack button").forEach((b) =>
-    b.setAttribute("aria-pressed", b.dataset.pack === pack ? "true" : "false"));
-}
-// Re-render at the current packing, keeping the diff overlay if one is showing (same baseline).
-async function renderPack() {
-  try {
-    const r = await fetch(boardSrc(diffing && diffBase ? { base: diffBase } : {}), { cache: "no-store" });
-    if (!r.ok) return;
-    swapBoard(await r.text());
-    if (!diffing) replayMoves();
-    paint();
-  } catch {}
-}
-$("#pack").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-pack]");
-  if (!b || b.dataset.pack === pack) return;
-  pack = b.dataset.pack;
-  localStorage.setItem("facetoPack", pack);
-  syncPackUI();
-  renderPack();
 });
 
 $("#refresh").addEventListener("click", load);
