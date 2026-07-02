@@ -27,6 +27,11 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | F-board-gestures | UI · direct edit | ✅ | **Now** | Richer on-element gestures layered over F-inline-add: **chromeless** bare ghost glyphs (`+` add · `×` remove · comment), not a floating toolbar (DESIGN §6); single-click focuses only (select-then-edit), double-click / F2 rename, drag left/right moves, `c` / comment glyph opens the modal. The modal then carries only prose actions, and `resolve` shows only on hotspots / open questions. Working note below; shipped 2026-07-01. |
 | F-region-frontiers | model · grouping | ☐ | Next | Regions as a **contiguous partition defined by shared *frontiers***, not independent `[fromCol, toCol]` spans. Collapses add / resize / remove / move into one primitive — the *frontier*: resize moves a frontier (both neighbours adjust atomically), add = *split* a phase, remove = *merge* two, the outermost frontiers resize the **whole board**. A dedicated **pivot / interstice column** hosts the frontier, the (derived) pivotal event, and the region glyphs (add-left / add-right / move). Kills by construction the hole / overlap / unreachable-edge confusions of the independent-span model. The one geste that gets *harder*: move-region becomes a **reorder** carrying its content (membership = spatial `col` containment). Model-spine change (`events.rs` frontier semantics + `render.rs` interstice layout + client) — needs shaping before code. Follows F-container; surfaced by dogfood 2026-07-02. Working note below. |
 | F-region-collapse | UI · legibility | ☐ | Later | Collapse / hide a region to concentrate readability: fold its stickies **and the edges that cross it** into a summarised band. Pure **view-state** — no model / event change — so it is orthogonal to F-region-frontiers and works under either border model. Surfaced alongside F-region-frontiers (dogfood 2026-07-02). |
+| F-2d-placement | model · layout | ☐ | Next | Replace the rows / columns / grid **packing** (and its dark grey group box — a poor 2D representation) with a **stored 2D sub-position**: keep `x = col` (global timeline) and `type = lane` — both invariants — but give each element a free **Y within its lane band** instead of auto-packing. Removes the packing control entirely and fixes two dogfood bugs: moving within a stacked group force-**swaps** (can't re-insert without displacing the survivor), and moving from / into a group **superposes**. Model change — `ElementMoved` gains the sub-position. Absorbs feedback #1 / #3 / #4 / #10. Working note below. |
+| F-lane-flow | UI · legibility | ☐ | Next | Reorder the 8 lanes to the **canonical event-storming flow** (actor → command → aggregate / system → event → policy → … → read-model → UI → actor) so system and policy sit *near* events / commands, not at the bottom. Forks to shape: (a) reorder `LANES`; (b) **merge** adjacent lanes (aggregate+external, readmodel+policy) as an expandable *display grouping* — `type` still selects a pure lane, so the 8-colour grammar invariant holds; (c) alternate event / non-event **column cadence** — recoups the pivot / interstice column of F-region-frontiers, so shape together. Feedback #2. |
+| F-floating-hotspots | model · ES fidelity | ☐ | Later | Hotspots become **floating annotations attached to an element** (placed beside it, ES-canonical) rather than a bottom lane — removing `hotspot` from `LANES` (interacts with F-lane-flow). Split the modal into two direct gestures: **`c` = comment**, **`h` = hotspot / open question**; drop **split** (add / rename / remove already cover it). Feedback #5 / #6. |
+| F-frozen-headers | UI · legibility | ☐ | Later | Pin the **lane titles** to the left through horizontal scroll (condensable to initial + colour) and the **phase tabs** to the top through vertical scroll — frozen row / column headers. The board is one scrolling SVG, so this needs an overlay layer (or a split render), not plain `position: sticky`. Feedback #7 / #8. |
+| F-commit-flow | UI · server flow | ☐ | Later | Replace the counterintuitive **Export comments / Reload** header actions with a single **Commit / Save** that re-baselines and clears the since-you-last-looked diff overlay. Framing: event-sourcing has **no server-side uncommitted state** (the log is truth, every edit is already appended), so "commit" = **re-baseline the diff view** (today's "Plain" button, reframed), not a write. Feedback #11. |
 
 ## Working note — F-inline-edit (2026-06-20, branch `feat/F-inline-edit`)
 
@@ -232,6 +237,44 @@ elements, they are `col` ranges). A compound operation, unlike the simple delta 
 (evolved additively; a frontier move re-borders two phases atomically), `render.rs` needs the
 interstice-column layout, and the client gestures rebind to frontiers. Not a template patch: shape it
 (`/impeccable shape` or `feature-torture F-region-frontiers`) before any code.
+
+## Working note — dogfood batch (2026-07-02): layout, lanes, hotspots, headers, commit
+
+A second dogfood pass on the CISAC model produced twelve retours; they cluster into five slices
+(above) plus two quick fixes. Recorded here so the reasoning and the invariant tensions survive.
+
+**The through-line — three slices converge on one column.** The event / non-event **column cadence**
+(F-lane-flow option c), the **pivot / interstice column** of F-region-frontiers, and **floating
+hotspots** beside their element all want to place non-element material *between* the element columns.
+Shape them together or they will repeatedly rework the same layout seam.
+
+**F-2d-placement — the invariant guard.** "True 2D" must **not** become free-float: `col` is the
+global timeline (x) and `type` is the lane (y) — domain invariants. The target is *stored Y within
+the lane band* replacing *derived packing*, not position-anywhere. Keeping that line is what lets the
+grey group box and the move-swap / superpose bugs go away without breaking the diff join (still keyed
+on `id`) or the timeline.
+
+**F-lane-flow — merge without breaking the grammar.** A merged lane (aggregate+external,
+readmodel+policy) is a **display grouping**, not a new `type`: an element's `type` still resolves to
+one of the eight pure lanes and keeps its colour; the merge only stacks two bands into one row that
+can expand back. That preserves the "type selects the lane and colour" invariant while giving the
+denser default the user wants.
+
+**F-commit-flow — there is nothing to "save".** The event log is append-only truth; every gesture is
+already persisted server-side the instant it posts. So a Commit / Save button cannot mean "flush
+pending writes" (there are none) — it can only mean **re-baseline the client's since-you-last-looked
+diff overlay**. That is today's "Plain" button with an intent-revealing name. Worth a rename +
+rethink of Export (a power-user escape hatch, not a primary action), not a new persistence path.
+
+**Two quick fixes (each carries a small fork).**
+
+- **Duplicate title (#9).** The header `<b>` and the in-SVG serif nameplate (DESIGN.md §3, "the
+  engraved maker's mark") both print the model title. Keep one. The header is always-visible and
+  functional; the SVG nameplate is the treasured brand mark that scrolls away — DESIGN has a stake,
+  so decide before cutting.
+- **Serve by default (#12).** `faceto <file>` should launch `serve` (the primary action) instead of
+  requiring the subcommand. A CLI-contract change in `main.rs` dispatch — small, but it changes the
+  bare-argument meaning, so keep `render` / `genesis` / `compact` explicit.
 
 ## Why this slice
 
