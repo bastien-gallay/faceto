@@ -25,6 +25,8 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | F-new-diagrams | new formats | ☐ | Parked | New diagram types: C4, User Story Mapping, BPMN. The long-term PRODUCT.md ambition; deferred until the event-storming board is excellent. |
 | F-model-smells | linting | ☐ | Parked | Detect model smells — orphans, loops, heavy bounded-contexts. Needs the F-container primitive and a graph pass; open once grouping exists. |
 | F-board-gestures | UI · direct edit | ✅ | **Now** | Richer on-element gestures layered over F-inline-add: **chromeless** bare ghost glyphs (`+` add · `×` remove · comment), not a floating toolbar (DESIGN §6); single-click focuses only (select-then-edit), double-click / F2 rename, drag left/right moves, `c` / comment glyph opens the modal. The modal then carries only prose actions, and `resolve` shows only on hotspots / open questions. Working note below; shipped 2026-07-01. |
+| F-region-frontiers | model · grouping | ☐ | Next | Regions as a **contiguous partition defined by shared *frontiers***, not independent `[fromCol, toCol]` spans. Collapses add / resize / remove / move into one primitive — the *frontier*: resize moves a frontier (both neighbours adjust atomically), add = *split* a phase, remove = *merge* two, the outermost frontiers resize the **whole board**. A dedicated **pivot / interstice column** hosts the frontier, the (derived) pivotal event, and the region glyphs (add-left / add-right / move). Kills by construction the hole / overlap / unreachable-edge confusions of the independent-span model. The one geste that gets *harder*: move-region becomes a **reorder** carrying its content (membership = spatial `col` containment). Model-spine change (`events.rs` frontier semantics + `render.rs` interstice layout + client) — needs shaping before code. Follows F-container; surfaced by dogfood 2026-07-02. Working note below. |
+| F-region-collapse | UI · legibility | ☐ | Later | Collapse / hide a region to concentrate readability: fold its stickies **and the edges that cross it** into a summarised band. Pure **view-state** — no model / event change — so it is orthogonal to F-region-frontiers and works under either border model. Surfaced alongside F-region-frontiers (dogfood 2026-07-02). |
 
 ## Working note — F-inline-edit (2026-06-20, branch `feat/F-inline-edit`)
 
@@ -174,6 +176,62 @@ from the left-centre edge (where it landed on incoming arrowheads) to the top-le
 
 **Out of scope.** Lane change via vertical drag (breaks `type` = lane); server-side enforcement of
 the resolve-gating (a UI concern); any new event kind or model-spine change.
+
+## Working note — F-region-frontiers (2026-07-02, design surfaced by dogfood)
+
+**Root cause.** F-container shipped regions as **independent `[fromCol, toCol]` spans**. Dogfooding
+the CISAC model surfaced the confusions that model allows: dragging one region's edge past a
+neighbour's opens a **hole** or an **overlap**, and on overlap the underneath edge becomes
+**unreachable** to grab. Minor as method, but very disorienting.
+
+**The real fork (name it before coding).** The confusion is a symptom of an unnamed question — *what
+is a region?*
+
+- **Phase** (pivotal-event model): a **contiguous partition of the timeline**; holes / overlaps are
+  impossible by construction. A *pivotal event is literally the frontier between two phases* — so a
+  region boundary and a pivotal event are the same object.
+- **Bounded context**: a semantic grouping where overlap is legitimate (two contexts can share
+  stickies).
+
+The dogfood instinct — "a region should always be present, holes shouldn't exist" — plus the pivotal
+= frontier identity point to the **Phase** reading. Chosen: **Option A — contiguous partition,
+frontier-based.** If overlapping bounded contexts are ever needed, that is a *second primitive*, not
+a bent phase model.
+
+**The unifying primitive — the frontier.** Defining a region by its shared frontiers (not
+independent spans) collapses four gestures into one:
+
+- **resize** = move a frontier → the two neighbouring phases re-border atomically (like a
+  table-column boundary);
+- **add** = *split* a phase at a column (the `+` glyphs left / right of a frontier in the interstice);
+- **remove** = *merge* two phases (delete the frontier between them);
+- **board ends** = the outermost frontiers have only one neighbour, so dragging them **grows /
+  shrinks the whole board** (fixes "can't resize at the extremes").
+
+**The pivot / interstice column.** To keep "one element per column", a frontier gets its **own
+dedicated column** between the element columns. That interstice hosts, in one place: the frontier
+itself, the region-operation glyphs, and — canonically — the **pivotal event** that marks the phase
+boundary (materialises F-container's "derived pivotal"). Under A the frontier runs through the middle
+of that column.
+
+**The one geste that gets harder.** In a contiguous partition, **move-region = reorder** (this phase
+now happens before / after that one), and it should **carry its content** — the stickies whose `col`
+falls inside the region *at move time* (membership = spatial containment; regions never *own*
+elements, they are `col` ranges). A compound operation, unlike the simple delta a span-move would be.
+
+**Separable, do not bundle.**
+
+- **F-region-collapse** is pure view-state (fold a region + hide its crossing edges); it rides on
+  top of whichever border model and belongs to its own slice.
+- **Legacy-mode guard (hardening, related).** Region structural ops only apply in **log mode**; in
+  legacy `model.json` mode `POST /comment` stores them as dead comments yet the gesture still reports
+  success ("region resized"). The gesture *lies*. Independent of the frontier model, the client
+  should learn the mode (small `serve.rs` signal) and refuse / warn instead of falsely confirming.
+
+**Architecture note.** This is a **model-spine change** — `events.rs` needs frontier semantics
+(evolved additively; a frontier move re-borders two phases atomically), `render.rs` needs the
+interstice-column layout, and the client gestures rebind to frontiers. Not a template patch: shape it
+(`/impeccable shape` or `feature-torture F-region-frontiers`) before any code.
 
 ## Why this slice
 
