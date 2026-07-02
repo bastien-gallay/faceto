@@ -51,6 +51,12 @@
      blue where a same-accent ring disappeared. Focus wins over has-note (declared after it). */
   .sticky:focus .card { stroke: #fff; stroke-width: 2.5;
     filter: drop-shadow(1px 0 0 #1A6FAE) drop-shadow(-1px 0 0 #1A6FAE) drop-shadow(0 1px 0 #1A6FAE) drop-shadow(0 -1px 0 #1A6FAE); }
+  /* Armed remove (danger): the box itself wears a red dashed keyline while the confirm window is
+     open — the on-element signal the keyboard path lacked (the corner × can sit off-screen when the
+     gesture came from Delete, not a hover). White-cased so the red reads on every lane fill; declared
+     last so it overrides the focus / has-note ring on the box that is about to be dropped. */
+  .sticky.arming .card { stroke: #b4232a; stroke-width: 2.5; stroke-dasharray: 5 3;
+    filter: drop-shadow(1px 0 0 #fff) drop-shadow(-1px 0 0 #fff) drop-shadow(0 1px 0 #fff) drop-shadow(0 -1px 0 #fff); }
   /* On box hover: spotlight its connectors + neighbours, recede the rest. */
   #board.dim .edge:not(.hl) { opacity: .07; }
   #board.dim .sticky:not(.adj) { opacity: .32; }
@@ -63,7 +69,9 @@
   @media (prefers-reduced-motion: reduce) { .sticky.settle { animation: none; } }
   /* Armed remove: the × turns alert-red for its confirm window (press again commits, Esc keeps).
      Replaces window.confirm — the one native-chrome intrusion the register forbade. */
-  #remove-x.armed { display: block; color: #b4232a; opacity: 1; }
+  .hovglyph.armed { display: block; color: #b4232a; opacity: 1; }
+  /* A region's label tab wears the same red dashed danger keyline as an armed sticky. */
+  .region-tab.arming rect { stroke: #b4232a; stroke-width: 2; stroke-dasharray: 5 3; }
   /* Inline rename: an HTML input floated over the sticky's screen rect — the live pen writes
      directly on the box (DESIGN: the accent is used only where you are acting). Double-click or
      F2 a sticky to edit its label in place; Enter commits, Escape cancels. */
@@ -78,13 +86,13 @@
   /* Hover glyphs — bare ghost affordances that fade in at a sticky's edges (+ add, × remove, and a
      speech-bubble comment). Individually anchored at different edges, never a button row (DESIGN §6:
      no floating toolbar); each is one glyph in the live-pen accent, no chrome at rest. */
-  #add-plus, #remove-x, #comment-c { position: fixed; display: none; z-index: 19; width: 22px; height: 22px;
+  .hovglyph { position: fixed; display: none; z-index: 19; width: 22px; height: 22px;
               padding: 0; border: none; background: none; cursor: pointer; color: #1A6FAE;
               font: 600 20px -apple-system, Segoe UI, Roboto, sans-serif; line-height: 22px;
               text-align: center; opacity: 0; transition: opacity .15s ease-out; }
-  #add-plus.show, #remove-x.show, #comment-c.show { display: block; opacity: 1; }
+  .hovglyph.show { display: block; opacity: 1; }
   #comment-c svg { width: 16px; height: 16px; vertical-align: middle; fill: currentColor; }
-  #add-plus:focus-visible, #remove-x:focus-visible, #comment-c:focus-visible { outline: 2px solid #1A6FAE; outline-offset: 1px; border-radius: 3px; opacity: 1; display: block; }
+  .hovglyph:focus-visible { outline: 2px solid #1A6FAE; outline-offset: 1px; border-radius: 3px; opacity: 1; display: block; }
   /* Region gestures (F-container Stage 6): the label tab is a focusable rename target — same
      focus-visible ring as a sticky, so keyboard and mouse discoverability stay in parity. The
      rail (an invisible per-column hit-strip, region.rs) only shows a cursor; its "+" reuses
@@ -98,7 +106,7 @@
      a label). No transition — a drag must track the cursor instantly. */
   #region-drag-guide { position: fixed; display: none; z-index: 18; width: 2px; background: #1A6FAE;
                         opacity: .8; pointer-events: none; }
-  @media (prefers-reduced-motion: reduce) { .edge, .sticky, #add-plus, #remove-x, #comment-c { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .edge, .sticky, .hovglyph { transition: none; } }
   /* Narrow widths: let the header wrap instead of clipping. Without this the packing control
      (Rows / Columns / Grid) and the Reload button slide off-screen and become unreachable. */
   @media (max-width: 680px) {
@@ -125,6 +133,20 @@
   .rel .chip b { color: #1A6FAE; font-weight: 700; }
   .prior { font-size: 11px; color: #777; }
   .prior div { padding: 3px 0; border-top: 1px dashed #eee; }
+  /* Keyboard shortcut sheet: the discoverable home for the board's key vocabulary — heuristic 10
+     had no surface at all. Opened by the header "?" (findable) or the ? key (fast). Quiet and
+     precise: a two-column key→action grid, system-mono keycaps, no chrome. Escape closes it. */
+  #help { width: min(430px, 92vw); }
+  #help .keys { display: grid; grid-template-columns: max-content 1fr; gap: 9px 16px; padding: 14px 18px 18px; }
+  #help .keys > div:nth-child(odd) { text-align: right; color: #557; white-space: nowrap; }
+  #help .act { color: #333; align-self: center; }
+  #help kbd { font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace; background: #f2f2f7;
+              border: 1px solid #d7d7e0; border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px;
+              color: #334; white-space: nowrap; }
+  #help-close { border: none; background: none; font-size: 20px; line-height: 1; color: #999;
+                cursor: pointer; padding: 0 2px; }
+  #help-close:hover { color: #333; background: none; }
+  #help-btn { width: 30px; padding: 5px 0; color: #557; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -142,12 +164,14 @@
   <button id="plain" style="display:none" title="clear the diff overlay and show the current board">Plain</button>
   <button id="export">Export comments</button>
   <button id="refresh" title="re-pull comments and show what changed in the board since you last looked">Reload</button>
+  <button id="help-btn" title="keyboard shortcuts (?)" aria-label="keyboard shortcuts" aria-haspopup="dialog">?</button>
 </header>
 <div id="board" role="group" aria-label="event-storming board — each sticky is a button: single-click to focus, double-click or F2 to rename, drag or arrow keys to move, a to add, c or Enter to comment, Delete to remove">__SVG__</div>
 <input id="rename-edit" aria-label="rename this element" autocomplete="off" spellcheck="false">
 <button id="add-plus" class="hovglyph" type="button" aria-label="add an element here" title="add an element">+</button>
 <button id="remove-x" class="hovglyph" type="button" aria-label="remove this element" title="remove this element">×</button>
 <button id="comment-c" class="hovglyph" type="button" aria-label="comment on this element (or press c)" title="comment (c)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5c-3.9 0-7 2.24-7 5 0 1.58 1.02 2.99 2.6 3.9-.14.86-.57 1.8-1.3 2.55 1.35-.14 2.55-.66 3.46-1.38.7.18 1.46.28 2.24.28 3.9 0 7-2.24 7-5.35C15 3.74 11.9 1.5 8 1.5z"/></svg></button>
+<button id="region-x" class="hovglyph" type="button" aria-label="remove this region" title="remove region">×</button>
 <div id="region-drag-guide" aria-hidden="true"></div>
 
 <dialog id="modal">
@@ -176,6 +200,26 @@
       <button id="m-save" value="save" style="background:#1A6FAE;color:#fff;border-color:#1A6FAE">Save comment</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="help" aria-label="keyboard shortcuts">
+  <div class="modal-h" style="display:flex;justify-content:space-between;align-items:baseline;gap:12px">
+    <div class="label">Keyboard</div>
+    <button id="help-close" type="button" aria-label="close">×</button>
+  </div>
+  <div class="keys">
+    <div><kbd>click</kbd> / <kbd>Tab</kbd></div><div class="act">focus a box — it answers the keyboard</div>
+    <div><kbd>←</kbd> <kbd>→</kbd></div><div class="act">move one column along the timeline</div>
+    <div><kbd>a</kbd> / <kbd>Insert</kbd></div><div class="act">add an element after this one</div>
+    <div><kbd>F2</kbd> / dbl-click</div><div class="act">rename in place</div>
+    <div><kbd>c</kbd> / <kbd>Enter</kbd></div><div class="act">comment on this box</div>
+    <div><kbd>Delete</kbd></div><div class="act">remove — press again to confirm, Esc keeps</div>
+    <div><kbd>⌘/Ctrl</kbd> <kbd>Z</kbd></div><div class="act">undo the last move or rename</div>
+    <div><kbd>Esc</kbd></div><div class="act">cancel a drag, a rename, or an armed remove</div>
+    <div><kbd>drag</kbd></div><div class="act">a box moves along its lane; a region edge resizes</div>
+    <div><kbd>region</kbd></div><div class="act">click a tab to rename, <kbd>Delete</kbd> or hover × to remove</div>
+    <div><kbd>?</kbd></div><div class="act">this sheet</div>
+  </div>
 </dialog>
 
 <script>
@@ -490,12 +534,14 @@ function startRename(g, region) {
   input.focus();
   input.select();
 }
-function endRename(commit) {
+function endRename(commit, refocus = true) {
   if (!renaming) return;
   const { id, original, region } = renaming, text = $("#rename-edit").value.trim();
   renaming = null;
   $("#rename-edit").style.display = "none";
-  if (!commit) { note("rename cancelled"); if (!region) document.getElementById(id)?.focus(); return; }
+  // refocus false = the blur came from a click elsewhere; returning focus to the box would fight
+  // that click. Escape (keyboard) keeps refocus true so the box you were editing stays selected.
+  if (!commit) { note("rename cancelled"); if (refocus && !region) document.getElementById(id)?.focus(); return; }
   if (!text) { note("rename needs a label — left unchanged"); return; }   // mirrors the server guard
   if (text === original.trim()) { note("no change"); return; }
   const ts = new Date().toISOString();
@@ -519,8 +565,10 @@ let removeArm = null;   // { id, t } while the confirm window is open, else null
 function disarmRemove(quiet) {
   if (!removeArm) return;
   clearTimeout(removeArm.t);
+  const id = removeArm.id;
   removeArm = null;
-  $("#remove-x").classList.remove("armed");
+  $("#remove-x").classList.remove("armed", "show");   // .show too: doRemove places+shows it on arm
+  document.getElementById(id)?.classList.remove("arming");
   note(quiet ? "" : "kept");   // quiet: the arm prompt must not linger after the window closes
 }
 function doRemove(id) {
@@ -534,7 +582,14 @@ function doRemove(id) {
   }
   disarmRemove(true);   // arming a different box replaces the previous arm
   removeArm = { id, t: setTimeout(() => disarmRemove(true), 3000) };
+  // The keyboard path (Delete) never hovered, so the corner × was never placed — it stranded
+  // off-canvas, leaving no visible confirm signal. Position it at the box corner ourselves (the
+  // same anchor the mouse hover uses) and arm the box itself with a red dashed ring, so the danger
+  // reads on-element regardless of where — or whether — the glyph shows.
+  const r = g.getBoundingClientRect();
+  removeXBtn.at(r.right - 3, r.top - 9, id);
   $("#remove-x").classList.add("armed");
+  g.classList.add("arming");
   note(`remove "${g.dataset.hero || id}"? — same gesture again to confirm, Esc to keep`);
 }
 
@@ -566,6 +621,43 @@ const removeXBtn = graceGlyph($("#remove-x"), doRemove);
 // Comment moved off the single click (which now just focuses) onto the c key + this glyph — so the
 // modal is prose-only. Both open it via openModal (hoisted below).
 const commentBtn = graceGlyph($("#comment-c"), (id) => openModal(document.getElementById(id)));
+
+// ---- inline region remove -------------------------------------------------
+// The delete twin for regions: `region-remove` was declared in STRUCTURAL_KINDS but had no gesture
+// that emitted it. Same two-step armed flow as an element remove (destructive, and no client-side
+// undo — the id can't be re-minted), reached two ways: the × glyph on region-tab hover, or Delete /
+// Backspace on a focused tab. Keyed by `regionId`, posting kind:"region-remove" (serve.rs folds it
+// to PhaseRemoved). Escape or the 3s timeout keeps the region.
+let regionArm = null;   // { id, t } while a region's confirm window is open, else null
+function disarmRegion(quiet) {
+  if (!regionArm) return;
+  clearTimeout(regionArm.t);
+  const id = regionArm.id;
+  regionArm = null;
+  $("#region-x").classList.remove("armed", "show");
+  document.querySelector(`.region-tab[data-region="${id}"]`)?.classList.remove("arming");
+  if (!quiet) note("");
+}
+function armRegion(regionId, tab) {
+  if (!regionId) return;
+  if (regionArm?.id === regionId) {
+    disarmRegion(true);
+    note("region removed");
+    postComment({ regionId, kind: "region-remove", ts: new Date().toISOString(), status: "open" });
+    return;
+  }
+  disarmRegion(true);   // arming a different region replaces the previous arm
+  regionArm = { id: regionId, t: setTimeout(() => disarmRegion(true), 3000) };
+  if (tab) {
+    const r = tab.getBoundingClientRect();
+    regionXBtn.at(r.right - 3, r.top - 9, regionId);   // the keyboard path never hovered — place it
+    tab.classList.add("arming");
+  }
+  $("#region-x").classList.add("armed");
+  note(`remove region "${tab?.dataset.label || regionId}"? — same gesture again to confirm, Esc to keep`);
+}
+const regionXBtn = graceGlyph($("#region-x"),
+  (rid) => armRegion(rid, document.querySelector(`.region-tab[data-region="${rid}"]`)));
 
 // ---- inline add (the + affordance) ----------------------------------------
 // A ghost ink-blue + fades in on sticky hover (its right edge → add-after, same lane, col+1) and on
@@ -744,7 +836,16 @@ function bindRegions() {
   });
   document.querySelectorAll(".region-tab").forEach((g) => {
     g.onclick = () => startRename(g, true);
-    g.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startRename(g, true); } };
+    g.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startRename(g, true); }
+      else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); e.stopPropagation(); armRegion(g.dataset.region, g); }
+    };
+    g.onmouseenter = () => {
+      if (gestureBusy()) return;   // a drag / edit owns the board — no region × meanwhile
+      const r = g.getBoundingClientRect();
+      regionXBtn.at(r.right - 3, r.top - 9, g.dataset.region);
+    };
+    g.onmouseleave = () => regionXBtn.hideSoon();
   });
   document.querySelectorAll(".region-edge").forEach((edge) => {
     edge.onpointerdown = startRegionResize;
@@ -820,11 +921,14 @@ async function load() {
 // editing one-shot (press, re-acquire focus through 141 tab stops, press again). `id` is the
 // stable identity, so focus survives the swap by id — and restoring it re-fires onfocus, which
 // brings the spotlight and the keyboard claim back with it.
+let suppressFocusNote = false;   // true while re-focusing after a board swap — see onfocus
 function swapBoard(html) {
   const focused = document.activeElement?.classList?.contains("sticky") ? document.activeElement.id : null;
   $("#board").innerHTML = html;
   bindStickies();
-  if (focused) document.getElementById(focused)?.focus();
+  // Restore focus, but suppress the focus connection-count note so it can't clobber an action
+  // confirmation ("moved", "renamed") that the swap is landing.
+  if (focused) { suppressFocusNote = true; document.getElementById(focused)?.focus(); suppressFocusNote = false; }
 }
 
 // Redraw the plain current board (own edit just landed): advance the baseline silently and let
@@ -933,7 +1037,15 @@ function bindStickies() {
     };
     // Keyboard parity with the mouse: focusing a sticky makes it the ← / → move target (same as
     // hover) and spotlights its connectors; Enter / Space opens its comment dialog.
-    g.onfocus = () => { hoverId = g.id; hoverOn(g.id); };
+    // Focusing a box spotlights its connectors; name how many, so the fan of ~30 lit edges on a
+    // dense board has a legend ("5 connections") instead of being impressive but unreadable. Once
+    // per deliberate selection, never on hover, and skipped on swap-refocus (see swapBoard).
+    g.onfocus = () => {
+      hoverId = g.id; hoverOn(g.id);
+      if (suppressFocusNote) return;
+      const n = (adj[g.id] || new Set()).size;
+      note(n ? `${n} connection${n === 1 ? "" : "s"}` : "no connections");
+    };
     g.onblur = () => { if (hoverId === g.id) { hoverId = null; hoverOff(); } };
     g.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openModal(g); }
@@ -1013,7 +1125,10 @@ $("#rename-edit").addEventListener("keydown", (e) => {
   else if (e.key === "Escape") { e.preventDefault(); adding ? endAdd(false) : endRename(false); }
   e.stopPropagation();   // keep edit keystrokes from reaching the board-level handler below
 });
-$("#rename-edit").addEventListener("blur", () => { adding ? endAdd(true) : endRename(true); });
+// Blur = abandon, not commit: clicking away from a half-typed label must not silently write it
+// (only Enter commits). Mirrors the "Escape cancels" model used by every other gesture. The blur
+// cancel does not steal focus back (refocus=false), so the click that caused it lands where aimed.
+$("#rename-edit").addEventListener("blur", () => { adding ? endAdd(false) : endRename(false, false); });
 // The keyboard acts on the focused sticky first, the hovered one as fallback. Focus survives
 // mouse drift and scrolling; hover-only targeting silently dropped every keystroke the moment
 // the cursor slipped off a clicked box — the exact focus the click had just promised.
@@ -1032,7 +1147,14 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return;   // never shadow Cmd/Ctrl shortcuts (copy, back…)
+  // The shortcut sheet is the one key that needs no focused box — the discoverable home for the
+  // whole keyboard vocabulary (also reachable via the header "?"). Escape closes it natively.
+  if (e.key === "?" && !$("#modal").open && !$("#help").open) {
+    const el = document.activeElement;
+    if (!(el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) { e.preventDefault(); $("#help").showModal(); return; }
+  }
   if (e.key === "Escape" && removeArm) { e.preventDefault(); disarmRemove(); return; }
+  if (e.key === "Escape" && regionArm) { e.preventDefault(); disarmRegion(); return; }
   // Escape bails out of a live drag before anything else: snap back, release the pointer,
   // nothing posted. Clearing the flag first makes the release's lostpointercapture a no-op.
   if (e.key === "Escape" && (stickyDrag || regionDrag)) {
@@ -1107,6 +1229,9 @@ $("#pack").addEventListener("click", (e) => {
 
 $("#refresh").addEventListener("click", load);
 $("#plain").addEventListener("click", showPlain);
+$("#help-btn").addEventListener("click", () => $("#help").showModal());
+$("#help-close").addEventListener("click", () => $("#help").close());
+$("#help").addEventListener("click", (e) => { if (e.target === $("#help")) $("#help").close(); });   // backdrop
 $("#export").addEventListener("click", async () => {
   const data = JSON.stringify(comments, null, 2);
   try { await navigator.clipboard.writeText(data); } catch {}
