@@ -106,6 +106,9 @@
      the keyboard-armed path — where the tab is both focused and armed, and danger must win. */
   .region-tab.arming rect { stroke: #b4232a; stroke-width: 2; stroke-dasharray: 5 3; }
   .region-rail { cursor: pointer; }
+  /* The resize handle is a transparent 8px hit-line on the band edge (render.rs) — it needs a
+     cursor or nothing signals it can be grabbed. ew-resize is the universal "drag this edge" hint. */
+  .region-edge { cursor: ew-resize; }
   /* Resize drag guide: a thin ink-blue line that follows the cursor, snapped to the column the
      drop would land on (F-inline-edit's live-pen accent, applied to a region boundary instead of
      a label). No transition — a drag must track the cursor instantly. */
