@@ -20,18 +20,26 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | F-mcp-server | AI · interop | ☐ | Parked | std-only stdio JSON-RPC MCP server exposing read-log / propose-event tools. Spawned from the F-mcp-narrative torture (2026-07-02): redundant while the dogfood agent has file + shell tools. Revisit when a shell-less client (claude.ai, Claude Desktop) becomes a real usage context, or a second agent platform needs typed tool discovery. |
 | F-multiplayer | collab · network | ☐ | Parked | Multi-collaborator over network + event reconciliation + user naming. Heaviest std-only lift; fixes *crowded*, not *solo* — out of slice until a real multi-user need appears. |
 | F-format-interop | interop | ☐ | Parked | Import/export to known event-storming formats and visual tools (Excalidraw, Miro). Not felt pain today. |
-| F-es-vocabulary | modelling fidelity | ☐ | Parked | Deeper pure event-storming vocabulary — parallel / recurrent events, out-of-lane elements. Open when the model can't express something a real session needs. |
+| F-es-vocabulary | modelling fidelity | ☐ | Parked | Deeper pure event-storming vocabulary — parallel / recurrent events, out-of-lane elements, and two sticky types a real board reached for: **`timer` / `temporal`** (time-triggered policies) and **`process`** (stateful, longer-running workflows). Each is an additive lane in `LANES` + `colour` + `lane_prefix`. Open when the model can't express something a real session needs. Field feedback #13 §2. |
 | F-ddd-process | DDD process | ☐ | Parked | Adjacent capabilities from the ddd-crew starter modelling process. Depends on F-container; open after it lands. |
 | F-new-diagrams | new formats | ☐ | Parked | New diagram types: C4, User Story Mapping, BPMN. The long-term PRODUCT.md ambition; deferred until the event-storming board is excellent. |
 | F-model-smells | linting | ☐ | Parked | Detect model smells — orphans, loops, heavy bounded-contexts. Needs the F-container primitive and a graph pass; open once grouping exists. |
 | F-board-gestures | UI · direct edit | ✅ | **Now** | Richer on-element gestures layered over F-inline-add: **chromeless** bare ghost glyphs (`+` add · `×` remove · comment), not a floating toolbar (DESIGN §6); single-click focuses only (select-then-edit), double-click / F2 rename, drag left/right moves, `c` / comment glyph opens the modal. The modal then carries only prose actions, and `resolve` shows only on hotspots / open questions. Working note below; shipped 2026-07-01. |
 | F-region-frontiers | model · grouping | ☐ | Next | Regions as a **contiguous partition defined by shared *frontiers***, not independent `[fromCol, toCol]` spans. Collapses add / resize / remove / move into one primitive — the *frontier*: resize moves a frontier (both neighbours adjust atomically), add = *split* a phase, remove = *merge* two, the outermost frontiers resize the **whole board**. A dedicated **pivot / interstice column** hosts the frontier, the (derived) pivotal event, and the region glyphs (add-left / add-right / move). Kills by construction the hole / overlap / unreachable-edge confusions of the independent-span model. The one geste that gets *harder*: move-region becomes a **reorder** carrying its content (membership = spatial `col` containment). Model-spine change (`events.rs` frontier semantics + `render.rs` interstice layout + client) — needs shaping before code. Follows F-container; surfaced by dogfood 2026-07-02. Working note below. |
 | F-region-collapse | UI · legibility | ☐ | Later | Collapse / hide a region to concentrate readability: fold its stickies **and the edges that cross it** into a summarised band. Pure **view-state** — no model / event change — so it is orthogonal to F-region-frontiers and works under either border model. Surfaced alongside F-region-frontiers (dogfood 2026-07-02). |
-| F-2d-placement | model · layout | ☐ | Next | Replace the rows / columns / grid **packing** (and its dark grey group box — a poor 2D representation) with a **stored 2D sub-position**: keep `x = col` (global timeline) and `type = lane` — both invariants — but give each element a free **Y within its lane band** instead of auto-packing. Removes the packing control entirely and fixes two dogfood bugs: moving within a stacked group force-**swaps** (can't re-insert without displacing the survivor), and moving from / into a group **superposes**. Model change — `ElementMoved` gains the sub-position. Absorbs feedback #1 / #3 / #4 / #10. Working note below. |
+| F-2d-placement | model · layout | ✅ | **Now** | Replace the rows / columns / grid **packing** (and its dark grey group box — a poor 2D representation) with a **stored 2D sub-position**: keep `x = col` (global timeline) and `type = lane` — both invariants — but give each element a free **Y within its lane band** instead of auto-packing. Removes the packing control entirely and fixes two dogfood bugs: moving within a stacked group force-**swaps** (can't re-insert without displacing the survivor), and moving from / into a group **superposes**. Model change — `ElementMoved` gains the sub-position. Absorbs feedback #1 / #3 / #4 / #10. Shipped 2026-07-02; as-built note below. |
 | F-lane-flow | UI · legibility | ☐ | Next | Reorder the 8 lanes to the **canonical event-storming flow** (actor → command → aggregate / system → event → policy → … → read-model → UI → actor) so system and policy sit *near* events / commands, not at the bottom. Forks to shape: (a) reorder `LANES`; (b) **merge** adjacent lanes (aggregate+external, readmodel+policy) as an expandable *display grouping* — `type` still selects a pure lane, so the 8-colour grammar invariant holds; (c) alternate event / non-event **column cadence** — recoups the pivot / interstice column of F-region-frontiers, so shape together. Feedback #2. |
 | F-floating-hotspots | model · ES fidelity | ☐ | Later | Hotspots become **floating annotations attached to an element** (placed beside it, ES-canonical) rather than a bottom lane — removing `hotspot` from `LANES` (interacts with F-lane-flow). Split the modal into two direct gestures: **`c` = comment**, **`h` = hotspot / open question**; drop **split** (add / rename / remove already cover it). Feedback #5 / #6. |
 | F-frozen-headers | UI · legibility | ☐ | Later | Pin the **lane titles** to the left through horizontal scroll (condensable to initial + colour) and the **phase tabs** to the top through vertical scroll — frozen row / column headers. The board is one scrolling SVG, so this needs an overlay layer (or a split render), not plain `position: sticky`. Feedback #7 / #8. |
 | F-commit-flow | UI · server flow | ☐ | Later | Replace the counterintuitive **Export comments / Reload** header actions with a single **Commit / Save** that re-baselines and clears the since-you-last-looked diff overlay. Framing: event-sourcing has **no server-side uncommitted state** (the log is truth, every edit is already appended), so "commit" = **re-baseline the diff view** (today's "Plain" button, reframed), not a write. Feedback #11. |
+| F-es-lint | linting | ☐ | Next | **ES-grammar linter** — `faceto lint` over the replayed `Model`, a pure graph pass, zero-dep. Rules validated by a real 147-element workshop (all 6 review comments were mechanical grammar defects): event with no producer, policy with no output, policy with no input, non-terminal event with no outbound edge. **Warn-only** (a big-picture board is legitimately incomplete — never a gate that breaks the calm loop), with an optional `level: big-picture \| design` strictness knob, and findings that can flow into the comment sidecar as resolvable entries (reuses serve→review→resolve). Distinct from **F-model-smells** (orphans / loops / heavy bounded-contexts) which needs F-container; this one needs only the graph. Field feedback #13 §3 — the headline item. |
+| F-comment-lifecycle | comment · identity | ☐ | Next | Close the sidecar identity gaps surfaced at scale: deleting an element **orphans** its comments (needs cascade/tombstone in `replay`); resolving a comment needs a **gesture**, not hand-edited JSONL (likely a small serve endpoint + client button over the existing `HotspotResolved` / comments-as-events); collapse the **two comment representations** (exported array vs `comments.jsonl`) toward the log-is-truth spine; ID-rename sidecar migration is **reframed as guardrails/docs** (`id` is defined-stable — "never renumber, only add"), not tooling. Field feedback #13 §5. |
+| F-output-naming | CLI · output | ☐ | Next | Derive `board.svg` / `index.html` names from the **model basename** so sibling boards in one directory don't clobber each other. Small correctness win. Field feedback #13 §1. |
+| F-cli-help | CLI · ergonomics | ☐ | Next | `--help` / `-h` per subcommand (`faceto render --help` currently treats `--help` as a file path). Small. Field feedback #13 §1. |
+| F-png-docs | docs | ☐ | Later | **Document** the sanctioned SVG→PNG paths (`rsvg-convert` / `resvg` / headless Chromium) rather than build a rasterizer — PNG encoding + font rasterization is not feasible in pure std, so raster export stays a **deliberate non-goal** under the zero-dep constraint. A good idea, kept out of the binary. Field feedback #13 §1. |
+| F-status-tracking | model · fidelity | ☐ | Later | Optional as-is / to-be **status field** on `Element` (additive) for mixed implemented/target boards, rendered as a visual state (e.g. dashed = target). Field feedback #13 §2. |
+| F-typed-edges | model · fidelity | ☐ | Later | Give edges an optional **`type` / label** so connection kinds stop rendering identically. Additive; shape **with F-edge-routing** (which owns edge geometry) to avoid touching `edge_path` twice. Field feedback #13 §2. |
+| F-tech-names | model · fidelity | ☐ | Parked | Optional **technical-name layer** distinct from the human label — before building, confirm it isn't `id` misuse. Field feedback #13 §2. |
 
 ## Working note — F-inline-edit (2026-06-20, branch `feat/F-inline-edit`)
 
@@ -276,6 +284,44 @@ rethink of Export (a power-user escape hatch, not a primary action), not a new p
   requiring the subcommand. A CLI-contract change in `main.rs` dispatch — small, but it changes the
   bare-argument meaning, so keep `render` / `genesis` / `compact` explicit.
 
+## Working note — F-2d-placement (2026-07-02, branch `feat/F-2d-placement`, as built)
+
+**The stored form.** `y` is an optional **fraction of the lane-band interior in `[0, 1]`** —
+band-relative on purpose (the first shaping lock): it survives a lane merge (F-lane-flow b), a
+region collapse, or any band-height change without remapping. It rides `ElementMoved` *and*
+`ElementAdded` (both additive — an old log simply has no `y` and replays identically);
+`ElementAdded` must carry it or `compact`/genesis would silently flatten a placed board. A
+col-only move never resets a stored `y`. The fraction is clamped + rounded at the comment seam
+(`events::clamp_y`) and clamped again at render, so an out-of-range log value can't draw off-band.
+
+**Reshaped mid-dogfood: grid, not free canvas.** The first cut rendered `y` as a literal free
+position; testing showed free vertical placement carries little meaning. As built, `y` is an
+**ordering key**: a cell's members sort by it (unplaced = the neutral 0.5, barycenter tie-break)
+and *everyone* renders on **row-slot centres** — a lone box sits on the classic mid-line whatever
+its `y`, two sharing a cell split top / bottom and the lane grows a row to hold them. Same log
+schema, same replay; only the render interpretation changed.
+
+**Default without `y` = the old Rows stack.** Auto-stacked elements keep the barycenter ordering
+(F-edge-routing Lever A) and the lane-height rule is unchanged (deepest cell) — which sidesteps
+the fraction/band-height circularity a "grow to fit stored Ys" rule would create, and renders an
+un-migrated log byte-identically.
+
+**Packing is gone everywhere.** The `Packing` enum, `--pack`/`-k`, `?pack=`, the Rows/Columns/Grid
+header control, the grey time-slot tray, and the sub-column machinery (`SUBCOL_W`, per-column
+widths). **One col = one x slot** now holds unconditionally — the second shaping lock (zero
+intra-cell X spread), and exactly the ground the F-region-frontiers interstice column assumes.
+This also buries the stale "packing buttons don't switch" note under F-edge-routing.
+
+**Gesture.** Drag is 2D: x snaps to columns as before, y rides the pointer clamped to the lane
+band (`type` = lane is untouchable — the drag cannot cross into another band). A drop posts the
+`y` key **only when the target cell is shared** (above / below its occupants); into an empty cell
+it posts col-only, so the box stays auto-placed. While the drag hovers a cell that would deepen
+the lane, a horizontal **lane-growth guide** (`#lane-grow-guide`, the region-resize live-pen blue)
+marks where the lane's bottom rule will land on release. ←/→ still posts col-only. The
+**force-swap is removed** (dogfood bug #1): nothing is displaced, stickies sharing a cell are
+simultaneous and stack on the grid. The server keeps *parsing* `swapId` so old logs and stashed
+offline moves replay faithfully. A y-only change diffs as `moved` ("repositioned in its lane").
+
 ## Why this slice
 
 Chosen by filtering all eight directions through felt dogfood pain. The three live
@@ -294,3 +340,39 @@ Two deferred items are named on purpose:
   log re-read), so the slice is a skill, not a server — the server is parked as
   **F-mcp-server**. F-multiplayer stays parked because it solves a different problem —
   crowded, not solo.
+
+## Working note — Field feedback triage (issue #13, 2026-07-02)
+
+Source: field feedback from authoring + workshop-reviewing a **147-element / 186-edge /
+48-column** two-bounded-context board through a full author → serve review → fix → resolve
+loop ([issue #13](https://github.com/bastien-gallay/faceto/issues/13)). Highest-signal input
+to date — the whole loop ran on a real board. Mapping of every item to a feature:
+
+- **§1 CLI / Output** → **F-output-naming** (sibling clobber), **F-cli-help** (`--help`),
+  **F-png-docs** (raster export).
+- **§2 Model format** → **F-status-tracking** (as-is/to-be), **F-typed-edges** (untyped edges),
+  **F-tech-names** (technical-name layer), **F-es-vocabulary** (timer / process sticky types).
+  Bounded contexts → see pushback below.
+- **§3 ES-grammar lint** → **F-es-lint** (the headline; warn-only + `level` + sidecar flow).
+- **§4 Timeline at scale** → no new feature. Single-row-breaks-past-~20-cols is the concurrent-
+  lifecycle problem already owned by **F-2d-placement** (free Y within a lane) and the region
+  work (**F-region-frontiers** / **F-region-collapse**); wide-board back-edge readability is
+  **F-edge-routing** + **F-region-collapse**. Re-scope those with the §4 evidence rather than
+  add an ID.
+- **§5 Comment lifecycle / identity** → **F-comment-lifecycle**.
+- **§6 What worked well** → protect, don't build: the serve→review→fix→resolve loop, LLM-safe
+  `model.json` transforms, the hotspot lane. Constrains **F-es-lint** to stay warn-only.
+
+**Two pushbacks resolved (author call):**
+
+- **Raster/PNG export is a genuinely good idea, but the zero-dep constraint holds.** Ship it as
+  documentation of the sanctioned external paths (`rsvg-convert` / `resvg` / headless Chromium),
+  not a built-in rasterizer → **F-png-docs**. Raster-in-binary is a deliberate non-goal.
+- **Bounded contexts already shipped (F-container, PR #8–11) but not in the form this board
+  needed** — the in-flight region rework (**F-region-frontiers**) improves the usable model, and
+  a future MVP walkthrough + clear tool-usage docs are the real fix so this class of "I invented
+  a convention because I didn't know it existed" comment stops surfacing. No new build; treat as
+  a **discoverability / docs** gap, not a missing primitive.
+
+New catalog rows are tagged *Field feedback #13*. Suggested first slice (value-to-effort, no
+design debt): **F-es-lint** + **F-output-naming** + **F-cli-help**.
