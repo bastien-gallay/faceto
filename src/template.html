@@ -37,12 +37,20 @@
   .edge, .sticky { transition: opacity .15s ease-out; }
   .edge.hl { stroke: #2f3c45; opacity: 1 !important; stroke-width: 2.4; }
   .sticky:hover .card { stroke: #1a1a1a; stroke-width: 2; }
-  /* Selection ring: the focused sticky is the keyboard target (← / → move, F2 rename, c comment,
-     Delete remove), so focus must be visible however it arrived — click included. A mouse click's
-     whole payoff is this ring: "this box now answers the keyboard". */
+  /* Selection ring: the focused sticky is the keyboard target (← / → move, F2 rename, a add,
+     c comment, Delete remove), so focus must be visible however it arrived — click included. A
+     mouse click's whole payoff is this ring: "this box now answers the keyboard". */
   .sticky:focus { outline: none; }
-  .sticky:focus .card { stroke: #1A6FAE; stroke-width: 3; }
-  .sticky.has-note .card { stroke: #1A6FAE; stroke-width: 2.5; }
+  /* Feedback ring (resting): a box carrying a note wears a blue keyline. Cased in white so it
+     survives the command lane, whose own fill IS this accent — a bare blue ring vanished there.
+     The casing is a crisp 0-blur offset stack, not a fuzzy glow: in register with the precise bench. */
+  .sticky.has-note .card { stroke: #1A6FAE; stroke-width: 2.5;
+    filter: drop-shadow(.7px 0 0 #fff) drop-shadow(-.7px 0 0 #fff) drop-shadow(0 .7px 0 #fff) drop-shadow(0 -.7px 0 #fff); }
+  /* Selection ring (active): a white ring inside a blue casing — the inverse of the feedback ring,
+     brighter and unmistakably the active box, legible on all eight lane fills including the command
+     blue where a same-accent ring disappeared. Focus wins over has-note (declared after it). */
+  .sticky:focus .card { stroke: #fff; stroke-width: 2.5;
+    filter: drop-shadow(1px 0 0 #1A6FAE) drop-shadow(-1px 0 0 #1A6FAE) drop-shadow(0 1px 0 #1A6FAE) drop-shadow(0 -1px 0 #1A6FAE); }
   /* On box hover: spotlight its connectors + neighbours, recede the rest. */
   #board.dim .edge:not(.hl) { opacity: .07; }
   #board.dim .sticky:not(.adj) { opacity: .32; }
@@ -135,7 +143,7 @@
   <button id="export">Export comments</button>
   <button id="refresh" title="re-pull comments and show what changed in the board since you last looked">Reload</button>
 </header>
-<div id="board" role="group" aria-label="event-storming board — each sticky is a button: single-click to focus, double-click or F2 to rename, drag or arrow keys to move, c or Enter to comment, Delete to remove">__SVG__</div>
+<div id="board" role="group" aria-label="event-storming board — each sticky is a button: single-click to focus, double-click or F2 to rename, drag or arrow keys to move, a to add, c or Enter to comment, Delete to remove">__SVG__</div>
 <input id="rename-edit" aria-label="rename this element" autocomplete="off" spellcheck="false">
 <button id="add-plus" class="hovglyph" type="button" aria-label="add an element here" title="add an element">+</button>
 <button id="remove-x" class="hovglyph" type="button" aria-label="remove this element" title="remove this element">×</button>
@@ -996,8 +1004,9 @@ $("#modal").addEventListener("close", () => {
 });
 
 // Hover or focus a sticky and act on it from the keyboard — the keyboard-fast path, parity with
-// the mouse: ← / → nudge a column, F2 renames in place, c opens its comment, Delete / Backspace
-// removes. Skipped while the modal or an inline rename owns the keyboard, or while typing in a field.
+// the mouse: ← / → nudge a column, F2 renames in place, a / Insert adds after it, c opens its
+// comment, Delete / Backspace removes. Skipped while the modal or an inline editor owns the
+// keyboard, or while typing in a field.
 // One inline editor, two modes: `adding` posts kind:"add", otherwise it commits a rename.
 $("#rename-edit").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); adding ? endAdd(true) : endRename(true); }
@@ -1062,6 +1071,13 @@ document.addEventListener("keydown", (e) => {
   } else if (e.key === "Delete" || e.key === "Backspace") {
     e.preventDefault();
     doRemove(target);
+  } else if (e.key === "a" || e.key === "A" || e.key === "Insert") {
+    // The keyboard twin of the hover + glyph: a new element one column to the right, same lane.
+    // Same editor, same endAdd(kind:"add"); the id is minted server-side. Mirrors the mouse anchor
+    // (r.right + 12, r.top) so the inline field opens exactly where the click path would place it.
+    e.preventDefault();
+    const g = document.getElementById(target), r = g.getBoundingClientRect();
+    startAdd({ type: g.dataset.kind, col: +g.dataset.col + 1, sx: r.right + 12, sy: r.top });
   }
 });
 
