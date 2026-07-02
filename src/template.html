@@ -70,8 +70,6 @@
   /* Armed remove: the × turns alert-red for its confirm window (press again commits, Esc keeps).
      Replaces window.confirm — the one native-chrome intrusion the register forbade. */
   .hovglyph.armed { display: block; color: #b4232a; opacity: 1; }
-  /* A region's label tab wears the same red dashed danger keyline as an armed sticky. */
-  .region-tab.arming rect { stroke: #b4232a; stroke-width: 2; stroke-dasharray: 5 3; }
   /* Inline rename: an HTML input floated over the sticky's screen rect — the live pen writes
      directly on the box (DESIGN: the accent is used only where you are acting). Double-click or
      F2 a sticky to edit its label in place; Enter commits, Escape cancels. */
@@ -100,6 +98,10 @@
   .region-tab { cursor: pointer; }
   .region-tab:focus { outline: none; }
   .region-tab:focus-visible rect { stroke: #1A6FAE; stroke-width: 2; }
+  /* A region's label tab wears the same red dashed danger keyline as an armed sticky. Declared
+     AFTER :focus-visible (equal specificity) so the red danger stroke beats the blue focus ring on
+     the keyboard-armed path — where the tab is both focused and armed, and danger must win. */
+  .region-tab.arming rect { stroke: #b4232a; stroke-width: 2; stroke-dasharray: 5 3; }
   .region-rail { cursor: pointer; }
   /* Resize drag guide: a thin ink-blue line that follows the cursor, snapped to the column the
      drop would land on (F-inline-edit's live-pen accent, applied to a region boundary instead of
