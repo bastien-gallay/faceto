@@ -204,13 +204,27 @@ fn cmd_compact(log_path: &str) {
     );
 }
 
-/// `render [SOURCE]`. The positional is the source. (The `--pack` flag went with the packing
-/// modes — F-2d-placement stores each element's own vertical sub-position instead; an unknown
-/// flag now reads as the source path, which fails loudly at load.)
+/// A flag this build no longer knows fails loudly by name — never silently misread as the source
+/// path (`faceto render model.json --pack rows` must not try to open a file called `rows`). The
+/// `--pack` modes went with F-2d-placement: each element stores its own sub-position now.
+fn reject_flag(arg: &str) {
+    if arg.starts_with('-') {
+        eprintln!(
+            "unknown flag: {arg}\n(the --pack modes were removed — each element now stores its \
+             own position; see `faceto help`)"
+        );
+        exit(2);
+    }
+}
+
+/// `render [SOURCE]`. The positional is the source; anything flag-shaped is rejected loudly.
 fn parse_render(args: &[String]) -> String {
-    args.last()
-        .cloned()
-        .unwrap_or_else(|| "model.json".to_string())
+    let mut model = "model.json".to_string();
+    for arg in args {
+        reject_flag(arg);
+        model = arg.clone();
+    }
+    model
 }
 
 fn parse_serve(args: &[String]) -> (String, u16) {
@@ -224,6 +238,7 @@ fn parse_serve(args: &[String]) -> (String, u16) {
             }
             i += 2;
         } else {
+            reject_flag(&args[i]);
             model = args[i].clone();
             i += 1;
         }
