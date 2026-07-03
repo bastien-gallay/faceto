@@ -342,7 +342,7 @@ source file is exactly one stage:
 src/
 ├── json.rs       # hand-written JSON parser/serializer (the Json enum)
 ├── model.rs      # typed board: Model/Element/Edge/Phase, from_json, diff_models
-├── lint.rs       # ES-grammar lint: lint(&Model) → Vec<Finding>, warn-only, pure
+├── lint.rs       # ES-grammar lint: lint(&Model) → Vec<Finding>, warn-only, pure (level-aware)
 ├── events.rs     # event log: Event enum, replay() → Model, from_model() genesis
 ├── render.rs     # pure layout + SVG (render_svg) and HTML wrapping (render_html)
 ├── serve.rs      # std-only HTTP server (TcpListener + threads)

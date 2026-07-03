@@ -84,8 +84,11 @@ each one stage:
   and `diff_models`. This is where the board's domain rules live.
 - **`src/lint.rs`** — ES-grammar lint. `lint(&Model) -> Vec<Finding>`, a pure graph pass (no IO,
   no clocks) that flags event-storming defects (event with no producer, policy with no input /
-  output, non-terminal event with no outbound edge). Warn-only; each `Finding` is keyed on the
-  stable `id` (the comment-sidecar join key). A real edge connects two distinct existing elements.
+  output, non-terminal event with no outbound edge; plus, only when the board declares
+  `level: design`, a command with no output). Warn-only at every level; each `Finding` is keyed on
+  the stable `id` (the comment-sidecar join key). A real edge connects two distinct existing
+  elements. Findings surface in `serve`'s `/comments` sidebar as `kind:"lint"` entries, computed on
+  read and suppressed once the element is `resolved` (see `serve.rs`).
 - **`src/render.rs`** — pure layout + SVG generation (`render_svg`) and HTML wrapping
   (`render_html`). Holds the lane order (`LANES`), the colour grammar (`colour`), geometry
   constants (`COL_W`, `LANE_H`, etc.), label wrapping, the serif nameplate, and diff styling.

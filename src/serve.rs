@@ -341,14 +341,22 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                 &[],
             ),
         },
-        ("GET", "/comments") => {
-            let body = if ctx.log_mode {
-                comments_from_log(&ctx.model_path)
-            } else {
-                read_comments_json(&ctx.comments_path)
-            };
-            send(&mut out, 200, "application/json", body.as_bytes(), &[])
-        }
+        ("GET", "/comments") => match ctx.current() {
+            Ok((_version, model)) => {
+                // Stored feedback first, then the live lint findings — so a reviewer sees human
+                // notes and the tool's grammar nudges in one list. `ctx.current()` already gave us
+                // the (cached) projection, so merging costs one extra O(V+E) lint pass per request.
+                let mut items = if ctx.log_mode {
+                    comments_from_log(&ctx.model_path)
+                } else {
+                    read_comments_json(&ctx.comments_path)
+                };
+                items.extend(lint_items(&model));
+                let body = format!("[{}]", items.join(","));
+                send(&mut out, 200, "application/json", body.as_bytes(), &[])
+            }
+            Err(e) => send(&mut out, 500, "application/json", e.as_bytes(), &[]),
+        },
         ("GET", "/health") => send(&mut out, 200, "application/json", b"{\"ok\":true}", &[]),
         ("POST", "/comment") => {
             let mut buf = vec![0u8; content_length];
@@ -518,10 +526,13 @@ fn add_region_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u
 /// comment shape the client sidebar expects. Structural events (adds, moves, edges) are
 /// omitted — they already live in the rendered board. Feedback on an element that was later
 /// removed is dropped too, so the sidebar never lists a comment for a box that's off the board.
-fn comments_from_log(path: &Path) -> String {
+///
+/// Returns the item JSON strings (not the joined array); the `GET /comments` handler concatenates
+/// these with the live [`lint_items`] before framing the response.
+fn comments_from_log(path: &Path) -> Vec<String> {
     let log = match events::read_log(path) {
         Ok(e) => e,
-        Err(_) => return "[]".to_string(),
+        Err(_) => return Vec::new(),
     };
     let model = events::replay(&log);
     let present: std::collections::HashSet<&str> =
@@ -547,13 +558,15 @@ fn comments_from_log(path: &Path) -> String {
         ]);
         items.push(json::to_string(&obj));
     }
-    format!("[{}]", items.join(","))
+    items
 }
 
-fn read_comments_json(path: &Path) -> String {
+/// Read the legacy `comments.jsonl` sidecar into its item JSON strings (one per valid line).
+/// Like [`comments_from_log`], returns the items so the handler can append live lint findings.
+fn read_comments_json(path: &Path) -> Vec<String> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(_) => return "[]".to_string(),
+        Err(_) => return Vec::new(),
     };
     let mut items: Vec<String> = Vec::new();
     for line in text.lines() {
@@ -565,7 +578,35 @@ fn read_comments_json(path: &Path) -> String {
             items.push(line.to_string());
         }
     }
-    format!("[{}]", items.join(","))
+    items
+}
+
+/// The live lint findings for a board, in the same comment shape the sidebar renders — a
+/// `kind:"lint"` entry keyed on the offending element's stable `id`. Computed on read (never
+/// persisted): a finding is *derived* from the current graph, so recomputing it each request
+/// keeps it always-fresh and can never go stale against an edited board. A finding on an element
+/// the reviewer has already **resolved** (a `HotspotResolved` set `resolved:true`) is suppressed
+/// — that is the whole "reuse serve→review→resolve" story, keyed on `Finding.element_id` == the
+/// same stable id `HotspotResolved.id` uses. Per-finding acknowledgement is F-comment-lifecycle's.
+fn lint_items(model: &Model) -> Vec<String> {
+    crate::lint::lint(model)
+        .into_iter()
+        .filter(|f| {
+            !model
+                .elements
+                .iter()
+                .any(|e| e.id == f.element_id && e.resolved)
+        })
+        .map(|f| {
+            let obj = json::Json::Obj(vec![
+                ("elemId".into(), json::Json::Str(f.element_id.clone())),
+                ("kind".into(), json::Json::Str("lint".into())),
+                ("text".into(), json::Json::Str(f.message.into())),
+                ("status".into(), json::Json::Str("open".into())),
+            ]);
+            json::to_string(&obj)
+        })
+        .collect()
 }
 
 /// FNV-1a 64-bit, first 12 hex chars — a stable, dependency-free content version token.
@@ -911,9 +952,70 @@ mod tests {
             events::Event::ElementRemoved { id: "E2".into() },
         ];
         std::fs::write(&path, events::to_jsonl(&log)).unwrap();
-        let json = comments_from_log(&path);
+        let items = comments_from_log(&path);
         let _ = std::fs::remove_file(&path);
-        assert_eq!(json, "[]");
+        assert!(items.is_empty(), "feedback on a removed element is dropped");
+    }
+
+    // ---- F-es-lint: lint findings merged into the sidebar (derived on read) ----------------
+
+    fn model_of(src: &str) -> Model {
+        model::from_json(&json::parse(src).unwrap())
+    }
+
+    #[test]
+    fn lint_items_surfaces_a_finding_as_a_lint_kind_comment() {
+        // An orphan event (no producer, no consumer) yields two lint entries, both keyed on E1.
+        let m = model_of(r#"{"elements":[{"id":"E1","type":"event","label":"Lonely","col":0}]}"#);
+        let items = lint_items(&m);
+        assert_eq!(items.len(), 2);
+        for item in &items {
+            assert!(item.contains(r#""kind":"lint""#));
+            assert!(item.contains(r#""elemId":"E1""#));
+            assert!(item.contains(r#""status":"open""#));
+        }
+    }
+
+    #[test]
+    fn lint_items_is_empty_for_a_grammar_clean_board() {
+        let m = model_of(
+            r#"{"elements":[
+                {"id":"C1","type":"command","label":"do","col":0},
+                {"id":"E1","type":"event","label":"Done","col":1},
+                {"id":"R1","type":"readmodel","label":"view","col":2}],
+              "edges":[["C1","E1"],["E1","R1"]]}"#,
+        );
+        assert!(lint_items(&m).is_empty());
+    }
+
+    #[test]
+    fn a_finding_on_a_resolved_element_is_suppressed() {
+        // Reuse the existing resolve path: once E1 carries resolved:true its findings drop out —
+        // no new endpoint, just the HotspotResolved-driven `resolved` flag the model already has.
+        let src = r#"{"elements":[{"id":"E1","type":"event","label":"Lonely","col":0RESOLVED}]}"#;
+        let live = model_of(&src.replace("RESOLVED", ""));
+        assert_eq!(
+            lint_items(&live).len(),
+            2,
+            "an unresolved orphan still nudges"
+        );
+        let resolved = model_of(&src.replace("RESOLVED", r#","resolved":true"#));
+        assert!(
+            lint_items(&resolved).is_empty(),
+            "a resolved element's findings are suppressed"
+        );
+    }
+
+    #[test]
+    fn a_design_board_surfaces_the_command_rule_through_lint_items() {
+        // The merge honours the board's level for free: lint_items reads model.level.
+        let m = model_of(
+            r#"{"level":"design","elements":[
+                {"id":"C1","type":"command","label":"orphan","col":0}]}"#,
+        );
+        let items = lint_items(&m);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].contains(r#""elemId":"C1""#) && items[0].contains(r#""kind":"lint""#));
     }
 
     #[test]
