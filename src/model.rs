@@ -8,6 +8,40 @@ use crate::json::{self, Json};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+/// The board's declared modeling granularity, which parameterises lint strictness (never
+/// gating — a finding is always warn-only). `BigPicture` is a first-pass sweep where a command
+/// sketched before its event is normal incompleteness; `Design` is a filled-in flow where such
+/// a gap is a defect. The only difference today is that `Design` activates `command-no-output`
+/// (see `crate::lint`). Default is `BigPicture`, so an older board with no `level` is unaffected.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum Level {
+    #[default]
+    BigPicture,
+    Design,
+}
+
+/// Parse a board `level` string. `"design"` → `Design`; anything else (including the explicit
+/// `"big-picture"`, an unknown value, or an absent field via the caller's `unwrap_or_default`)
+/// → `BigPicture`. The single parse point shared by `from_json` (model.json) and `replay` (the
+/// log), so the two paths can never disagree — mirrors how `resolve_region_id` is shared.
+pub fn level_from_str(s: &str) -> Level {
+    match s {
+        "design" => Level::Design,
+        _ => Level::BigPicture,
+    }
+}
+
+/// The wire string for a `Level` — the reverse of [`level_from_str`], so the log-serialize side
+/// (`from_model`) can't drift from the parse side. Exhaustive on purpose: a future variant is a
+/// compile error here until its wire form is declared, instead of silently round-tripping as the
+/// default.
+pub fn level_to_str(level: Level) -> &'static str {
+    match level {
+        Level::BigPicture => "big-picture",
+        Level::Design => "design",
+    }
+}
+
 #[derive(Clone)]
 pub struct Phase {
     /// Stable identity (the diff join key and the target of resize/rename/remove). A region is a
@@ -56,6 +90,9 @@ pub struct Edge {
 #[derive(Clone, Default)]
 pub struct Model {
     pub title: String,
+    /// Modeling granularity — `BigPicture` (default) or `Design`. Read by `crate::lint` to decide
+    /// which rules apply; never affects rendering. See [`Level`].
+    pub level: Level,
     pub phases: Vec<Phase>,
     pub elements: Vec<Element>,
     pub edges: Vec<Edge>,
@@ -74,6 +111,11 @@ pub fn from_json(j: &Json) -> Model {
         .and_then(|v| v.as_str())
         .unwrap_or("board")
         .to_string();
+    let level = j
+        .get("level")
+        .and_then(|v| v.as_str())
+        .map(level_from_str)
+        .unwrap_or_default();
     let phases = j
         .get("phases")
         .and_then(|v| v.as_array())
@@ -96,6 +138,7 @@ pub fn from_json(j: &Json) -> Model {
         .unwrap_or_default();
     Model {
         title,
+        level,
         phases,
         elements,
         edges,
@@ -289,6 +332,8 @@ pub fn diff_models(a: &Model, b: &Model, meta: (String, String)) -> Model {
         } else {
             a.title.clone()
         },
+        // A diff is a render-only artifact (lint never runs on it); carry the newer board's level.
+        level: b.level,
         phases: diff_phases(a, b),
         elements,
         edges,
@@ -334,6 +379,34 @@ mod tests {
 
     fn model_of(src: &str) -> Model {
         from_json(&json::parse(src).unwrap())
+    }
+
+    // ---- F-es-lint: board level ------------------------------------------------------------
+
+    #[test]
+    fn level_defaults_to_big_picture_when_absent() {
+        let m = model_of(r#"{"elements":[]}"#);
+        assert_eq!(m.level, Level::BigPicture);
+    }
+
+    #[test]
+    fn level_design_is_parsed_from_the_top_level_field() {
+        let m = model_of(r#"{"level":"design","elements":[]}"#);
+        assert_eq!(m.level, Level::Design);
+    }
+
+    #[test]
+    fn an_unknown_or_explicit_big_picture_level_falls_back_to_big_picture() {
+        assert_eq!(level_from_str("big-picture"), Level::BigPicture);
+        assert_eq!(level_from_str("nonsense"), Level::BigPicture);
+        assert_eq!(model_of(r#"{"level":"whatever"}"#).level, Level::BigPicture);
+    }
+
+    #[test]
+    fn level_to_str_is_the_inverse_of_level_from_str() {
+        for level in [Level::BigPicture, Level::Design] {
+            assert_eq!(level_from_str(level_to_str(level)), level);
+        }
     }
 
     // ---- F-container Stage 2: spatial membership + derived pivotal -------------------------

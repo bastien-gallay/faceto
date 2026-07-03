@@ -23,7 +23,7 @@
 //!   kind (additive) and upcast the old one; never redefine an existing kind in place.
 
 use crate::json::{self, Json};
-use crate::model::{resolve_region_id, Edge, Element, Model, Phase};
+use crate::model::{resolve_region_id, Edge, Element, Level, Model, Phase};
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -33,6 +33,13 @@ use std::path::Path;
 pub enum Event {
     BoardTitled {
         title: String,
+    },
+    /// The board's modeling granularity (`"big-picture"` / `"design"`). Stores the raw wire string
+    /// like `BoardTitled` stores the raw title; `replay` parses it through `model::level_from_str`,
+    /// so the `Level` enum stays internal to the model. Additive kind — an old log never has it and
+    /// replays as the default `BigPicture`.
+    BoardLeveled {
+        level: String,
     },
     PhaseAdded {
         /// Stable region id. `None` on a legacy band (predates region editing); `replay` mints a
@@ -196,6 +203,9 @@ pub fn parse_event(raw: &Json) -> Option<Event> {
         "BoardTitled" => Event::BoardTitled {
             title: str_field("title")?,
         },
+        "BoardLeveled" => Event::BoardLeveled {
+            level: str_field("level")?,
+        },
         "PhaseAdded" => Event::PhaseAdded {
             id: str_field("id"),
             label: str_field("label")?,
@@ -269,6 +279,7 @@ pub fn replay(events: &[Event]) -> Model {
     for ev in events {
         match ev {
             Event::BoardTitled { title } => m.title = title.clone(),
+            Event::BoardLeveled { level } => m.level = crate::model::level_from_str(level),
             Event::PhaseAdded {
                 id,
                 label,
@@ -390,6 +401,16 @@ pub fn from_model(m: &Model) -> Vec<Event> {
     if !m.title.is_empty() {
         ev.push(Event::BoardTitled {
             title: m.title.clone(),
+        });
+    }
+    // Emit the level only when it differs from the default, mirroring the title guard: a
+    // big-picture (default) board writes no `BoardLeveled`, so its genesis batch is byte-identical
+    // to before this field existed and round-trips unchanged. Guarding on `!= default` (not
+    // `== Design`) means any future non-default level is emitted too, via the exhaustive
+    // `level_to_str` — no variant silently round-trips as the default.
+    if m.level != Level::default() {
+        ev.push(Event::BoardLeveled {
+            level: crate::model::level_to_str(m.level).into(),
         });
     }
     for p in &m.phases {
@@ -613,6 +634,9 @@ pub fn to_json(ev: &Event) -> Json {
     let n = |x: i64| Json::Num(x as f64);
     match ev {
         Event::BoardTitled { title } => obj(vec![("event", s("BoardTitled")), ("title", s(title))]),
+        Event::BoardLeveled { level } => {
+            obj(vec![("event", s("BoardLeveled")), ("level", s(level))])
+        }
         Event::PhaseAdded {
             id,
             label,
@@ -1085,6 +1109,54 @@ mod tests {
         assert_eq!(h1.detail.as_deref(), Some("done"));
         let e2 = rebuilt.elements.iter().find(|e| e.id == "E2").unwrap();
         assert_eq!(e2.detail.as_deref(), Some("a note"));
+    }
+
+    // ---- F-es-lint: the board level round-trips through the log ----------------------------
+
+    #[test]
+    fn board_leveled_is_a_serialize_parse_fixed_point() {
+        let e = ev(r#"{"event":"BoardLeveled","level":"design"}"#);
+        assert!(matches!(&e, Event::BoardLeveled { level } if level == "design"));
+        assert_eq!(
+            json::to_string(&to_json(&ev(&line(&e)))),
+            json::to_string(&to_json(&e))
+        );
+    }
+
+    #[test]
+    fn replay_sets_the_model_level_from_board_leveled() {
+        let m = replay(&[ev(r#"{"event":"BoardLeveled","level":"design"}"#)]);
+        assert_eq!(m.level, crate::model::Level::Design);
+    }
+
+    #[test]
+    fn from_model_emits_board_leveled_only_for_a_design_board() {
+        // A design board round-trips its level and writes exactly one BoardLeveled event.
+        let design =
+            crate::model::from_json(&json::parse(r#"{"level":"design","elements":[]}"#).unwrap());
+        let batch = from_model(&design);
+        assert_eq!(
+            batch
+                .iter()
+                .filter(|e| matches!(e, Event::BoardLeveled { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(replay(&batch).level, crate::model::Level::Design);
+
+        // A big-picture (default) board emits none, so its genesis batch is unchanged.
+        let big = crate::model::from_json(&json::parse(r#"{"elements":[]}"#).unwrap());
+        assert!(!from_model(&big)
+            .iter()
+            .any(|e| matches!(e, Event::BoardLeveled { .. })));
+    }
+
+    #[test]
+    fn a_design_board_survives_compaction() {
+        let design =
+            crate::model::from_json(&json::parse(r#"{"level":"design","elements":[]}"#).unwrap());
+        let folded = compact(&from_model(&design));
+        assert_eq!(replay(&folded).level, crate::model::Level::Design);
     }
 
     #[test]

@@ -1126,7 +1126,7 @@ const HTML_TEMPLATE: &str = include_str!("template.html");
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Phase;
+    use crate::model::{Level, Phase};
 
     #[test]
     fn hump_split_breaks_camelcase_and_acronym_runs() {
@@ -1174,6 +1174,7 @@ mod tests {
                 was: None,
             }],
             edges: vec![],
+            level: Level::default(),
             diff_meta: None,
         }
     }
@@ -1194,6 +1195,7 @@ mod tests {
             phases: vec![],
             elements: vec![],
             edges: vec![],
+            level: Level::default(),
             diff_meta: None,
         }
     }
@@ -1259,6 +1261,7 @@ mod tests {
                 })
                 .collect(),
             edges: vec![],
+            level: Level::default(),
             diff_meta: None,
         }
     }
@@ -1391,6 +1394,7 @@ mod tests {
             phases: vec![phase("K1", "Context A", 0, 2, None)],
             elements: vec![el("E1", "event", 0), el("E2", "event", 1)],
             edges: vec![],
+            level: Level::default(),
             diff_meta: None,
         };
         let svg = render_svg(&m);
@@ -1427,6 +1431,7 @@ mod tests {
             phases: vec![],
             elements: vec![el("E1", "event", 0), el("E2", "event", 2)],
             edges: vec![],
+            level: Level::default(),
             diff_meta: None,
         };
         let svg = render_svg(&m);
@@ -1448,6 +1453,7 @@ mod tests {
             phases: vec![phase("K9", "Gone", 0, 1, Some("removed"))],
             elements: vec![el("E1", "event", 0)],
             edges: vec![],
+            level: Level::default(),
             diff_meta: Some(("v1".into(), "v2".into())),
         };
         let svg = render_svg(&m);
@@ -1520,6 +1526,7 @@ mod tests {
                     status: None,
                 },
             ],
+            level: Level::default(),
             diff_meta: None,
         };
         let svg = render_svg(&m);
@@ -1586,6 +1593,7 @@ mod tests {
                     status: None,
                 },
             ],
+            level: Level::default(),
             diff_meta: None,
         };
         let svg = render_svg(&m);
@@ -1628,6 +1636,7 @@ mod tests {
             phases: vec![],
             elements,
             edges,
+            level: Level::default(),
             diff_meta: None,
         };
         let svg = render_svg(&m);
