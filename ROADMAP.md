@@ -354,9 +354,10 @@ and `template.html`.
   each column-index its post-fold left x (`COLLAPSE_W` at a band's leftmost column, `0` for its
   interior, `COL_W` otherwise), and `col_left(c) = xs[c]`. In-band stickies and any edge with an
   in-band endpoint are skipped; a *crossing* edge (both ends visible) stays a straight passthrough.
-  Empty / unknown-id set = identity remap, so `render`/`genesis`/`GET /` stay byte-identical
-  (`View::none()`). The region right-edge became `xs[hi+1]` (was `col_left(hi)+COL_W`, only correct
-  unfolded); the rightmost frontier likewise.
+  Empty / unknown-id set = identity remap, so `render`/`genesis`/`GET /` keep their pre-feature
+  *column geometry* (`View::none()`) — not byte-identical output, since every region tab now also
+  emits an inert `▾` disclosure glyph. The region right-edge became `xs[hi+1]` (was
+  `col_left(hi)+COL_W`, only correct unfolded); the rightmost frontier likewise.
 - **`serve.rs` — `?collapse=K2,K5`** parsed by `parse_collapse` (empty segments dropped, absent =
   identity) into the `View`; composes with `?base=` by folding the *baseline* model with the same
   view so the diff overlay lines up.

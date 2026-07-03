@@ -933,6 +933,12 @@ let frontierDrag = null;   // { regionId, edge, baseCol, svgLeft, pointerId, b? 
 // including pointerup off-window — is delivered to the line, so the drag can never leak.
 function startFrontierDrag(e) {
   if (e.button !== 0 || gestureBusy()) return;
+  // A collapsed region leaves the rail sparse (folded columns emit no `.region-rail`), so the
+  // boundary-snap math (boundaryAtSvgX/boundaryX, built from railCols) can no longer resolve a
+  // folded boundary — a drag near a folded band would fail the no-change guard and POST a resize
+  // the viewer never intended, turning the read-only collapse lens into a destructive model edit.
+  // Require expanding first; resizing a partition whose columns are hidden is ambiguous anyway.
+  if (collapsedSet().size) { note("expand collapsed regions (z) to resize a frontier"); return; }
   e.preventDefault();
   const line = e.currentTarget;
   const svgLeft = svgLeftPx();
@@ -1015,7 +1021,7 @@ function bindRegions() {
     g.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startRename(g, true); }
       else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); e.stopPropagation(); armRegion(g.dataset.region, g); }
-      else if (e.key === "z" || e.key === "Z") { e.preventDefault(); e.stopPropagation(); toggleCollapse(g.dataset.region); }
+      else if ((e.key === "z" || e.key === "Z") && !e.ctrlKey && !e.metaKey) { e.preventDefault(); e.stopPropagation(); toggleCollapse(g.dataset.region); }   // bare z folds; Cmd/Ctrl+Z must reach the document undo handler
       else if (e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
         e.preventDefault(); e.stopPropagation();
         resizeRegionByKey(g.dataset.region, e.key === "ArrowRight" ? 1 : -1);
