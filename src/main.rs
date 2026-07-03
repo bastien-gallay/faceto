@@ -304,7 +304,8 @@ fn print_help() {
          \x20 faceto compact [LOG]               fold a log to a snapshot, bounding replay (default event-log.jsonl)\n\
          \x20 faceto help | version\n\
          \n\
-         SOURCE is a model.json or an event log (*.jsonl / *.log); it defaults to ./model.json.",
+         SOURCE is a model.json or an event log (*.jsonl / *.log); it defaults to ./model.json.\n\
+         lint reads the board's \"level\" (big-picture | design); a design board adds stricter rules.",
         env!("CARGO_PKG_VERSION")
     );
 }

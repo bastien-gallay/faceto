@@ -1,7 +1,7 @@
 //! ES-grammar lint — a pure graph pass over a `Model` that flags the event-storming
 //! grammar defects a workshop review would otherwise raise by hand.
 //!
-//! The four rules here are the ones a real 147-element board's review surfaced (issue #13 §3):
+//! The base rules here are the ones a real 147-element board's review surfaced (issue #13 §3):
 //! every substantive review comment was a mechanical grammar defect. Lint is **warn-only** — a
 //! big-picture board is legitimately incomplete, so a finding is a nudge, never a gate (the CLI
 //! always exits 0). Identity is the stable `id`, so a `Finding` carries `element_id`: the same
@@ -10,7 +10,7 @@
 //! This stage is pure and depends on nothing downstream: `Model -> Vec<Finding>`, no IO, no
 //! clocks. The CLI (`main.rs`) owns loading the board and printing the findings.
 
-use crate::model::Model;
+use crate::model::{Level, Model};
 use std::collections::HashSet;
 
 /// One grammar finding, keyed on the offending element's stable `id`.
@@ -28,11 +28,14 @@ pub struct Finding {
 /// Run the ES-grammar rules over a board, returning findings in a deterministic order
 /// (element file-order, then rule order) so the output never churns between runs.
 ///
-/// The rules, all warn-only:
+/// The rules, all warn-only. The first four apply at every level; the last only when the board
+/// declares `level: design` (see [`crate::model::Level`]) — a first-pass big-picture board
+/// legitimately sketches commands before their events, so gating it there avoids false positives.
 /// - **event-no-producer** — an `event` with no incoming edge: nothing emits it.
 /// - **policy-no-input** — a `policy` with no incoming edge: nothing triggers it.
 /// - **policy-no-output** — a `policy` with no outgoing edge: it triggers nothing.
 /// - **event-dead-end** — an `event` with no outgoing edge: a dead end unless it is terminal.
+/// - **command-no-output** *(design only)* — a `command` with no outgoing edge: it emits no event.
 pub fn lint(m: &Model) -> Vec<Finding> {
     // O(V + E): an element has a producer (resp. consumer) iff some *real* edge ends (resp.
     // starts) at it. A real edge connects two distinct existing elements — a self-loop
@@ -90,6 +93,17 @@ pub fn lint(m: &Model) -> Vec<Finding> {
                         message: "no output: this policy triggers nothing (no outgoing edge)",
                     });
                 }
+            }
+            // Design-level only: a command that emits no event. At `big-picture` a command
+            // sketched before its event is legitimate incompleteness, so the rule is gated to a
+            // filled-in `design` board — the same producer/consumer obligation the event/policy
+            // rules enforce, applied to a command's outbound side.
+            "command" if m.level == Level::Design && !outbound => {
+                findings.push(Finding {
+                    rule: "command-no-output",
+                    element_id: e.id.clone(),
+                    message: "no output: this command emits no event (no outgoing edge)",
+                });
             }
             _ => {}
         }
@@ -252,5 +266,55 @@ mod tests {
         let ids: Vec<&str> = fs.iter().map(|f| f.element_id.as_str()).collect();
         assert_eq!(ids.first(), Some(&"P1"), "P1 (first in file) reports first");
         assert!(ids.contains(&"E1"));
+    }
+
+    // ---- F-es-lint: the design-level `command-no-output` rule ------------------------------
+
+    // A command that emits nothing is a defect only at `design` granularity. C1 -> E1 gives it
+    // an output; C2 dangles. The same board is silent at big-picture, flagged at design.
+    #[test]
+    fn a_command_with_no_output_is_flagged_only_at_design_level() {
+        // big-picture (default): a command sketched before its event is legitimate — silent.
+        let big = model_of(
+            r#"{"elements":[
+                {"id":"C1","type":"command","label":"emits","col":0},
+                {"id":"E1","type":"event","label":"E","col":1},
+                {"id":"C2","type":"command","label":"dangles","col":0}],
+              "edges":[["C1","E1"]]}"#,
+        );
+        assert!(
+            rules_for(&lint(&big), "C2").is_empty(),
+            "no command rule at big-picture"
+        );
+
+        // design: the dangling command fires, the wired one stays clean.
+        let design = model_of(
+            r#"{"level":"design","elements":[
+                {"id":"C1","type":"command","label":"emits","col":0},
+                {"id":"E1","type":"event","label":"E","col":1},
+                {"id":"C2","type":"command","label":"dangles","col":0}],
+              "edges":[["C1","E1"]]}"#,
+        );
+        assert_eq!(rules_for(&lint(&design), "C2"), vec!["command-no-output"]);
+        assert!(
+            rules_for(&lint(&design), "C1").is_empty(),
+            "a command with an outbound edge is clean at design too"
+        );
+    }
+
+    // Determinism holds across lanes: at design level a command finding and an event finding come
+    // out in element file-order (C1 before E1 here).
+    #[test]
+    fn design_findings_follow_element_file_order() {
+        let m = model_of(
+            r#"{"level":"design","elements":[
+                {"id":"C1","type":"command","label":"c","col":0},
+                {"id":"E1","type":"event","label":"e","col":1}]}"#,
+        );
+        let fs = lint(&m);
+        let ids: Vec<&str> = fs.iter().map(|f| f.element_id.as_str()).collect();
+        // C1's command finding precedes E1's two event findings — element file-order holds across
+        // the new design-level lane just as it does for the base rules.
+        assert_eq!(ids, vec!["C1", "E1", "E1"]);
     }
 }
