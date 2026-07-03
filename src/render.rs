@@ -474,6 +474,12 @@ impl View {
 
 pub fn render_svg(model: &Model, view: &View) -> String {
     let mut elements = model.elements.clone();
+    // `type` selects the lane; an element whose type isn't one of the 8 lanes has no lane to
+    // occupy. Drop it from this projection (its edges are then skipped by the `idx_of` guard
+    // below) rather than panicking on the per-lane `lane_rows`/`lane_top` lookups — `colour` and
+    // `lane_index` already tolerate unknown kinds, so this keeps render consistently defensive on
+    // off-grammar input (the log stays the truth; the view just can't place a lane-less sticky).
+    elements.retain(|e| LANES.contains(&e.kind.as_str()));
 
     // R: the 8-lane scaffold is the board's structure, not a function of its contents. Every lane
     // always renders, so an empty board shows the full grammar (onboarding) and every lane title is
@@ -1317,10 +1323,44 @@ pub fn render_html(svg: &str, title: &str) -> String {
         "{{\"colW\":{},\"stickyW\":{},\"stickyH\":{},\"rowPitch\":{},\"laneVpad\":{},\"regionTabH\":{},\"regionTabCharW\":{},\"regionTabPad\":{}}}",
         COL_W, STICKY_W, STICKY_H, ROW_PITCH, LANE_VPAD, REGION_TAB_H, REGION_TAB_CHAR_W, REGION_TAB_PAD
     );
-    HTML_TEMPLATE
-        .replace("__TITLE__", &esc(title))
-        .replace("__SVG__", svg)
-        .replace("__CONFIG__", &cfg)
+    // Fill the placeholders in a single left-to-right pass, so a *value* that happens to contain
+    // another placeholder token (a sticky or region labelled `__CONFIG__`, a title of `__SVG__`)
+    // is inserted verbatim and never re-scanned. A naive chain of `.replace` inserts the SVG first
+    // and then lets the later `__CONFIG__` pass rewrite that label's text into the config JSON.
+    fill_template(
+        HTML_TEMPLATE,
+        &[
+            ("__TITLE__", &esc(title)),
+            ("__SVG__", svg),
+            ("__CONFIG__", &cfg),
+        ],
+    )
+}
+
+/// Substitute `subs` (token → value) into `template` in one pass: at each step the earliest
+/// remaining token is replaced with its value, and inserted values are never re-scanned. This is
+/// the difference from chained `.replace` — a value carrying a later token can't be clobbered.
+fn fill_template(template: &str, subs: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    loop {
+        // The earliest occurrence of any token in the unconsumed tail.
+        let next = subs
+            .iter()
+            .filter_map(|(tok, val)| rest.find(tok).map(|pos| (pos, *tok, *val)))
+            .min_by_key(|(pos, _, _)| *pos);
+        match next {
+            Some((pos, tok, val)) => {
+                out.push_str(&rest[..pos]);
+                out.push_str(val);
+                rest = &rest[pos + tok.len()..];
+            }
+            None => {
+                out.push_str(rest);
+                return out;
+            }
+        }
+    }
 }
 
 const HTML_TEMPLATE: &str = include_str!("template.html");
@@ -1901,6 +1941,32 @@ mod tests {
         let key = "data-cy=\"";
         let j = rest.find(key).unwrap() + key.len();
         rest[j..][..rest[j..].find('"').unwrap()].parse().unwrap()
+    }
+
+    #[test]
+    fn render_drops_an_off_grammar_type_instead_of_panicking() {
+        // `type` picks the lane; an element whose type isn't one of the 8 lanes has no lane. It is
+        // dropped from the view (before any geometry is computed), so the board is identical to the
+        // valid-only one — and, crucially, rendering it does not panic on the lane lookups.
+        let valid = Model {
+            elements: vec![el("E1", "event", 0)],
+            ..Default::default()
+        };
+        let mixed = Model {
+            elements: vec![el("E1", "event", 0), el("X1", "not-a-lane", 1)],
+            ..Default::default()
+        };
+        assert_eq!(rsvg(&mixed), rsvg(&valid));
+    }
+
+    #[test]
+    fn a_label_equal_to_a_template_token_is_not_clobbered() {
+        // A sticky labelled `__CONFIG__` reaches the SVG verbatim (esc leaves underscores). The
+        // single-pass fill must insert it as-is, not let the later `__CONFIG__` substitution
+        // rewrite it into the geometry JSON.
+        let html = render_html("<text>__CONFIG__</text>", "t");
+        assert!(html.contains("<text>__CONFIG__</text>")); // label survived
+        assert!(html.contains("\"colW\":")); // real config JSON still landed
     }
 
     fn el(id: &str, kind: &str, col: i64) -> Element {
