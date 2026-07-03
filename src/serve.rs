@@ -314,7 +314,7 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
     match (method, path) {
         ("GET", "/") | ("GET", "/index.html") => match ctx.current() {
             Ok((_v, model)) => {
-                let svg = render::render_svg(&model);
+                let svg = render::render_svg(&model, &render::View::none());
                 let html = render::render_html(&svg, &model.title);
                 send(
                     &mut out,
@@ -335,6 +335,12 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
         ("GET", "/board.svg") => match ctx.current() {
             Ok((version, model)) => {
                 let base = query_get(query, "base");
+                // A per-viewer reading lens, never persisted: the collapsed-region set the client
+                // holds in localStorage (F-region-collapse). Composes with `?base=` — the baseline
+                // is folded with the *same* view below so the diff overlay lines up column-for-column.
+                let view = render::View {
+                    collapsed: parse_collapse(query),
+                };
                 let old = base
                     .as_deref()
                     .filter(|b| *b != version)
@@ -342,7 +348,7 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                 if let (Some(old), Some(base)) = (old, &base) {
                     let merged =
                         model::diff_models(&old, &model, ("last seen".into(), "now".into()));
-                    let svg = render::render_svg(&merged) + "\n";
+                    let svg = render::render_svg(&merged, &view) + "\n";
                     send(
                         &mut out,
                         200,
@@ -351,7 +357,7 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                         &[("X-Diff-Base", base.as_str())],
                     )
                 } else {
-                    let svg = render::render_svg(&model) + "\n";
+                    let svg = render::render_svg(&model, &view) + "\n";
                     send(&mut out, 200, "image/svg+xml", svg.as_bytes(), &[])
                 }
             }
@@ -472,6 +478,21 @@ fn send(
     out.write_all(head.as_bytes())?;
     out.write_all(body)?;
     out.flush()
+}
+
+/// The collapsed-region ids from `?collapse=K2,K5` — the client's reading lens (F-region-collapse),
+/// never persisted. Comma-separated, empty segments dropped, so `?collapse=` (or an absent key) is
+/// the empty set = the identity render. Unknown ids are harmless: `render_svg` ignores an id that
+/// matches no region.
+fn parse_collapse(query: &str) -> Vec<String> {
+    query_get(query, "collapse")
+        .map(|s| {
+            s.split(',')
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn query_get(query: &str, key: &str) -> Option<String> {
@@ -655,6 +676,16 @@ fn fnv12(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_collapse_splits_ids_and_treats_empty_as_the_identity_set() {
+        assert_eq!(parse_collapse("collapse=K2,K5"), vec!["K2", "K5"]);
+        assert_eq!(parse_collapse("base=abc&collapse=K2"), vec!["K2"]);
+        // Absent key, an empty value, and stray empty segments all fold to the empty (identity) set.
+        assert!(parse_collapse("base=abc").is_empty());
+        assert!(parse_collapse("collapse=").is_empty());
+        assert_eq!(parse_collapse("collapse=,K2,"), vec!["K2"]);
+    }
 
     #[test]
     fn fnv12_is_deterministic_and_twelve_hex_chars() {

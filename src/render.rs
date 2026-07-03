@@ -101,6 +101,11 @@ fn phase_diff_kind(diff: Option<&str>) -> Option<&'static str> {
 }
 
 const COL_W: f64 = 210.0;
+// F-region-collapse: a folded region's whole column span compresses to one thin summary slot of
+// this width (its stickies hidden behind a count chip on the tab); columns to its right shift left
+// so a wide board actually shortens. Narrow enough to read as "quieted", wide enough to seat the
+// band's tonal wash and frontier lines.
+const COLLAPSE_W: f64 = 60.0;
 // When a (lane, col) cell holds several simultaneous stickies they auto-stack into sub-rows, each
 // adding ROW_PITCH of height (a stored `y` places its element freely in the same band instead).
 // LANE_VPAD keeps a single-row lane at the classic 108px (92 + 16), so uncrowded boards look
@@ -448,7 +453,26 @@ fn fan_offsets(ends: &[Option<(usize, usize)>], centers: &[(f64, f64)]) -> (Vec<
     (off_src, off_dst)
 }
 
-pub fn render_svg(model: &Model) -> String {
+/// A per-viewer *reading lens* applied at render time — never persisted, never in the log. Today it
+/// carries the set of collapsed region ids (F-region-collapse). It is a pure argument to
+/// `render_svg`, exactly like the diff overlay: `(Model, View) -> SVG`, re-derived per request. The
+/// static `render`/`genesis` output and the plain `GET /` page pass `View::none()`; only
+/// `GET /board.svg` reads `?collapse=` into one.
+#[derive(Default)]
+pub struct View {
+    /// Region ids the viewer has folded to a thin band. Unknown ids are ignored (a stale id from a
+    /// since-removed region just no-ops), and order is irrelevant — the remap is order-independent.
+    pub collapsed: Vec<String>,
+}
+
+impl View {
+    /// The identity lens — nothing folded. The default render everywhere except `?collapse=`.
+    pub fn none() -> Self {
+        View::default()
+    }
+}
+
+pub fn render_svg(model: &Model, view: &View) -> String {
     let mut elements = model.elements.clone();
 
     // R: the 8-lane scaffold is the board's structure, not a function of its contents. Every lane
@@ -470,6 +494,77 @@ pub fn render_svg(model: &Model) -> String {
     let min_col = elements.iter().map(|e| e.col.unwrap()).min().unwrap_or(0);
     let max_col = elements.iter().map(|e| e.col.unwrap()).max().unwrap_or(0);
     let ncols = (max_col - min_col + 1) as usize;
+    let ncols_i = ncols as i64;
+    // Clamp a stored `col` into the present column-index range `0..ncols` (an out-of-view region
+    // bound folds to the edge instead of indexing past the geometry). Defined here (not down by the
+    // region loop as it once was) because the collapse remap below needs it to resolve band spans.
+    let clamp_idx = |c: i64| (c - min_col).clamp(0, ncols_i - 1) as usize;
+
+    // F-region-collapse — the pure `col -> x` fold. A per-viewer lens (`view.collapsed`) folds each
+    // named region's clamped inclusive column span `[lo,hi]` to ONE thin summary slot (its leftmost
+    // column, width `COLLAPSE_W`); the span's other columns vanish and everything to their right
+    // shifts left, so the board actually shortens. This is the whole layout delta — no `Model`/log
+    // change, `replay`/`from_json` untouched. `xs[i]` is column-index `i`'s left x after folding and
+    // `xs[ncols]` the board's right edge; `hidden[i]` marks a column swallowed into a band (its
+    // stickies and their edges are dropped). Adjacent collapsed regions fold independently (each
+    // keeps its own leftmost summary slot), matching the F-region-frontiers contiguous partition. An
+    // empty collapsed set (or only unknown ids) is the identity: `COL_W` per column, the classic
+    // column layout — so the static `render`/`genesis` path keeps its pre-feature geometry (the tab
+    // still gains an inert `▾` disclosure glyph, so the SVG is not byte-identical to pre-feature output).
+    let mut is_band_rep = vec![false; ncols]; // leftmost (summary) column of a collapsed band
+    let mut hidden = vec![false; ncols]; // any column inside a collapsed band
+                                         // The ids actually folded this render — the single source of truth the region-tab loop reads for
+                                         // its `▸`/`· N` chip, so the tab can never disagree with the columns the remap hid (they were two
+                                         // independent membership tests before). A region folds only if all three hold:
+    let mut folded_ids: HashSet<&str> = HashSet::new();
+    for ph in &model.phases {
+        // (a) it is *live* — under a diff overlay (`?collapse=X&base=`), `diff_phases` feeds a removed
+        //     region back as a `removed` ghost carrying its old span; folding it would hide *current*
+        //     elements in those columns with no live tab to expand them (mirrors the `live` filter below);
+        let live = ph.diff.as_deref() != Some("removed");
+        // (b) its stored span actually overlaps the content columns `[min_col, max_col]` — a region
+        //     that F-region-frontiers let run entirely past the last element column has no on-board
+        //     columns to fold, and clamping it would pin `lo=hi` onto an edge column owned by a
+        //     *neighbour*, hiding that neighbour's sticky and miscounting the chip;
+        let overlaps_content = ph.to_col >= min_col && ph.from_col <= max_col;
+        // (c) the viewer named it.
+        if live && overlaps_content && view.collapsed.iter().any(|c| c == &ph.id) {
+            folded_ids.insert(ph.id.as_str());
+            let a = clamp_idx(ph.from_col);
+            let b = clamp_idx(ph.to_col);
+            let (lo, hi) = (a.min(b), a.max(b));
+            is_band_rep[lo] = true;
+            for h in hidden.iter_mut().take(hi + 1).skip(lo) {
+                *h = true;
+            }
+        }
+    }
+    let col_w_at = |i: usize| -> f64 {
+        if is_band_rep[i] {
+            COLLAPSE_W
+        } else if hidden[i] {
+            0.0
+        } else {
+            COL_W
+        }
+    };
+    let xs: Vec<f64> = {
+        let mut xs = vec![0.0_f64; ncols + 1];
+        let mut x = MARGIN_L;
+        for (i, slot) in xs.iter_mut().enumerate().take(ncols) {
+            *slot = x;
+            x += col_w_at(i);
+        }
+        xs[ncols] = x;
+        xs
+    };
+    // `c` is a column *index* (`col - min_col`) in `0..=ncols`; `col_left(ncols)` is the right edge.
+    let col_left = |c: usize| xs[c];
+    // An element is hidden when its column folded into a band — skipped in the sticky and edge draws.
+    let hidden_el: Vec<bool> = elements
+        .iter()
+        .map(|e| hidden[(e.col.unwrap() - min_col) as usize])
+        .collect();
 
     // Two or more elements sharing a (lane, col) cell are *simultaneous* — `col` is the timeline,
     // not a per-lane slot — so we never spread them across fake columns (that would lie about when
@@ -493,7 +588,6 @@ pub fn render_svg(model: &Model) -> String {
         *r = (*r).max(*total);
     }
 
-    let col_left = |c: usize| MARGIN_L + c as f64 * COL_W;
     let board_right = col_left(ncols);
 
     let mut lane_top: HashMap<String, f64> = HashMap::new();
@@ -600,8 +694,6 @@ pub fn render_svg(model: &Model) -> String {
     // collapses to the edge instead of indexing past `col_left`.
     let band_top = MARGIN_T - 26.0;
     let band_bot = lanes_bottom - 6.0;
-    let ncols_i = ncols as i64;
-    let clamp_idx = |c: i64| (c - min_col).clamp(0, ncols_i - 1) as usize;
     // Pivotal events sit *on the border line*, in the event lane (derived via `is_pivotal`; scope
     // D3 — no stored flag). `present` always carries the full 8-lane grammar, so "event" is here.
     let event_cy = lane_top.get("event").map(|t| t + lane_h["event"] / 2.0);
@@ -621,7 +713,12 @@ pub fn render_svg(model: &Model) -> String {
     // regions below, so a live region's own rect/edges/tab paint over it and stay clickable for
     // their own gestures; the rail only "shows through" (hoverable) in the gaps — exactly the
     // create-region affordance, with no extra client-side membership logic.
-    for idx in 0..ncols {
+    for (idx, &is_hidden) in hidden.iter().enumerate() {
+        // A folded column carries no add-target: it is swallowed into a band whose region rect
+        // paints over it. Skipping keeps the rail from spilling a COL_W hit-rect across the thin slot.
+        if is_hidden {
+            continue;
+        }
         p.push(format!(
             "<rect class=\"region-rail\" data-col=\"{}\" x=\"{:.1}\" y=\"{}\" width=\"{:.1}\" \
              height=\"{}\" fill=\"transparent\"/>",
@@ -638,8 +735,15 @@ pub fn render_svg(model: &Model) -> String {
         let b = clamp_idx(ph.to_col);
         let (lo, hi) = (a.min(b), a.max(b));
         let x = col_left(lo);
-        let right = col_left(hi) + COL_W;
+        // Right edge = the left of the column *past* the span, which the fold remap already accounts
+        // for: `xs[hi+1]` is `COLLAPSE_W` past `x` when this region is folded, `COL_W` per column
+        // otherwise. (Was `col_left(hi) + COL_W`, correct only under the unfolded identity remap.)
+        let right = xs[hi + 1];
         let w = right - x;
+        // Is *this* region folded? Read the pre-pass's `folded_ids` — the *same* decision that drove
+        // the `hidden`/`is_band_rep` geometry above — so the tab's chip can never disagree with the
+        // columns the remap actually hid (removed ghosts and out-of-content spans are already excluded).
+        let collapsed = folded_ids.contains(ph.id.as_str());
         // The *clamped* bound (review: a region drag desyncs if the client reads the raw stored
         // `ph.from_col`/`ph.to_col` — those can extend past `min_col..max_col` (the element-derived
         // range the region-rail covers), so a resize starting from an out-of-range "other edge"
@@ -707,23 +811,53 @@ pub fn render_svg(model: &Model) -> String {
         // when the region changed. Grouped as one focusable button (mirrors the sticky pattern) so
         // the Stage-6 client can bind a click/dblclick/Enter → in-place rename to one hit target.
         let badge = dk.and_then(diff_badge);
-        let label = match badge {
+        // When folded, the tab becomes the summary chip: the hidden stickies collapse to a `· N`
+        // count (in-band elements), so the tab still tells the reader how much is tucked away.
+        let n_in_band = if collapsed {
+            elements
+                .iter()
+                .filter(|e| {
+                    let i = (e.col.unwrap() - min_col) as usize;
+                    i >= lo && i <= hi
+                })
+                .count()
+        } else {
+            0
+        };
+        let mut label = match badge {
             Some(b) => format!("{b} {}", ph.label),
             None => ph.label.clone(),
         };
+        if collapsed {
+            label = format!("{label} \u{00b7} {n_in_band}");
+        }
+        // Disclosure triangle: ▸ folded, ▾ expanded. A separate hit target (class `region-collapse`)
+        // so a click toggles the fold without tripping the tab's rename — the label to its right
+        // keeps the rename gesture. Drawn only on a live region (a removed ghost has no tab group).
+        let disclosure = if collapsed { "\u{25b8}" } else { "\u{25be}" };
+        let tri_w = 13.0;
         let tab_h = REGION_TAB_H;
-        let tab_w = label.chars().count() as f64 * REGION_TAB_CHAR_W + REGION_TAB_PAD;
+        let tab_w = tri_w + label.chars().count() as f64 * REGION_TAB_CHAR_W + REGION_TAB_PAD;
         let tab_y = band_top - tab_h + 1.0;
         if !removed {
-            // `data-label` carries the *raw* stored label (no diff badge) — the Stage-6 rename
-            // editor prefills from this, not the badge-prefixed display `label` below.
+            // `data-label` carries the *raw* stored label (no diff badge, no count) — the rename
+            // editor prefills from this, not the badge/count-prefixed display `label` below. The aria
+            // state names the fold *and* the hidden count, so a screen-reader user hears what the
+            // sighted `· N` chip shows (not just "collapsed").
+            let aria_state = if collapsed {
+                format!(", collapsed, {n_in_band} elements")
+            } else {
+                String::new()
+            };
             p.push(format!(
-                "<g class=\"region-tab\" data-region=\"{}\" data-label=\"{}\" role=\"button\" \
-                 tabindex=\"0\" aria-label=\"region {}, {}\" style=\"cursor:pointer\">",
+                "<g class=\"region-tab\" data-region=\"{}\" data-label=\"{}\" data-collapsed=\"{}\" \
+                 role=\"button\" tabindex=\"0\" aria-label=\"region {}, {}{}\" style=\"cursor:pointer\">",
                 esc(&ph.id),
                 esc(&ph.label),
+                collapsed,
                 esc(&ph.id),
-                esc(&ph.label)
+                esc(&ph.label),
+                aria_state,
             ));
         }
         p.push(format!(
@@ -731,9 +865,22 @@ pub fn render_svg(model: &Model) -> String {
              fill=\"#ffffff\" stroke=\"{}\" stroke-width=\"1\"{}/>",
             x, tab_y, tab_w, tab_h, stroke, dash
         ));
+        if !removed {
+            // The triangle sits in the tab's left gutter; `title` names the gesture for hover/a11y.
+            p.push(format!(
+                "<text class=\"region-collapse\" data-region=\"{}\" x=\"{:.1}\" y=\"{:.1}\" \
+                 font-size=\"10\" fill=\"{}\" style=\"cursor:pointer\"><title>{} region (z)</title>{}</text>",
+                esc(&ph.id),
+                x + 7.0,
+                tab_y + 13.0,
+                AXIS_LABEL,
+                if collapsed { "expand" } else { "collapse" },
+                disclosure,
+            ));
+        }
         p.push(format!(
             "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"11\" font-weight=\"600\" fill=\"{}\">{}</text>",
-            x + 9.0,
+            x + 7.0 + tri_w,
             tab_y + 13.5,
             diff_col.unwrap_or(AXIS_LABEL),
             esc(&label)
@@ -795,7 +942,7 @@ pub fn render_svg(model: &Model) -> String {
             last.id.as_str(),
             "end",
             min_col + clamp_idx(last.to_col) as i64 + 1,
-            col_left(clamp_idx(last.to_col)) + COL_W,
+            xs[clamp_idx(last.to_col) + 1],
         ));
         for (id, edge, bcol, fx) in frontiers {
             // Visible boundary (neutral instrument grey — a frontier is structural, shared by two
@@ -886,6 +1033,11 @@ pub fn render_svg(model: &Model) -> String {
             Some(p) => p,
             None => continue,
         };
+        // An edge with either end folded into a collapsed band is dropped with its hidden node.
+        // (Rerouting a crossing edge to the band frontier is F-region-edge-fold, held out of v1.)
+        if hidden_el[si] || hidden_el[di] {
+            continue;
+        }
         let d = edge_path(centers[si], centers[di], off_src[ei], off_dst[ei]);
         let is_hot = elements[si].kind == "hotspot" || elements[di].kind == "hotspot";
         let cls = if is_hot { "edge hot" } else { "edge" };
@@ -929,6 +1081,10 @@ pub fn render_svg(model: &Model) -> String {
 
     // Stickies — each a clickable <g id="..."> the sidecar targets by id.
     for (i, e) in elements.iter().enumerate() {
+        // Folded into a collapsed band — its count lives on the band chip, no sticky drawn.
+        if hidden_el[i] {
+            continue;
+        }
         let (cx, cy) = centers[i];
         let x = cx - STICKY_W / 2.0;
         let y = cy - STICKY_H / 2.0;
@@ -1174,6 +1330,12 @@ mod tests {
     use super::*;
     use crate::model::{Level, Phase};
 
+    /// Render with the identity lens (nothing collapsed) — the default for every test that isn't
+    /// exercising F-region-collapse itself, so the `View` argument stays out of the assertions.
+    fn rsvg(model: &Model) -> String {
+        render_svg(model, &View::none())
+    }
+
     #[test]
     fn hump_split_breaks_camelcase_and_acronym_runs() {
         assert_eq!(hump_split("ItemAdded"), vec!["Item", "Added"]);
@@ -1251,7 +1413,7 @@ mod tests {
     // title is a hoverable add-target. Pin all 8 labels on a zero-element board.
     #[test]
     fn every_lane_renders_even_on_an_empty_board() {
-        let svg = render_svg(&empty_board());
+        let svg = rsvg(&empty_board());
         for lane in LANES {
             assert!(
                 svg.contains(&format!(">{lane}</text>")),
@@ -1262,7 +1424,7 @@ mod tests {
 
     #[test]
     fn sticky_group_exposes_layout_data_attributes() {
-        let svg = render_svg(&one_event_at_col(2));
+        let svg = rsvg(&one_event_at_col(2));
         assert!(svg.contains("data-kind=\"event\""));
         assert!(svg.contains("data-col=\"2\""));
         assert!(svg.contains("data-cx="));
@@ -1273,7 +1435,7 @@ mod tests {
     // If these ever stop being emitted the board silently becomes mouse-only again — pin them.
     #[test]
     fn sticky_group_is_a_focusable_labelled_button() {
-        let svg = render_svg(&one_event_at_col(2));
+        let svg = rsvg(&one_event_at_col(2));
         assert!(svg.contains("role=\"button\""));
         assert!(svg.contains("tabindex=\"0\""));
         assert!(svg.contains("aria-label=\"E1, L, event\""));
@@ -1318,7 +1480,7 @@ mod tests {
     // is unique and no element is hidden.
     #[test]
     fn simultaneous_stickies_stack_into_distinct_centres() {
-        let svg = render_svg(&events_at_col(2, 5));
+        let svg = rsvg(&events_at_col(2, 5));
         let cys = attr_values(&svg, "data-cy");
         assert_eq!(cys.len(), 5);
         let unique: std::collections::HashSet<&String> = cys.iter().collect();
@@ -1349,7 +1511,7 @@ mod tests {
             let mut m = one_event_at_col(0);
             m.elements[0].y = Some(y);
             assert_eq!(
-                attr_values(&render_svg(&m), "data-cy"),
+                attr_values(&rsvg(&m), "data-cy"),
                 vec!["494.0".to_string()],
                 "y={y} must still render on the single-slot centre"
             );
@@ -1363,7 +1525,7 @@ mod tests {
         let place = |y: f64| {
             let mut m = events_at_col(2, 2);
             m.elements[1].y = Some(y);
-            (cy_of(&render_svg(&m), "E0"), cy_of(&render_svg(&m), "E1"))
+            (cy_of(&rsvg(&m), "E0"), cy_of(&rsvg(&m), "E1"))
         };
         assert_eq!(place(0.9), (494.0, 586.0), "dropped below → bottom slot");
         assert_eq!(place(0.1), (586.0, 494.0), "dropped above → top slot");
@@ -1378,7 +1540,7 @@ mod tests {
     // the server itself rendered — pin the attributes it reads.
     #[test]
     fn lane_labels_expose_the_band_interior_geometry() {
-        let svg = render_svg(&empty_board());
+        let svg = rsvg(&empty_board());
         // actor is the first lane: top = MARGIN_T + LANE_VPAD/2 = 124, interior = ROW_PITCH = 92.
         assert!(svg.contains(
             "class=\"lane-label\" data-lane=\"actor\" data-band-top=\"124.0\" data-band-h=\"92.0\""
@@ -1401,7 +1563,7 @@ mod tests {
             diff: None,
             was: None,
         });
-        let svg = render_svg(&m);
+        let svg = rsvg(&m);
         assert_eq!(distinct(&svg, "data-cx"), 2);
         // col -3 is the leftmost authored column → slot 0 → classic single-cell centre 255.0.
         let cxs = attr_values(&svg, "data-cx");
@@ -1413,7 +1575,7 @@ mod tests {
     // above it), each an empty single-row band of height ROW_PITCH + LANE_VPAD = 108.
     #[test]
     fn a_lone_sticky_stays_on_the_lane_mid_line() {
-        let svg = render_svg(&events_at_col(0, 1));
+        let svg = rsvg(&events_at_col(0, 1));
         // lane_top(event) = MARGIN_T + 3*108 = 440; + LANE_VPAD/2 + ROW_PITCH/2 = 440 + 8 + 46.
         assert_eq!(attr_values(&svg, "data-cy"), vec!["494.0".to_string()]);
         // col 0 centre, no stagger: MARGIN_L + COL_W/2 = 150 + 105.
@@ -1430,6 +1592,176 @@ mod tests {
         }
     }
 
+    // ---- F-region-collapse -------------------------------------------------------------------
+    // The svg root's own width (the first `width="…"` in the document is the `<svg>` element).
+    fn svg_root_width(svg: &str) -> i64 {
+        attr_values(svg, "width")[0].parse().unwrap()
+    }
+
+    // A contiguous 3-region partition over cols 0..=5, one event per column, so a fold has clear
+    // in-band vs out-of-band stickies and neighbours to shift. R1=[0,1] R2=[2,3] R3=[4,5].
+    fn three_region_board() -> Model {
+        Model {
+            title: "t".into(),
+            phases: vec![
+                phase("K1", "Alpha", 0, 1, None),
+                phase("K2", "Beta", 2, 3, None),
+                phase("K3", "Gamma", 4, 5, None),
+            ],
+            elements: (0..6).map(|c| el(&format!("E{c}"), "event", c)).collect(),
+            edges: vec![],
+            level: Level::default(),
+            diff_meta: None,
+        }
+    }
+
+    fn folded(m: &Model, ids: &[&str]) -> String {
+        render_svg(
+            m,
+            &View {
+                collapsed: ids.iter().map(|s| s.to_string()).collect(),
+            },
+        )
+    }
+
+    // The core fold: a collapsed region's columns compress to one thin slot, its stickies vanish
+    // behind a `· N` count chip, and the board actually gets shorter (the whole point).
+    #[test]
+    fn collapsing_a_region_folds_its_columns_hides_its_stickies_and_shortens_the_board() {
+        let m = three_region_board();
+        let plain = rsvg(&m);
+        let f = folded(&m, &["K2"]);
+        assert!(
+            svg_root_width(&f) < svg_root_width(&plain),
+            "collapsing K2 did not shorten the board ({} !< {})",
+            svg_root_width(&f),
+            svg_root_width(&plain)
+        );
+        // K2's in-band stickies are gone; its neighbours' stay.
+        assert!(!f.contains("id=\"E2\""), "E2 (in K2) should be hidden");
+        assert!(!f.contains("id=\"E3\""), "E3 (in K2) should be hidden");
+        assert!(f.contains("id=\"E1\"") && f.contains("id=\"E4\""));
+        // The chip carries the in-band count (2 hidden stickies) and the folded triangle "▸".
+        assert!(f.contains("Beta \u{00b7} 2"), "count chip missing");
+        assert!(f.contains("\u{25b8}"), "folded disclosure triangle missing");
+        assert!(f.contains("data-region=\"K2\" data-label=\"Beta\" data-collapsed=\"true\""));
+    }
+
+    // Pure-remap contract 1: an empty collapsed set — or one naming only unknown ids (a stale fold
+    // of a since-removed region) — is byte-identical to the plain render. This is what keeps the
+    // static `render`/`genesis` output untouched by the feature.
+    #[test]
+    fn empty_or_unknown_collapse_set_is_the_identity_render() {
+        let m = three_region_board();
+        assert_eq!(rsvg(&m), folded(&m, &[]));
+        assert_eq!(rsvg(&m), folded(&m, &["ZZ-not-a-region"]));
+    }
+
+    // Pure-remap contract 2: the fold is a set operation — order-independent and idempotent, the
+    // same determinism bar as `replay`/`normalize`.
+    #[test]
+    fn collapse_is_order_independent_and_idempotent() {
+        let m = three_region_board();
+        assert_eq!(folded(&m, &["K1", "K3"]), folded(&m, &["K3", "K1"]));
+        assert_eq!(folded(&m, &["K1", "K1"]), folded(&m, &["K1"]));
+    }
+
+    // Adjacent folded regions each keep their own summary slot (two chips, not a merged band) —
+    // the contiguous partition (F-region-frontiers) folds band-by-band.
+    #[test]
+    fn adjacent_collapsed_regions_fold_independently() {
+        let m = three_region_board();
+        let f = folded(&m, &["K1", "K2"]);
+        assert!(f.contains("Alpha \u{00b7} 2") && f.contains("Beta \u{00b7} 2"));
+        for id in ["E0", "E1", "E2", "E3"] {
+            assert!(
+                !f.contains(&format!("id=\"{id}\"")),
+                "{id} should be hidden"
+            );
+        }
+        assert!(f.contains("id=\"E4\""), "K3 (unfolded) keeps its stickies");
+    }
+
+    // An edge with an endpoint *inside* a folded band is dropped with its hidden node; an edge that
+    // merely *crosses* the band (both ends visible) is left as a straight passthrough — rerouting it
+    // to the band frontier is F-region-edge-fold, deliberately out of v1.
+    #[test]
+    fn edges_into_a_folded_band_drop_but_crossing_edges_pass_through() {
+        let mut m = three_region_board();
+        m.edges = vec![
+            Edge {
+                src: "E2".into(),
+                dst: "E3".into(),
+                status: None,
+            }, // wholly inside K2
+            Edge {
+                src: "E1".into(),
+                dst: "E4".into(),
+                status: None,
+            }, // crosses K2, both ends visible
+        ];
+        let f = folded(&m, &["K2"]);
+        assert!(
+            !f.contains("data-src=\"E2\" data-dst=\"E3\""),
+            "an edge inside the folded band must drop with its hidden nodes"
+        );
+        assert!(
+            f.contains("data-src=\"E1\" data-dst=\"E4\""),
+            "a crossing edge (both ends visible) stays a passthrough in v1"
+        );
+    }
+
+    // A region whose stored span sits entirely PAST the last element column (F-region-frontiers lets
+    // an outer frontier run past content) has no on-board columns to fold. Folding it must be a no-op,
+    // not clamp onto the last content column and hide a *neighbour's* sticky (nor draw a bogus chip).
+    #[test]
+    fn folding_an_out_of_content_region_is_a_no_op() {
+        let mut m = three_region_board(); // elements in cols 0..=5, ncols = 6
+                                          // A trailing region past all content — clamp_idx(8)=clamp_idx(9)=5 would otherwise pin it onto
+                                          // col 5 (owned by K3) and hide E5.
+        m.phases.push(phase("K9", "Ghosttail", 8, 9, None));
+        let f = folded(&m, &["K9"]);
+        assert!(
+            f.contains("id=\"E5\""),
+            "folding an out-of-content region must not hide the last content column's sticky"
+        );
+        assert!(
+            !f.contains("Ghosttail \u{00b7}"),
+            "an out-of-content region draws no count chip (nothing was folded)"
+        );
+        // And its tab reports expanded, not collapsed — the flag agrees with the (empty) fold.
+        assert!(f.contains("data-region=\"K9\" data-label=\"Ghosttail\" data-collapsed=\"false\""));
+    }
+
+    // A removed-ghost region (diff overlay) must NOT fold, even if its id is in the collapse set: it
+    // has no live tab to expand, so folding it would hide *current* elements in its old columns with
+    // no way back. Under `?collapse=K2&base=`, diff_models feeds a removed ghost K2 whose old span
+    // still overlaps live stickies; the fold must skip it (mirrors the frontier `live` filter).
+    #[test]
+    fn a_collapsed_removed_ghost_region_does_not_fold_live_elements() {
+        let mut m = three_region_board();
+        // Simulate the diff-overlay shape: K2 is a removed ghost, but live elements still sit in its
+        // old columns 2..=3 (layout follows the new side).
+        m.phases[1] = phase("K2", "Beta", 2, 3, Some("removed"));
+        let f = folded(&m, &["K2"]);
+        // The live stickies in the ghost's old span stay on the board — not swallowed by a stale fold.
+        assert!(
+            f.contains("id=\"E2\"") && f.contains("id=\"E3\""),
+            "removed-ghost fold hid live E2/E3"
+        );
+        // No count chip is drawn for a ghost (it has no tab), so no "Beta · N".
+        assert!(
+            !f.contains("Beta \u{00b7}"),
+            "a removed ghost must not render a fold chip"
+        );
+        // The board is NOT shortened by folding a ghost.
+        assert_eq!(
+            svg_root_width(&f),
+            svg_root_width(&rsvg(&m)),
+            "ghost fold changed board width"
+        );
+    }
+
     // A region renders as a thin labelled outline (scope D1, calm instrument): a label tab carrying
     // its name, grabbable partition frontiers keyed by region id + edge (F-region-frontiers), and a
     // pivotal node where an event sits on a boundary col (derived, scope D3).
@@ -1443,7 +1775,7 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = render_svg(&m);
+        let svg = rsvg(&m);
         assert!(svg.contains(">Context A<"), "region label tab is missing");
         // A lone phase draws its two board-end frontiers: the leftmost is its "start", the rightmost
         // its "end". `data-col` is the clamped boundary each sits before (start at col 0; the right
@@ -1460,10 +1792,11 @@ mod tests {
         // min_col..max_col) — a resize could target a column with no rail cell at all.
         assert!(svg
             .contains("class=\"region\" data-region=\"K1\" data-from-col=\"0\" data-to-col=\"1\""));
-        // The label tab is one focusable rename target (mirrors the sticky's role=button pattern).
+        // The label tab is one focusable rename target (mirrors the sticky's role=button pattern);
+        // `data-collapsed` (false when expanded) is the fold-state flag the client's `z` toggle reads.
         assert!(svg.contains(
-            "class=\"region-tab\" data-region=\"K1\" data-label=\"Context A\" role=\"button\" \
-                 tabindex=\"0\""
+            "class=\"region-tab\" data-region=\"K1\" data-label=\"Context A\" \
+             data-collapsed=\"false\" role=\"button\" tabindex=\"0\""
         ));
         // E1 sits on the region's from-edge → a pivotal node; E2 (interior) does not add a third.
         assert_eq!(
@@ -1490,7 +1823,7 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = render_svg(&m);
+        let svg = rsvg(&m);
         assert_eq!(
             svg.matches("class=\"frontier\"").count(),
             4,
@@ -1520,7 +1853,7 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = render_svg(&m);
+        let svg = rsvg(&m);
         for col in 0..=2 {
             assert!(
                 svg.contains(&format!("class=\"region-rail\" data-col=\"{col}\"")),
@@ -1542,7 +1875,7 @@ mod tests {
             level: Level::default(),
             diff_meta: Some(("v1".into(), "v2".into())),
         };
-        let svg = render_svg(&m);
+        let svg = rsvg(&m);
         assert!(
             svg.contains("<g opacity=\"0.45\">"),
             "removed region is not ghosted"
@@ -1615,7 +1948,7 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = render_svg(&m);
+        let svg = rsvg(&m);
         assert!(
             cy_of(&svg, "E_lo") < cy_of(&svg, "E_hi"),
             "E_lo (up-neighbour) must take the upper sub-row"
@@ -1627,7 +1960,7 @@ mod tests {
     // centres must descend in file order E0..E4 (Rows packing stacks top→bottom).
     #[test]
     fn edge_free_cell_keeps_file_order() {
-        let svg = render_svg(&events_at_col(2, 5));
+        let svg = rsvg(&events_at_col(2, 5));
         let cys: Vec<f64> = (0..5).map(|k| cy_of(&svg, &format!("E{k}"))).collect();
         assert!(
             cys.windows(2).all(|w| w[0] < w[1]),
@@ -1682,7 +2015,7 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = render_svg(&m);
+        let svg = rsvg(&m);
         // Each edge path's start anchor Y (the M y-coord). They must differ by the fan spread.
         let starts: Vec<f64> = svg
             .match_indices("<path class=\"edge\"")
@@ -1725,7 +2058,7 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = render_svg(&m);
+        let svg = rsvg(&m);
         let cy = cy_of(&svg, "X1");
         let mut count = 0;
         for (i, _) in svg.match_indices("data-src=\"X1\"") {
