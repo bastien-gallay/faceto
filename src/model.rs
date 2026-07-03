@@ -74,7 +74,7 @@ pub fn from_json(j: &Json) -> Model {
         .and_then(|v| v.as_str())
         .unwrap_or("board")
         .to_string();
-    let phases = j
+    let mut phases: Vec<Phase> = j
         .get("phases")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -84,6 +84,9 @@ pub fn from_json(j: &Json) -> Model {
                 .collect()
         })
         .unwrap_or_default();
+    // Project onto a contiguous partition (F-region-frontiers) so a bootstrap `model.json` obeys the
+    // same invariant a replayed log does — every `Model`'s phases are gap-free and overlap-free.
+    normalize(&mut phases);
     let elements = j
         .get("elements")
         .and_then(|v| v.as_array())
@@ -169,10 +172,42 @@ pub fn lane_left_col(m: &Model, kind: &str) -> i64 {
     }
 }
 
+/// Project a phase list to a **contiguous partition** of the timeline — sorted left→right with no
+/// gaps, no overlaps, every phase at least one column wide. This is the single rule that makes the
+/// frontier model (F-region-frontiers) total: whatever phase state a source carries — new atomic
+/// frontier moves/splits, or legacy independent `[from_col, to_col]` spans that predate the feature
+/// and could leave holes or overlaps — every `Model` lands on one clean partition. Shared by
+/// `events::replay` (the log path) and `from_json` (the `model.json` bootstrap) so the invariant
+/// holds whatever the source. Deterministic and **idempotent** — a partition is its own fixed point.
+///
+/// The rule is one left→right sweep: order phases by `(from_col, to_col, id)`; anchor the board-left
+/// bound at the first phase's `from_col`; then start each phase where the previous ended (+1) and
+/// keep its own `to_col` as the right edge (clamped so it never precedes the start). A frontier move
+/// therefore re-borders its neighbour for free — pulling one phase's `to_col` left drags the next
+/// phase's derived `from_col` with it — and a legacy overlap/hole resolves to a defined partition (a
+/// clean partition renders byte-identically; an old span board may render with a named diff, the
+/// accepted cost per the F-region-frontiers shaping).
+pub fn normalize(phases: &mut [Phase]) {
+    if phases.is_empty() {
+        return;
+    }
+    phases.sort_by(|a, b| {
+        (a.from_col, a.to_col, a.id.as_str()).cmp(&(b.from_col, b.to_col, b.id.as_str()))
+    });
+    let mut cursor = phases[0].from_col;
+    for p in phases.iter_mut() {
+        p.from_col = cursor;
+        p.to_col = p.to_col.max(cursor);
+        cursor = p.to_col + 1;
+    }
+}
+
 /// The region a column belongs to — the band whose `[from_col, to_col]` contains `col`. Membership
 /// is **spatial**: there is no membership field, the band's stored bounds are the single source of
-/// truth (F-container scope D2). On overlap the **innermost** (smallest span) band wins, so a
-/// nested context takes precedence over the one it sits inside. Pure; `None` when no band covers it.
+/// truth (F-container scope D2). Because every `Model`'s phases are a contiguous partition
+/// (`normalize`), at most one band covers a column; the `min_by_key` is a defensive total-order
+/// tiebreak that a partition never needs. Pure; `None` when no band covers it (only possible before
+/// the first phase exists).
 // Allowed dead-code until Stage 5/6 (serve/client) consume it — render derives pivotal/membership
 // from geometry directly, so this convenience accessor lands with its first caller there.
 #[allow(dead_code)]
@@ -341,21 +376,38 @@ mod tests {
     // later render/UI stages lean on: which band a col is in, and whether an event sits on a border.
 
     #[test]
-    fn region_of_picks_the_band_covering_a_col_innermost_on_overlap() {
+    fn from_json_normalizes_overlapping_bands_into_a_partition() {
+        // Overlaps are unrepresentable under F-region-frontiers: `from_json` runs `normalize`, so an
+        // "Inner" band nested inside "Outer" resolves deterministically to a contiguous partition —
+        // Outer keeps its own [0,9], Inner is swept to the column just past it. Every column is then
+        // in exactly one band (no innermost tiebreak needed).
         let m = model_of(
             r#"{"phases":[
                 {"id":"K1","label":"Outer","fromCol":0,"toCol":9},
                 {"id":"K2","label":"Inner","fromCol":3,"toCol":5}]}"#,
         );
+        assert_eq!(m.phases.len(), 2);
+        let bounds = |id: &str| {
+            m.phases
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| (p.from_col, p.to_col))
+        };
+        assert_eq!(bounds("K1"), Some((0, 9)), "outer keeps its span");
         assert_eq!(
-            region_of(&m, 1).map(|p| p.id.as_str()),
-            Some("K1"),
-            "only outer covers 1"
+            bounds("K2"),
+            Some((10, 10)),
+            "nested inner swept past outer"
         );
         assert_eq!(
             region_of(&m, 4).map(|p| p.id.as_str()),
+            Some("K1"),
+            "4 in K1"
+        );
+        assert_eq!(
+            region_of(&m, 10).map(|p| p.id.as_str()),
             Some("K2"),
-            "innermost wins on overlap"
+            "10 in K2"
         );
         assert_eq!(
             region_of(&m, 12).map(|p| p.id.as_str()),
@@ -367,6 +419,55 @@ mod tests {
             None,
             "no bands"
         );
+    }
+
+    #[test]
+    fn normalize_is_idempotent_and_gap_free() {
+        // A partition is normalize's fixed point; a gapped/overlapping input becomes contiguous.
+        let mut ps = vec![
+            Phase {
+                id: "K1".into(),
+                label: "A".into(),
+                from_col: 0,
+                to_col: 3,
+                diff: None,
+            },
+            Phase {
+                id: "K3".into(),
+                label: "C".into(),
+                from_col: 8,
+                to_col: 10,
+                diff: None,
+            },
+            Phase {
+                id: "K2".into(),
+                label: "B".into(),
+                from_col: 2,
+                to_col: 5,
+                diff: None,
+            },
+        ];
+        normalize(&mut ps);
+        let spans: Vec<_> = ps
+            .iter()
+            .map(|p| (p.id.as_str(), p.from_col, p.to_col))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![("K1", 0, 3), ("K2", 4, 5), ("K3", 6, 10)],
+            "contiguous, ordered"
+        );
+        let before = ps.clone();
+        normalize(&mut ps);
+        let after: Vec<_> = ps
+            .iter()
+            .map(|p| (p.id.clone(), p.from_col, p.to_col))
+            .collect();
+        let was: Vec<_> = before
+            .iter()
+            .map(|p| (p.id.clone(), p.from_col, p.to_col))
+            .collect();
+        assert_eq!(after, was, "idempotent");
     }
 
     #[test]

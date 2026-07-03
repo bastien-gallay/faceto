@@ -55,6 +55,28 @@ pub enum Event {
     PhaseRemoved {
         id: String,
     },
+    /// Move one border of a phase (F-region-frontiers). `edge` is `"start"` (the phase's
+    /// `from_col`) or `"end"` (its `to_col`); `col` is the new position. Unlike `PhaseResized`
+    /// (which set *both* borders independently, the span model that allowed holes/overlaps), a
+    /// frontier move sets one border and `replay`'s `normalize` re-borders the neighbour
+    /// atomically — the partition can never open a gap. An internal frontier between phases A (left)
+    /// and B (right) is always posted as A's `"end"`; only the board's leftmost frontier moves a
+    /// `"start"` (the first phase's `from_col`, which `normalize` preserves as the board-left bound).
+    FrontierMoved {
+        id: String,
+        edge: String,
+        col: i64,
+    },
+    /// Split a phase in two at `at_col` (F-region-frontiers, the partition's "add"): `id` keeps
+    /// `[from_col, at_col - 1]` and a new phase `new_id` takes `[at_col, to_col]` with `new_label`.
+    /// `new_id` is minted server-side (like `PhaseAdded` on `region-add`). A no-op unless the column
+    /// falls strictly inside the phase (`from_col < at_col <= to_col`), so both halves stay ≥1 wide.
+    PhaseSplit {
+        id: String,
+        at_col: i64,
+        new_id: String,
+        new_label: String,
+    },
     ElementAdded {
         id: String,
         kind: String,
@@ -214,6 +236,17 @@ pub fn parse_event(raw: &Json) -> Option<Event> {
         "PhaseRemoved" => Event::PhaseRemoved {
             id: str_field("id")?,
         },
+        "FrontierMoved" => Event::FrontierMoved {
+            id: str_field("id")?,
+            edge: str_field("edge")?,
+            col: int_field("col")?,
+        },
+        "PhaseSplit" => Event::PhaseSplit {
+            id: str_field("id")?,
+            at_col: int_field("atCol")?,
+            new_id: str_field("newId")?,
+            new_label: str_field("newLabel")?,
+        },
         "ElementAdded" => Event::ElementAdded {
             id: str_field("id")?,
             kind: str_field("type")?,
@@ -302,6 +335,46 @@ pub fn replay(events: &[Event]) -> Model {
                 }
             }
             Event::PhaseRemoved { id } => m.phases.retain(|p| &p.id != id),
+            Event::FrontierMoved { id, edge, col } => {
+                // Set the named border; `normalize` (after the fold) re-borders the neighbour so
+                // the partition stays gap-free. A `"start"` on a non-leftmost phase is harmless —
+                // `normalize` derives every inner `from_col` from the sweep and only honours the
+                // very first phase's start, so such a raw post simply no-ops.
+                if let Some(p) = m.phases.iter_mut().find(|p| &p.id == id) {
+                    if edge == "start" {
+                        p.from_col = *col;
+                    } else {
+                        p.to_col = *col;
+                    }
+                }
+            }
+            Event::PhaseSplit {
+                id,
+                at_col,
+                new_id,
+                new_label,
+            } => {
+                // Feed `new_id` through the same id-namespace tracker as `PhaseAdded` so a later
+                // legacy (id-less) band never reuses this suffix.
+                let new_id = resolve_region_id(Some(new_id), &mut max_region);
+                if let Some(i) = m.phases.iter().position(|p| &p.id == id) {
+                    let (from, to) = (m.phases[i].from_col, m.phases[i].to_col);
+                    // Strictly inside → both halves keep ≥1 column. Otherwise nothing to split.
+                    if from < *at_col && *at_col <= to {
+                        m.phases[i].to_col = *at_col - 1;
+                        m.phases.insert(
+                            i + 1,
+                            Phase {
+                                id: new_id,
+                                label: new_label.clone(),
+                                from_col: *at_col,
+                                to_col: to,
+                                diff: None,
+                            },
+                        );
+                    }
+                }
+            }
             Event::ElementAdded {
                 id,
                 kind,
@@ -374,6 +447,13 @@ pub fn replay(events: &[Event]) -> Model {
             Event::LogCompacted { .. } => {}
         }
     }
+    // Regions are a *contiguous partition* of the timeline (F-region-frontiers): after folding every
+    // phase event — new frontier moves/splits *and* legacy independent spans (`PhaseAdded`/
+    // `PhaseResized`, which could leave holes or overlaps) — project the phase list to a gap-free,
+    // overlap-free partition. The rule (`model::normalize`) is pure and deterministic, so `replay`
+    // stays a pure function; it is shared with `from_json` so every `Model` is a partition whatever
+    // its source (log or bootstrap `model.json`).
+    crate::model::normalize(&mut m.phases);
     m
 }
 
@@ -469,7 +549,10 @@ pub fn clamp_y(y: f64) -> f64 {
 /// is special-cased in `serve.rs` (`add_region_from_comment`).
 pub fn comment_to_events(v: &Json) -> Vec<Event> {
     let kind = v.get_str("kind").unwrap_or("comment");
-    if matches!(kind, "region-resize" | "region-rename" | "region-remove") {
+    if matches!(
+        kind,
+        "region-resize" | "region-rename" | "region-remove" | "frontier-move"
+    ) {
         return region_comment_to_events(v, kind);
     }
     let Some(id) = v.get_str("elemId").map(str::to_string) else {
@@ -534,12 +617,28 @@ fn region_comment_to_events(v: &Json, kind: &str) -> Vec<Event> {
         return Vec::new();
     };
     match kind {
+        // Legacy independent-span resize (old clients / stashed offline / `comments.jsonl`
+        // migration). The live client posts `frontier-move` instead; either way `normalize`
+        // projects the result onto a contiguous partition.
         "region-resize" => match (v.get_i64("fromCol"), v.get_i64("toCol")) {
             (Some(from_col), Some(to_col)) if valid_span(from_col, to_col) => {
                 vec![Event::PhaseResized {
                     id,
                     from_col,
                     to_col,
+                }]
+            }
+            _ => Vec::new(),
+        },
+        // Move one frontier (F-region-frontiers resize): set the named border, `replay`'s
+        // `normalize` re-borders the neighbour. A missing/unknown `edge` or `col` is a no-op —
+        // same "nothing to persist" guard as the element path.
+        "frontier-move" => match (v.get_str("edge"), v.get_i64("col")) {
+            (Some(edge), Some(col)) if edge == "start" || edge == "end" => {
+                vec![Event::FrontierMoved {
+                    id,
+                    edge: edge.to_string(),
+                    col,
                 }]
             }
             _ => Vec::new(),
@@ -644,6 +743,24 @@ pub fn to_json(ev: &Event) -> Json {
             ("label", s(label)),
         ]),
         Event::PhaseRemoved { id } => obj(vec![("event", s("PhaseRemoved")), ("id", s(id))]),
+        Event::FrontierMoved { id, edge, col } => obj(vec![
+            ("event", s("FrontierMoved")),
+            ("id", s(id)),
+            ("edge", s(edge)),
+            ("col", n(*col)),
+        ]),
+        Event::PhaseSplit {
+            id,
+            at_col,
+            new_id,
+            new_label,
+        } => obj(vec![
+            ("event", s("PhaseSplit")),
+            ("id", s(id)),
+            ("atCol", n(*at_col)),
+            ("newId", s(new_id)),
+            ("newLabel", s(new_label)),
+        ]),
         Event::ElementAdded {
             id,
             kind,
@@ -833,6 +950,142 @@ mod tests {
         assert_eq!(m.phases[0].label, "A");
     }
 
+    // ---- F-region-frontiers: the contiguous-partition spine ------------------------------
+    // Regions are a partition, not independent spans. Frontier moves re-border a neighbour
+    // atomically, split carves a phase in two, and `normalize` guarantees no log — new or legacy —
+    // ever replays to a hole or an overlap.
+
+    #[test]
+    fn frontier_move_end_reborders_the_right_neighbour_atomically() {
+        // Move the A|B frontier: posting only A's new `to_col`, `normalize` pulls B's `from_col`
+        // with it. One event, both phases re-border — the partition can't open a gap.
+        let evs = vec![
+            ev(r#"{"event":"PhaseAdded","id":"K1","label":"A","fromCol":0,"toCol":3}"#),
+            ev(r#"{"event":"PhaseAdded","id":"K2","label":"B","fromCol":4,"toCol":7}"#),
+            ev(r#"{"event":"FrontierMoved","id":"K1","edge":"end","col":5}"#),
+        ];
+        let m = replay(&evs);
+        let span = |i: usize| (m.phases[i].from_col, m.phases[i].to_col);
+        assert_eq!(span(0), (0, 5), "A grew right to the new frontier");
+        assert_eq!(span(1), (6, 7), "B's start followed — no gap, no overlap");
+    }
+
+    #[test]
+    fn frontier_move_start_moves_the_board_left_bound() {
+        // The outermost (leftmost) frontier is the first phase's `start`; moving it grows/shrinks
+        // the whole board. `normalize` preserves that first `from_col` as the board-left anchor.
+        let evs = vec![
+            ev(r#"{"event":"PhaseAdded","id":"K1","label":"A","fromCol":0,"toCol":3}"#),
+            ev(r#"{"event":"PhaseAdded","id":"K2","label":"B","fromCol":4,"toCol":7}"#),
+            ev(r#"{"event":"FrontierMoved","id":"K1","edge":"start","col":-2}"#),
+        ];
+        let m = replay(&evs);
+        assert_eq!((m.phases[0].from_col, m.phases[0].to_col), (-2, 3));
+        assert_eq!((m.phases[1].from_col, m.phases[1].to_col), (4, 7));
+    }
+
+    #[test]
+    fn phase_split_carves_a_phase_in_two_keeping_a_partition() {
+        // Add = split. The original id keeps the left half, the minted id takes the right, the two
+        // stay contiguous. `newId` also raises the region-id watermark (a later legacy band mints
+        // past it).
+        let evs = vec![
+            ev(r#"{"event":"PhaseAdded","id":"K1","label":"Whole","fromCol":0,"toCol":5}"#),
+            ev(r#"{"event":"PhaseSplit","id":"K1","atCol":3,"newId":"K2","newLabel":"Right"}"#),
+        ];
+        let m = replay(&evs);
+        assert_eq!(m.phases.len(), 2);
+        assert_eq!(
+            (
+                m.phases[0].id.as_str(),
+                m.phases[0].from_col,
+                m.phases[0].to_col
+            ),
+            ("K1", 0, 2),
+            "original keeps the left half"
+        );
+        assert_eq!(
+            (
+                m.phases[1].id.as_str(),
+                m.phases[1].label.as_str(),
+                m.phases[1].from_col,
+                m.phases[1].to_col
+            ),
+            ("K2", "Right", 3, 5),
+            "new phase takes the right half, contiguous"
+        );
+    }
+
+    #[test]
+    fn phase_split_outside_the_phase_is_a_no_op() {
+        // `at_col` must land strictly inside (from < at <= to) so both halves keep ≥1 column.
+        let base = ev(r#"{"event":"PhaseAdded","id":"K1","label":"W","fromCol":0,"toCol":3}"#);
+        for at in ["0", "4", "9"] {
+            let split = ev(&format!(
+                r#"{{"event":"PhaseSplit","id":"K1","atCol":{at},"newId":"K2","newLabel":"R"}}"#
+            ));
+            let m = replay(&[base.clone(), split]);
+            assert_eq!(m.phases.len(), 1, "at_col={at} splits nothing");
+            assert_eq!((m.phases[0].from_col, m.phases[0].to_col), (0, 3));
+        }
+    }
+
+    #[test]
+    fn removing_a_middle_phase_leaves_no_hole() {
+        // Remove = merge under the partition: the freed columns are absorbed by the neighbour that
+        // sweeps into them, never a gap. (v1 folds directional merge into remove — see the
+        // F-region-frontiers working note; PhaseMerged is deferred.)
+        let evs = vec![
+            ev(r#"{"event":"PhaseAdded","id":"K1","label":"A","fromCol":0,"toCol":3}"#),
+            ev(r#"{"event":"PhaseAdded","id":"K2","label":"B","fromCol":4,"toCol":7}"#),
+            ev(r#"{"event":"PhaseAdded","id":"K3","label":"C","fromCol":8,"toCol":11}"#),
+            ev(r#"{"event":"PhaseRemoved","id":"K2"}"#),
+        ];
+        let m = replay(&evs);
+        let ids: Vec<_> = m.phases.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["K1", "K3"]);
+        assert_eq!((m.phases[0].from_col, m.phases[0].to_col), (0, 3));
+        assert_eq!(
+            (m.phases[1].from_col, m.phases[1].to_col),
+            (4, 11),
+            "C absorbed B's freed columns — the partition stays gap-free"
+        );
+    }
+
+    #[test]
+    fn frontier_and_split_events_round_trip() {
+        for line in [
+            r#"{"event":"FrontierMoved","id":"K1","edge":"end","col":5}"#,
+            r#"{"event":"FrontierMoved","id":"K1","edge":"start","col":-2}"#,
+            r#"{"event":"PhaseSplit","id":"K1","atCol":3,"newId":"K2","newLabel":"Right"}"#,
+        ] {
+            let e = ev(line);
+            assert_eq!(super::line(&e), line, "canonical serialize round-trips");
+            assert_eq!(ev(&super::line(&e)), e, "reparse round-trips");
+        }
+    }
+
+    #[test]
+    fn frontier_move_maps_from_a_comment_with_guards() {
+        let mk = |body: &str| comment_to_events(&json::parse(body).unwrap());
+        assert_eq!(
+            mk(r#"{"kind":"frontier-move","regionId":"K1","edge":"end","col":5}"#),
+            vec![Event::FrontierMoved {
+                id: "K1".into(),
+                edge: "end".into(),
+                col: 5
+            }]
+        );
+        assert!(
+            mk(r#"{"kind":"frontier-move","regionId":"K1","edge":"sideways","col":5}"#).is_empty(),
+            "an unknown edge is nothing to persist"
+        );
+        assert!(
+            mk(r#"{"kind":"frontier-move","regionId":"K1","edge":"end"}"#).is_empty(),
+            "a missing col is nothing to persist"
+        );
+    }
+
     #[test]
     fn from_model_emits_region_ids_so_genesis_round_trips() {
         // compact()/genesis fold the final state into PhaseAdded; the id must survive so a
@@ -1014,6 +1267,90 @@ mod tests {
                     dropped.contains(*id)
                 );
             }
+        }
+    }
+
+    #[test]
+    fn pbt_phase_events_never_replay_to_a_hole_or_overlap() {
+        // Property (F-region-frontiers): fold any interleaving of phase events — legacy independent
+        // spans (`PhaseAdded`/`PhaseResized`, which alone could gap or overlap), atomic frontier
+        // moves, splits, and removes — and the replayed phases are always a *contiguous partition*:
+        // sorted, gap-free, overlap-free, each ≥1 column wide. And `normalize` is its own fixed
+        // point (a second pass changes nothing).
+        for seed in 0..800u64 {
+            let mut rng = Lcg(seed.wrapping_mul(2_246_822_519).wrapping_add(3));
+            let mut log: Vec<Event> = Vec::new();
+            let mut minted = 0u32; // client-minted ids for add/split, distinct from replay's own
+            let n = 1 + rng.below(12);
+            let mut trace = Vec::new();
+            for _ in 0..n {
+                // Ids that could exist so far (K1..=K{minted}); ops on absent ids are valid no-ops.
+                let target = format!("K{}", 1 + rng.below((minted.max(1)) as usize));
+                let (a, b) = (rng.below(9) as i64 - 2, rng.below(9) as i64 - 2);
+                let ev = match rng.below(5) {
+                    0 => {
+                        minted += 1;
+                        Event::PhaseAdded {
+                            id: Some(format!("K{minted}")),
+                            label: format!("p{minted}"),
+                            from_col: a.min(b),
+                            to_col: a.max(b),
+                        }
+                    }
+                    1 => Event::PhaseResized {
+                        id: target,
+                        from_col: a.min(b),
+                        to_col: a.max(b),
+                    },
+                    2 => Event::FrontierMoved {
+                        id: target,
+                        edge: if rng.below(2) == 0 { "start" } else { "end" }.into(),
+                        col: a,
+                    },
+                    3 => {
+                        minted += 1;
+                        Event::PhaseSplit {
+                            id: target,
+                            at_col: a,
+                            new_id: format!("K{minted}"),
+                            new_label: format!("s{minted}"),
+                        }
+                    }
+                    _ => Event::PhaseRemoved { id: target },
+                };
+                trace.push(line(&ev));
+                log.push(ev);
+            }
+            let mut phases = replay(&log).phases;
+            for w in phases.windows(2) {
+                assert!(
+                    w[0].to_col + 1 == w[1].from_col,
+                    "seed {seed}: not contiguous ({}..{} then {}..{}) after:\n  {}",
+                    w[0].from_col,
+                    w[0].to_col,
+                    w[1].from_col,
+                    w[1].to_col,
+                    trace.join("\n  ")
+                );
+            }
+            for p in &phases {
+                assert!(
+                    p.from_col <= p.to_col,
+                    "seed {seed}: phase {} inverted",
+                    p.id
+                );
+            }
+            // Idempotence: normalizing the already-normalized result changes nothing.
+            let before: Vec<_> = phases
+                .iter()
+                .map(|p| (p.id.clone(), p.from_col, p.to_col))
+                .collect();
+            crate::model::normalize(&mut phases);
+            let after: Vec<_> = phases
+                .iter()
+                .map(|p| (p.id.clone(), p.from_col, p.to_col))
+                .collect();
+            assert_eq!(before, after, "seed {seed}: normalize not idempotent");
         }
     }
 
