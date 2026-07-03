@@ -98,7 +98,7 @@ fn cmd_render(model_path: &str) {
             exit(1);
         }
     };
-    let svg = render::render_svg(&model);
+    let svg = render::render_svg(&model, &render::View::none());
     let html = render::render_html(&svg, &model.title);
     let dir = dir_of(path);
     if let Err(e) = std::fs::write(dir.join("board.svg"), format!("{svg}\n")) {

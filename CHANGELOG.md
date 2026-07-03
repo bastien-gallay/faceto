@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Collapse a region to a band** (F-region-collapse): fold a wide board's off-topic regions to
+  concentrate readability. Click the **▸/▾** disclosure on a region tab (or press **`z`** on it) to
+  compress that region's columns to one thin summary slot — its stickies hide behind a `▸ Label · N`
+  count chip and every column to its right shifts left, so the board actually gets **shorter**. It is
+  a pure **per-viewer reading lens**: no model, event, or log change — the collapsed set lives in
+  `localStorage` and re-lays-out server-side via `GET /board.svg?collapse=<id,id>` (composes with the
+  `?base=` diff overlay). Column-fold only; edges *into* a folded band drop with their hidden nodes,
+  edges merely *crossing* it stay as straight passthroughs (rerouting them is the deferred
+  F-region-edge-fold).
 - **Region frontiers** (F-region-frontiers): regions are now a **contiguous partition** of the
   timeline defined by shared frontiers, not independent `[fromCol, toCol]` spans. A single pure,
   deterministic, idempotent sweep (`model::normalize`, run in both `replay` and `from_json`)
