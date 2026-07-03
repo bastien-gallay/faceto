@@ -1,8 +1,9 @@
 //! Render tests — one module (shared helpers rsvg/el/phase/attr_values).
 
+use super::geometry::*;
 use super::html::*;
-use super::render_core::*;
 use super::style::*;
+use super::svg::*;
 use super::text::*;
 use crate::model::{Edge, Element, Level, Model, Phase};
 

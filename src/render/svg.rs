@@ -1,8 +1,8 @@
-//! Layout + SVG generation: edge geometry, the `View` lens, and `render_svg`.
-
+//! SVG generation: the `View` lens, `render_svg`, and its per-stage draw helpers.
+use super::geometry::*;
 use super::style::*;
 use super::text::*;
-use crate::model::{is_pivotal, Edge, Element, Model};
+use crate::model::{is_pivotal, Element, Model};
 use std::collections::{HashMap, HashSet};
 
 pub(crate) fn diff_tooltip(e: &Element, meta: &(String, String)) -> String {
@@ -35,178 +35,6 @@ pub(crate) fn diff_tooltip(e: &Element, meta: &(String, String)) -> String {
         ),
         _ => String::new(),
     }
-}
-
-/// One edge-endpoint queued on a box's face for fan-out: `(edge index, is-src, far-end cross pos)`.
-type FaceMember = (usize, bool, f64);
-
-/// A smooth connector between two box centres, anchored on the facing edges. `off1`/`off2` slide
-/// each anchor along its facing edge (Lever B fan-out, F-edge-routing): the offset rides the *free*
-/// axis of the chosen facing — Y for a left/right face, X for a top/bottom face — so several
-/// connectors meeting one box on the same side spread out instead of collapsing onto one point.
-/// Both offsets `0.0` reproduces the classic centre-to-centre path byte-for-byte.
-pub(crate) fn edge_path(p1: (f64, f64), p2: (f64, f64), off1: f64, off2: f64) -> String {
-    let (x1, y1) = p1;
-    let (x2, y2) = p2;
-    if (x2 - x1).abs() < STICKY_W {
-        // Vertical facing: anchors ride the top/bottom faces, so the fan offset slides them in X.
-        let sgn = if y2 >= y1 { 1.0 } else { -1.0 };
-        let (ax1, ax2) = (x1 + off1, x2 + off2);
-        let ay1 = y1 + sgn * STICKY_H / 2.0;
-        let ay2 = y2 - sgn * STICKY_H / 2.0;
-        let my = (ay1 + ay2) / 2.0;
-        format!(
-            "M{:.1},{:.1} C{:.1},{:.1} {:.1},{:.1} {:.1},{:.1}",
-            ax1, ay1, ax1, my, ax2, my, ax2, ay2
-        )
-    } else {
-        // Horizontal facing: anchors ride the left/right faces, so the fan offset slides them in Y.
-        let sgn = if x2 >= x1 { 1.0 } else { -1.0 };
-        let ax1 = x1 + sgn * STICKY_W / 2.0;
-        let ax2 = x2 - sgn * STICKY_W / 2.0;
-        let (ay1, ay2) = (y1 + off1, y2 + off2);
-        let mx = (ax1 + ax2) / 2.0;
-        format!(
-            "M{:.1},{:.1} C{:.1},{:.1} {:.1},{:.1} {:.1},{:.1}",
-            ax1, ay1, mx, ay1, mx, ay2, ax2, ay2
-        )
-    }
-}
-
-/// Order each `(lane, col)` cell's simultaneous members and return `(sub_ord, cell_total)`.
-/// The primary key is the **stored `y`** (F-2d-placement): a dropped-on-top element (small
-/// fraction) takes an upper slot, dropped-below (large fraction) a lower one; an unplaced member
-/// keeps the neutral 0.5. Within equal keys, the edge-neighbour barycenter orders the stack
-/// (Lever A, F-edge-routing — a neighbour's lane is fixed, so one deterministic pass), and a
-/// member with no edges falls back to its own (shared) lane, so an edge-free cell keeps file
-/// order through the stable sort. Output is independent of `HashMap` iteration order (each cell
-/// writes disjoint `sub_ord` indices), so the render stays deterministic.
-pub(crate) fn cell_sub_order(
-    elements: &[Element],
-    edges: &[Edge],
-    idx_of: &HashMap<&str, usize>,
-) -> (Vec<i64>, HashMap<(String, i64), i64>) {
-    let band = |j: usize| lane_index(&elements[j].kind) as f64;
-    // Running barycenter: a sum of neighbour bands and a count per node — no per-node Vec allocated.
-    let mut bsum = vec![0.0_f64; elements.len()];
-    let mut bcnt = vec![0u32; elements.len()];
-    for e in edges {
-        if let (Some(&s), Some(&d)) = (idx_of.get(e.src.as_str()), idx_of.get(e.dst.as_str())) {
-            bsum[s] += band(d);
-            bcnt[s] += 1;
-            bsum[d] += band(s);
-            bcnt[d] += 1;
-        }
-    }
-    let bary = |i: usize| {
-        if bcnt[i] == 0 {
-            band(i)
-        } else {
-            bsum[i] / bcnt[i] as f64
-        }
-    };
-
-    let mut cell_members: HashMap<(String, i64), Vec<usize>> = HashMap::new();
-    for (i, e) in elements.iter().enumerate() {
-        cell_members
-            .entry((e.kind.clone(), e.col.unwrap()))
-            .or_default()
-            .push(i);
-    }
-    // A member's placement key — `model::y_key`, the single home of the ordering-key rule.
-    let key = |j: usize| crate::model::y_key(elements[j].y);
-    let mut sub_ord = vec![0i64; elements.len()];
-    for members in cell_members.values_mut() {
-        // Members enter in file order; the stable sort keeps that order for equal keys.
-        members.sort_by(|&a, &b| {
-            key(a)
-                .partial_cmp(&key(b))
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(
-                    bary(a)
-                        .partial_cmp(&bary(b))
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
-        });
-        for (rank, &i) in members.iter().enumerate() {
-            sub_ord[i] = rank as i64;
-        }
-    }
-    // `cell_total` is just each cell's count — derive it by consuming `cell_members` (no key clones).
-    let cell_total = cell_members
-        .into_iter()
-        .map(|(k, v)| (k, v.len() as i64))
-        .collect();
-    (sub_ord, cell_total)
-}
-
-/// Lever B (F-edge-routing): per-edge fan offsets `(off_src, off_dst)` so several connectors meeting
-/// one box on the same face spread along it instead of collapsing onto one anchor. `ends[ei]` is
-/// edge `ei`'s `(src, dst)` element indices (`None` if an endpoint is unplaced); `centers` are the
-/// resolved box centres. The face test mirrors `edge_path`'s facing rule, so the offset always rides
-/// the free axis. A lone edge on a face keeps offset 0 (the classic centre anchor). Order-independent
-/// (each endpoint writes its own `off_*[ei]` exactly once), so the render stays deterministic.
-pub(crate) fn fan_offsets(
-    ends: &[Option<(usize, usize)>],
-    centers: &[(f64, f64)],
-) -> (Vec<f64>, Vec<f64>) {
-    // face: 0 right / 1 left (horizontal facing, fan in Y) · 2 bottom / 3 top (vertical, fan in X).
-    // A face's members are `(edge index, is the box this edge's src?, far-end cross position)`.
-    let mut face_groups: HashMap<(usize, u8), Vec<FaceMember>> = HashMap::new();
-    for (ei, end) in ends.iter().enumerate() {
-        let (s, d) = match end {
-            Some(p) => *p,
-            None => continue,
-        };
-        let (cs, cd) = (centers[s], centers[d]);
-        let horizontal = (cd.0 - cs.0).abs() >= STICKY_W;
-        let (face_s, cross_s, face_d, cross_d) = if horizontal {
-            let fs = if cd.0 > cs.0 { 0 } else { 1 };
-            let fd = if cs.0 > cd.0 { 0 } else { 1 };
-            (fs, cd.1, fd, cs.1)
-        } else {
-            let fs = if cd.1 > cs.1 { 2 } else { 3 };
-            let fd = if cs.1 > cd.1 { 2 } else { 3 };
-            (fs, cd.0, fd, cs.0)
-        };
-        face_groups
-            .entry((s, face_s))
-            .or_default()
-            .push((ei, true, cross_s));
-        face_groups
-            .entry((d, face_d))
-            .or_default()
-            .push((ei, false, cross_d));
-    }
-    let mut off_src = vec![0.0_f64; ends.len()];
-    let mut off_dst = vec![0.0_f64; ends.len()];
-    for (&(_, face), members) in face_groups.iter_mut() {
-        let k = members.len();
-        if k < 2 {
-            continue;
-        }
-        // Sort by the far end's cross position; tie-break on edge index so the fan is deterministic.
-        members.sort_by(|a, b| {
-            a.2.partial_cmp(&b.2)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.0.cmp(&b.0))
-        });
-        // Clamp the per-slot step so the extreme anchor stays on the box face: a horizontal face
-        // (0/1) fans in Y across STICKY_H, a vertical face (2/3) in X across STICKY_W. The extreme
-        // slot rides step·(k−1)/2, so step ≤ half-extent·2/(k−1) keeps it on the box. For a small
-        // k the cap exceeds FAN_SPREAD, so the common case is unchanged (byte-identical).
-        let half = if face <= 1 { STICKY_H } else { STICKY_W } / 2.0;
-        let step = FAN_SPREAD.min(2.0 * half / (k as f64 - 1.0));
-        for (slot, &(ei, is_src, _)) in members.iter().enumerate() {
-            let off = step * (slot as f64 - (k as f64 - 1.0) / 2.0);
-            if is_src {
-                off_src[ei] = off;
-            } else {
-                off_dst[ei] = off;
-            }
-        }
-    }
-    (off_src, off_dst)
 }
 
 /// A per-viewer *reading lens* applied at render time — never persisted, never in the log. Today it
@@ -355,7 +183,7 @@ pub fn render_svg(model: &Model, view: &View) -> String {
     let mut lane_top: HashMap<String, f64> = HashMap::new();
     let mut lane_h: HashMap<String, f64> = HashMap::new();
     let mut y = MARGIN_T;
-    for t in &present {
+    for t in present.iter() {
         let h = lane_rows[*t] as f64 * ROW_PITCH + LANE_VPAD;
         lane_top.insert((*t).to_string(), y);
         lane_h.insert((*t).to_string(), h);
@@ -388,63 +216,7 @@ pub fn render_svg(model: &Model, view: &View) -> String {
 
     let diff_meta = model.diff_meta.clone();
     let mut p: Vec<String> = Vec::new();
-    p.push(format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" \
-         viewBox=\"0 0 {w} {h}\" font-family=\"-apple-system,Segoe UI,Roboto,sans-serif\">",
-        w = width,
-        h = height
-    ));
-    // Arrow fill = context-stroke, so each arrowhead takes its own edge's colour.
-    p.push(
-        "<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" \
-         markerHeight=\"7\" orient=\"auto\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"context-stroke\"/>\
-         </marker></defs>"
-            .to_string(),
-    );
-    p.push(format!(
-        "<rect width=\"{}\" height=\"{}\" fill=\"#fbfbfd\"/>",
-        width, height
-    ));
-    // The board title is the instrument's engraved nameplate: a refined system serif, the one
-    // place a second font family appears (see DESIGN.md §3). Everything else stays the SVG sans.
-    p.push(format!(
-        "<text x=\"20\" y=\"34\" font-size=\"20\" font-weight=\"700\" fill=\"#222\" \
-         font-family=\"'Iowan Old Style','Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif\">{}</text>",
-        esc(&model.title)
-    ));
-
-    // Diff subtitle: rev labels + per-status counts with dashed swatches.
-    if let Some((a, b)) = &diff_meta {
-        p.push(format!(
-            "<text x=\"20\" y=\"56\" font-size=\"12\" fill=\"#777\">{} \u{2192} {}</text>",
-            esc(a),
-            esc(b)
-        ));
-        let mut lx2 = 40.0 + 7.0 * ((a.chars().count() + b.chars().count() + 3) as f64);
-        for k in ["added", "removed", "changed", "moved"] {
-            let n = elements
-                .iter()
-                .filter(|e| e.diff.as_deref() == Some(k))
-                .count();
-            if n == 0 {
-                continue;
-            }
-            p.push(format!(
-                "<rect x=\"{}\" y=\"46\" width=\"12\" height=\"12\" rx=\"3\" fill=\"none\" \
-                 stroke=\"{}\" stroke-width=\"2.5\" stroke-dasharray=\"3 2\"/>",
-                lx2,
-                diff_colour(k)
-            ));
-            p.push(format!(
-                "<text x=\"{}\" y=\"56\" font-size=\"12\" fill=\"#555\">{} {}</text>",
-                lx2 + 17.0,
-                n,
-                k
-            ));
-            lx2 += 17.0 + 8.0 * ((k.len() + n.to_string().len() + 1) as f64) + 16.0;
-        }
-    }
-
+    draw_header(&mut p, model, width, height, &diff_meta, &elements);
     // Regions (a.k.a. phases) — a region is a *thin labelled outline*, never a filled block
     // (DESIGN.md calm-instrument register; anti-reference: Miro maximalism). It reads as an open
     // "⊓": a top rule + two grabbable vertical edges, plus the faintest tonal wash (the only fill
@@ -742,6 +514,92 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         }
     }
 
+    draw_lanes(&mut p, &present, &lane_top, &lane_h, width);
+    draw_edges(&mut p, model, &elements, &idx_of, &centers, &hidden_el);
+    draw_stickies(&mut p, &elements, &centers, &hidden_el, &diff_meta);
+    draw_legend(&mut p, &present, height);
+    p.push("</svg>".to_string());
+    p.join(
+        "
+",
+    )
+}
+
+/// Board frame: SVG open, arrow marker, background, the serif nameplate, and the diff subtitle.
+fn draw_header(
+    p: &mut Vec<String>,
+    model: &Model,
+    width: i64,
+    height: i64,
+    diff_meta: &Option<(String, String)>,
+    elements: &[Element],
+) {
+    p.push(format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" \
+         viewBox=\"0 0 {w} {h}\" font-family=\"-apple-system,Segoe UI,Roboto,sans-serif\">",
+        w = width,
+        h = height
+    ));
+    // Arrow fill = context-stroke, so each arrowhead takes its own edge's colour.
+    p.push(
+        "<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" \
+         markerHeight=\"7\" orient=\"auto\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"context-stroke\"/>\
+         </marker></defs>"
+            .to_string(),
+    );
+    p.push(format!(
+        "<rect width=\"{}\" height=\"{}\" fill=\"#fbfbfd\"/>",
+        width, height
+    ));
+    // The board title is the instrument's engraved nameplate: a refined system serif, the one
+    // place a second font family appears (see DESIGN.md §3). Everything else stays the SVG sans.
+    p.push(format!(
+        "<text x=\"20\" y=\"34\" font-size=\"20\" font-weight=\"700\" fill=\"#222\" \
+         font-family=\"'Iowan Old Style','Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif\">{}</text>",
+        esc(&model.title)
+    ));
+
+    // Diff subtitle: rev labels + per-status counts with dashed swatches.
+    if let Some((a, b)) = diff_meta {
+        p.push(format!(
+            "<text x=\"20\" y=\"56\" font-size=\"12\" fill=\"#777\">{} \u{2192} {}</text>",
+            esc(a),
+            esc(b)
+        ));
+        let mut lx2 = 40.0 + 7.0 * ((a.chars().count() + b.chars().count() + 3) as f64);
+        for k in ["added", "removed", "changed", "moved"] {
+            let n = elements
+                .iter()
+                .filter(|e| e.diff.as_deref() == Some(k))
+                .count();
+            if n == 0 {
+                continue;
+            }
+            p.push(format!(
+                "<rect x=\"{}\" y=\"46\" width=\"12\" height=\"12\" rx=\"3\" fill=\"none\" \
+                 stroke=\"{}\" stroke-width=\"2.5\" stroke-dasharray=\"3 2\"/>",
+                lx2,
+                diff_colour(k)
+            ));
+            p.push(format!(
+                "<text x=\"{}\" y=\"56\" font-size=\"12\" fill=\"#555\">{} {}</text>",
+                lx2 + 17.0,
+                n,
+                k
+            ));
+            lx2 += 17.0 + 8.0 * ((k.len() + n.to_string().len() + 1) as f64) + 16.0;
+        }
+    }
+}
+
+/// Faint lane rules and the centred lane labels (which expose the band interior geometry).
+fn draw_lanes(
+    p: &mut Vec<String>,
+    present: &[&str],
+    lane_top: &HashMap<String, f64>,
+    lane_h: &HashMap<String, f64>,
+    width: i64,
+) {
     // Faint horizontal lane rules — graph-paper bench lines that delimit lanes now that a busy
     // lane can span several rows.
     for t in present.iter().skip(1) {
@@ -757,7 +615,7 @@ pub fn render_svg(model: &Model, view: &View) -> String {
     // `data-band-h` expose the band *interior* (the `y` fraction's frame of reference) so the
     // client's vertical drag converts a pixel drop into a stored fraction without re-deriving
     // the lane geometry — render.rs stays the single source of truth for it (Composable).
-    for t in &present {
+    for t in present.iter() {
         let y = lane_top[*t] + lane_h[*t] / 2.0;
         // `class`/`data-lane` let the client hang the lane-title `+` (inline-add prepend) on each
         // label; the rendered text content is unchanged.
@@ -773,7 +631,17 @@ pub fn render_svg(model: &Model, view: &View) -> String {
             esc(t)
         ));
     }
+}
 
+/// Flow / hotspot edges under the stickies (fanned at shared faces; folded endpoints skipped).
+fn draw_edges(
+    p: &mut Vec<String>,
+    model: &Model,
+    elements: &[Element],
+    idx_of: &HashMap<&str, usize>,
+    centers: &[(f64, f64)],
+    hidden_el: &[bool],
+) {
     // Lever B (F-edge-routing): fan connectors that share a box face apart so they don't collapse
     // onto one anchor — see `fan_offsets`. `ends[ei]` resolves each edge's endpoints once (reusing
     // `idx_of`); the edge loop below reuses it to skip edges with an unplaced endpoint.
@@ -787,7 +655,7 @@ pub fn render_svg(model: &Model, view: &View) -> String {
             },
         )
         .collect();
-    let (off_src, off_dst) = fan_offsets(&ends, &centers);
+    let (off_src, off_dst) = fan_offsets(&ends, centers);
 
     // Edges (under the stickies). A hotspot connector is a concern, not a flow: dotted, arrow-less.
     for (ei, edge) in model.edges.iter().enumerate() {
@@ -840,7 +708,16 @@ pub fn render_svg(model: &Model, view: &View) -> String {
             )),
         }
     }
+}
 
+/// The stickies themselves — each a focusable, id-keyed group the sidecar targets.
+fn draw_stickies(
+    p: &mut Vec<String>,
+    elements: &[Element],
+    centers: &[(f64, f64)],
+    hidden_el: &[bool],
+    diff_meta: &Option<(String, String)>,
+) {
     // Stickies — each a clickable <g id="..."> the sidecar targets by id.
     for (i, e) in elements.iter().enumerate() {
         // Folded into a collapsed band — its count lives on the band chip, no sticky drawn.
@@ -914,7 +791,7 @@ pub fn render_svg(model: &Model, view: &View) -> String {
             data_y,
             g_op
         ));
-        if let (Some(_), Some(meta)) = (status, &diff_meta) {
+        if let (Some(_), Some(meta)) = (status, diff_meta) {
             let tip = diff_tooltip(e, meta);
             if !tip.is_empty() {
                 p.push(format!("<title>{}</title>", esc(&tip)));
@@ -1013,11 +890,14 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         }
         p.push("</g>".to_string());
     }
+}
 
+/// Legend: the lane colour swatches and the connector key.
+fn draw_legend(p: &mut Vec<String>, present: &[&str], height: i64) {
     // Legend: type swatches, then a connector key (flow vs hotspot-concern).
     let ly = height - 28;
     let mut lx: i64 = 20;
-    for t in &present {
+    for t in present.iter() {
         p.push(format!(
             "<rect x=\"{}\" y=\"{}\" width=\"14\" height=\"14\" rx=\"3\" fill=\"{}\" stroke=\"#0003\"/>",
             lx,
@@ -1063,7 +943,4 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         lx + 33,
         ly + 11
     ));
-
-    p.push("</svg>".to_string());
-    p.join("\n")
 }
