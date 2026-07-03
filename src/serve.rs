@@ -12,7 +12,7 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
 const CACHE_MAX: usize = 12;
@@ -21,9 +21,24 @@ const CACHE_MAX: usize = 12;
 /// 1 MiB is generous headroom while refusing an attacker-sized `Content-Length` before allocating.
 const MAX_BODY: usize = 1 << 20;
 
+/// Upper bound on a single request/header line, and on the number of header lines. `MAX_BODY`
+/// caps the *body* only; without these a client that dribbles header bytes with no `\r\n` (or an
+/// unbounded header count) would grow `read_line` without limit — an OOM before routing ever runs.
+const MAX_HEADER_LINE: usize = 16 * 1024;
+const MAX_HEADERS: usize = 200;
+
 struct Cache {
     map: HashMap<String, Model>,
     order: VecDeque<String>,
+}
+
+/// Lock a mutex, recovering the guard if a prior holder panicked and poisoned it. A panic on one
+/// connection thread (say an unexpected panic deep in `replay` while minting under `appends`) must
+/// not permanently brick every future request with a poisoned-lock panic: the state these mutexes
+/// guard — the append-serialization token and the in-memory model ring — is rebuildable from the
+/// log on the next read, so continuing with the recovered guard is correct, not a silent corruption.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 struct Ctx {
@@ -55,9 +70,15 @@ impl Ctx {
     fn current(&self) -> Result<(String, Model), String> {
         let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
         let version = fnv12(&raw);
+        // Fast path: an unchanged log (same content hash) reuses the cached projection, so
+        // `parse_log`+`replay` run only when a new event has actually landed — not on every page
+        // load or poll. Before this, the cache was a mere insertion guard and replay ran every call.
+        if let Some(model) = self.cached(&version) {
+            return Ok((version, model));
+        }
         let text = String::from_utf8_lossy(&raw);
         let model = events::replay(&events::parse_log(&text)?);
-        let mut c = self.cache.lock().unwrap();
+        let mut c = lock(&self.cache);
         if !c.map.contains_key(&version) {
             c.map.insert(version.clone(), model.clone());
             c.order.push_back(version.clone());
@@ -71,7 +92,15 @@ impl Ctx {
     }
 
     fn cached(&self, version: &str) -> Option<Model> {
-        self.cache.lock().unwrap().map.get(version).cloned()
+        lock(&self.cache).map.get(version).cloned()
+    }
+
+    /// Just the log's content hash — the value `/model-version` polls for. Hashing the raw bytes is
+    /// O(bytes) and deliberately skips `parse_log`+`replay`, so the client's once-a-second poll
+    /// never folds the whole log just to learn nothing changed.
+    fn version(&self) -> Result<String, String> {
+        let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
+        Ok(fnv12(&raw))
     }
 
     /// Append a text block (one line, or several newline-joined lines for a multi-event action)
@@ -79,7 +108,7 @@ impl Ctx {
     /// (H4). The block and its trailing newline are written in a single `write_all`, so even
     /// under `O_APPEND` no half-line — and no half of a multi-event action — ever lands.
     fn append_line(&self, path: &Path, line: &str) -> std::io::Result<()> {
-        let _guard = self.appends.lock().unwrap();
+        let _guard = lock(&self.appends);
         Self::write_line(path, line)
     }
 
@@ -101,7 +130,7 @@ impl Ctx {
         &self,
         build: impl FnOnce(&[events::Event]) -> Result<events::Event, String>,
     ) -> Result<events::Event, String> {
-        let _guard = self.appends.lock().unwrap();
+        let _guard = lock(&self.appends);
         // Mint/validate from the *real* log. A corrupt/unreadable log must fail the append, not
         // silently fold to empty (which would re-mint E1/C1… and collide).
         let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
@@ -229,21 +258,10 @@ fn mint_id(kind: &str, log: &[events::Event]) -> String {
 /// shares that namespace by construction — a region id can never collide with one replay would
 /// have synthesized, and a removed-but-not-compacted suffix stays reserved (same rule as `mint_id`).
 fn mint_region_id(log: &[events::Event]) -> String {
-    let mut max_region = 0u32;
-    for ev in log {
-        match ev {
-            events::Event::PhaseAdded { id, .. } => {
-                model::resolve_region_id(id.as_deref(), &mut max_region);
-            }
-            // A split mints a new region id too (F-region-frontiers); fold it through the same
-            // watermark so a later add/split never re-mints a suffix already spent by a split.
-            events::Event::PhaseSplit { new_id, .. } => {
-                model::resolve_region_id(Some(new_id), &mut max_region);
-            }
-            _ => {}
-        }
-    }
-    format!("K{}", max_region.saturating_add(1))
+    // The namespace fold lives in the event spine (`events::region_watermark`), the same rule
+    // `replay` uses — so a mint here can never collide with an id `replay` would synthesize. Server
+    // side we just take one past the highest suffix ever spent.
+    format!("K{}", events::region_watermark(log).saturating_add(1))
 }
 
 /// Serve the live board for an event log. `main` guarantees `log_path` is an `event-log.jsonl`
@@ -278,23 +296,86 @@ pub fn serve(log_path: &Path, port: u16) -> Result<(), String> {
     Ok(())
 }
 
+/// Read one line (up to and including `\n`) into `buf`, but refuse to grow past `cap` bytes —
+/// unlike `BufRead::read_line`, which buffers until a newline or EOF and so has no ceiling. Returns
+/// the byte count (0 = clean EOF before any byte), or `Err(InvalidData)` once `cap` is exceeded, so
+/// a client that never sends `\r\n` can't drive an unbounded allocation. Bytes are pushed lossily
+/// (headers are ASCII); reads go through the same `BufReader`, so leftover bytes remain for the body.
+fn read_line_capped<R: BufRead>(
+    reader: &mut R,
+    buf: &mut String,
+    cap: usize,
+) -> std::io::Result<usize> {
+    let mut raw = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        if reader.read(&mut byte)? == 0 {
+            break;
+        }
+        raw.push(byte[0]);
+        if raw.len() > cap {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "request header line exceeds cap",
+            ));
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+    buf.push_str(&String::from_utf8_lossy(&raw));
+    Ok(raw.len())
+}
+
 fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut out = stream;
 
     let mut req_line = String::new();
-    if reader.read_line(&mut req_line)? == 0 {
-        return Ok(());
+    match read_line_capped(&mut reader, &mut req_line, MAX_HEADER_LINE) {
+        Ok(0) => return Ok(()),
+        Ok(_) => {}
+        // An over-long request line (or any read error on it) can't be routed — refuse it.
+        Err(_) => {
+            return send(
+                &mut out,
+                431,
+                "text/plain; charset=utf-8",
+                b"header too large",
+                &[],
+            )
+        }
     }
     let mut parts = req_line.split_whitespace();
     let method = parts.next().unwrap_or("");
     let target = parts.next().unwrap_or("/");
 
     let mut content_length = 0usize;
+    let mut header_count = 0usize;
     loop {
+        header_count += 1;
+        if header_count > MAX_HEADERS {
+            return send(
+                &mut out,
+                431,
+                "text/plain; charset=utf-8",
+                b"too many headers",
+                &[],
+            );
+        }
         let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
-            break;
+        match read_line_capped(&mut reader, &mut line, MAX_HEADER_LINE) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => {
+                return send(
+                    &mut out,
+                    431,
+                    "text/plain; charset=utf-8",
+                    b"header too large",
+                    &[],
+                )
+            }
         }
         let t = line.trim_end();
         if t.is_empty() {
@@ -369,8 +450,8 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                 &[],
             ),
         },
-        ("GET", "/model-version") => match ctx.current() {
-            Ok((version, _)) => {
+        ("GET", "/model-version") => match ctx.version() {
+            Ok(version) => {
                 let body = format!("{{\"version\":\"{}\"}}", version);
                 send(&mut out, 200, "application/json", body.as_bytes(), &[])
             }

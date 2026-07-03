@@ -508,3 +508,36 @@ overlaps are cross-referenced, not merged away:
 - **Lint stays split:** **F-es-lint** (graph-only) is distinct from **F-model-smells** (needs
   F-container).
 - **No #13 sibling:** dogfood #9 (duplicate title) stays a standalone quick fix.
+
+## Working note — code-review hardening pass (2026-07-03, branch `fix/harden-render-events-serve`)
+
+Not a catalog feature — a review of the three largest source files (`render.rs`, `events.rs`,
+`serve.rs`, all ~1200–2100 lines) surfaced eight issues; all fixed on this branch (PR #29), with
+regression tests for the five correctness ones. Recorded here so the reasoning and the one
+behaviour change survive.
+
+**Correctness.** (1) `render_svg` panicked on any element whose `type` isn't one of the 8 lanes
+(the per-lane `lane_rows`/`lane_top` lookups), though `colour`/`lane_index` already tolerate
+unknown kinds — now off-grammar stickies drop from the view before geometry (edges skipped by the
+`idx_of` guard); the log stays truth. (2) A panic in the `append_minted` critical section poisoned
+the `appends` mutex, permanently bricking every future `POST /comment` — all lock sites now recover
+via `unwrap_or_else(|p| p.into_inner())`. (3) `parse_log` silently dropped a **known**-kind event
+with a missing/mis-typed field exactly like an unknown kind — now a hard error (only unknown kinds
+skip, per the forward-compat contract). (4) `render_html`'s chained `.replace` let a label equal to
+a template token (`__CONFIG__`) get clobbered — replaced with a single-pass `fill_template`. (5)
+`replay`'s `PhaseAdded` is now idempotent by id like `ElementAdded`, so a duplicate never strands a
+ghost region.
+
+**Efficiency / cleanup.** The read path re-parsed + replayed the whole log every request (the cache
+was only an insertion guard) — `current()` gained a fast-path and `/model-version` (the ~1 Hz poll)
+a replay-free `version()`. `mint_region_id` re-implemented replay's fold in `serve.rs` — extracted
+`events::region_watermark`, the namespace rule now lives once in the spine. Request line + headers
+read unbounded (`MAX_BODY` guards only the body) — added `read_line_capped` + `MAX_HEADER_LINE` /
+`MAX_HEADERS` (→ `431`).
+
+**Dropped after verification** (guarded by `normalize()`, which runs in both `replay` and
+`from_json`): the "unsorted phases" and "overlapping-band miscount" candidates.
+
+**Behaviour change (intended).** `parse_log` now **rejects** a known event with a bad field it
+previously tolerated — a hand-authored / externally-generated log relying on silent-skip will now
+error on load.

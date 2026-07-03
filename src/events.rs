@@ -170,11 +170,58 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
     let mut events = Vec::new();
     for (n, line) in jsonl_records(text) {
         let j = json::parse(line).map_err(|e| format!("event-log line {}: {}", n, e))?;
-        if let Some(ev) = parse_event(&j) {
-            events.push(ev);
+        match parse_event(&j) {
+            Some(ev) => events.push(ev),
+            // `parse_event` returns `None` for two very different cases; only one is skippable.
+            // An *unknown* kind is a future/other-tool event → skip (forward compatibility). A
+            // *known* kind that still didn't build means a required field is missing or mis-typed
+            // (e.g. a numeric `id`, an absent `fromCol`): the fact is in the append-only truth but
+            // would silently vanish from the projection, so it is a hard error, like a line that
+            // isn't valid JSON at all.
+            None => {
+                if let Some(kind) = j.get("event").and_then(Json::as_str) {
+                    if is_known_kind(kind) {
+                        return Err(format!(
+                            "event-log line {}: {} event with a missing or mis-typed required field",
+                            n, kind
+                        ));
+                    }
+                }
+            }
         }
     }
     Ok(events)
+}
+
+/// The event kinds this build understands — the current schema plus the legacy aliases [`upcast`]
+/// migrates forward. Distinguishes a *malformed known event* (in this set, but [`parse_event`]
+/// couldn't build it → hard error) from a *future/unknown kind* (outside it → skipped). Must list
+/// exactly the kinds `parse_event` matches (plus upcast's aliases); kept adjacent so the two are
+/// edited together whenever a variant is added.
+fn is_known_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "BoardTitled"
+            | "BoardLeveled"
+            | "PhaseAdded"
+            | "PhaseResized"
+            | "PhaseRenamed"
+            | "PhaseRemoved"
+            | "FrontierMoved"
+            | "PhaseSplit"
+            | "ElementAdded"
+            | "ElementRenamed"
+            | "ElementMoved"
+            | "ElementAnnotated"
+            | "HotspotResolved"
+            | "ElementRemoved"
+            | "EdgeAdded"
+            | "EdgeRemoved"
+            | "LogCompacted"
+            // legacy aliases upcast() rewrites to a current kind
+            | "CommentAdded"
+            | "Comment"
+    )
 }
 
 /// Normalise a raw event object to the current schema before [`parse_event`] matches it — the
@@ -301,8 +348,32 @@ pub fn parse_event(raw: &Json) -> Option<Event> {
     })
 }
 
+/// The region-id watermark after `events`: the highest `K` suffix any `PhaseAdded` or `PhaseSplit`
+/// has spent — explicit ids *and* the synthetic ones [`replay`] mints for legacy id-less bands —
+/// folded through the same [`resolve_region_id`] tracker `replay` threads through its projection.
+/// The single home of the region-id namespace rule, so a server-side mint can never hand out a
+/// suffix `replay` would later synthesize (it just returns `watermark + 1`). `replay` keeps its own
+/// running counter because it mints *in order while folding*; both fold the same kinds through
+/// `resolve_region_id`, so they can't diverge.
+pub fn region_watermark(events: &[Event]) -> u32 {
+    let mut max_region = 0u32;
+    for ev in events {
+        match ev {
+            Event::PhaseAdded { id, .. } => {
+                resolve_region_id(id.as_deref(), &mut max_region);
+            }
+            Event::PhaseSplit { new_id, .. } => {
+                resolve_region_id(Some(new_id), &mut max_region);
+            }
+            _ => {}
+        }
+    }
+    max_region
+}
+
 /// Fold a sequence of events into the board they describe. The projection is pure and
-/// deterministic: same log → same `Model`.
+/// deterministic: same log → same `Model`. (The `max_region` counter below is the running form of
+/// [`region_watermark`]; both fold `PhaseAdded`/`PhaseSplit` through `resolve_region_id`.)
 pub fn replay(events: &[Event]) -> Model {
     let mut m = Model::default();
     // Highest `K` region suffix seen so far — threaded across the fold so a synthetic id for a
@@ -322,13 +393,21 @@ pub fn replay(events: &[Event]) -> Model {
                 // A legacy band carries no id; mint the next free `K<n>` past the highest ever
                 // seen so resize/rename/remove can target it and no suffix is ever reused.
                 let id = resolve_region_id(id.as_deref(), &mut max_region);
-                m.phases.push(Phase {
-                    id,
-                    label: label.clone(),
-                    from_col: *from_col,
-                    to_col: *to_col,
-                    diff: None,
-                });
+                // Idempotent by id, like `ElementAdded`: a duplicate `PhaseAdded` (a log appended
+                // twice, or `from_model` of a model with non-unique phase ids — `normalize` never
+                // dedups ids) must not push a second Phase sharing an id, or every later Phase*
+                // event would resolve by id and address only the first, stranding a ghost region.
+                // A minted (legacy id-less) id is fresh past the watermark, so this drops only true
+                // duplicates of an explicit id.
+                if !m.phases.iter().any(|p| p.id == id) {
+                    m.phases.push(Phase {
+                        id,
+                        label: label.clone(),
+                        from_col: *from_col,
+                        to_col: *to_col,
+                        diff: None,
+                    });
+                }
             }
             Event::PhaseResized {
                 id,
@@ -906,6 +985,37 @@ mod tests {
     // A region is a labelled vertical band that evolves the legacy `Phase`. Membership and
     // pivotal are derived from geometry (later stages), so the spine only needs: add with a
     // stable id, resize, rename, remove — plus legacy bands (no id) replaying deterministically.
+
+    #[test]
+    fn parse_log_errors_on_a_malformed_known_event_but_skips_an_unknown_kind() {
+        // An unknown/future kind is skipped for forward compatibility.
+        assert_eq!(
+            parse_log(r#"{"event":"FromTheFuture","x":1}"#)
+                .unwrap()
+                .len(),
+            0
+        );
+        // A *known* kind missing a required field is a hard error: the fact is in the append-only
+        // log but would otherwise vanish from the projection with no diagnostic.
+        assert!(parse_log(r#"{"event":"ElementAdded","id":"E1"}"#).is_err()); // no type/label
+        assert!(parse_log(r#"{"event":"PhaseAdded","label":"A","fromCol":0}"#).is_err());
+        // no toCol
+    }
+
+    #[test]
+    fn duplicate_phase_added_id_replays_to_a_single_region() {
+        // A second `PhaseAdded` sharing an id (a double-appended log) must not create a ghost
+        // region — replay is idempotent by id, like `ElementAdded`.
+        let log = parse_log(
+            "{\"event\":\"PhaseAdded\",\"id\":\"K1\",\"label\":\"A\",\"fromCol\":0,\"toCol\":3}\n\
+             {\"event\":\"PhaseAdded\",\"id\":\"K1\",\"label\":\"B\",\"fromCol\":0,\"toCol\":3}",
+        )
+        .unwrap();
+        assert_eq!(
+            replay(&log).phases.iter().filter(|p| p.id == "K1").count(),
+            1
+        );
+    }
 
     #[test]
     fn phase_added_round_trips_its_id() {
