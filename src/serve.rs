@@ -609,6 +609,11 @@ fn read_comments_json(path: &Path) -> Vec<String> {
 /// the reviewer has already **resolved** (a `HotspotResolved` set `resolved:true`) is suppressed
 /// — that is the whole "reuse serve→review→resolve" story, keyed on `Finding.element_id` == the
 /// same stable id `HotspotResolved.id` uses. Per-finding acknowledgement is F-comment-lifecycle's.
+///
+/// This resolve-suppression is deliberately serve-only: the `faceto lint` CLI runs `lint()`
+/// unfiltered (a full audit reports on resolved elements too). The divergence is intended — the
+/// sidebar is the interactive review loop, the CLI is the complete check — and safe, since lint is
+/// warn-only (exit 0) at both surfaces, so a suppressed nudge can never gate a build.
 fn lint_items(model: &Model) -> Vec<String> {
     // Build the resolved-id set once (O(V)) so the per-finding suppression check is O(1) — the
     // same present-set idiom `comments_from_log` uses, instead of an O(findings × elements) rescan.

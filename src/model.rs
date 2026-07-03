@@ -31,6 +31,17 @@ pub fn level_from_str(s: &str) -> Level {
     }
 }
 
+/// The wire string for a `Level` — the reverse of [`level_from_str`], so the log-serialize side
+/// (`from_model`) can't drift from the parse side. Exhaustive on purpose: a future variant is a
+/// compile error here until its wire form is declared, instead of silently round-tripping as the
+/// default.
+pub fn level_to_str(level: Level) -> &'static str {
+    match level {
+        Level::BigPicture => "big-picture",
+        Level::Design => "design",
+    }
+}
+
 #[derive(Clone)]
 pub struct Phase {
     /// Stable identity (the diff join key and the target of resize/rename/remove). A region is a
@@ -389,6 +400,13 @@ mod tests {
         assert_eq!(level_from_str("big-picture"), Level::BigPicture);
         assert_eq!(level_from_str("nonsense"), Level::BigPicture);
         assert_eq!(model_of(r#"{"level":"whatever"}"#).level, Level::BigPicture);
+    }
+
+    #[test]
+    fn level_to_str_is_the_inverse_of_level_from_str() {
+        for level in [Level::BigPicture, Level::Design] {
+            assert_eq!(level_from_str(level_to_str(level)), level);
+        }
     }
 
     // ---- F-container Stage 2: spatial membership + derived pivotal -------------------------

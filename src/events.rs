@@ -404,11 +404,13 @@ pub fn from_model(m: &Model) -> Vec<Event> {
         });
     }
     // Emit the level only when it differs from the default, mirroring the title guard: a
-    // big-picture board writes no `BoardLeveled`, so its genesis batch is byte-identical to
-    // before this field existed and round-trips unchanged.
-    if m.level == Level::Design {
+    // big-picture (default) board writes no `BoardLeveled`, so its genesis batch is byte-identical
+    // to before this field existed and round-trips unchanged. Guarding on `!= default` (not
+    // `== Design`) means any future non-default level is emitted too, via the exhaustive
+    // `level_to_str` — no variant silently round-trips as the default.
+    if m.level != Level::default() {
         ev.push(Event::BoardLeveled {
-            level: "design".into(),
+            level: crate::model::level_to_str(m.level).into(),
         });
     }
     for p in &m.phases {
