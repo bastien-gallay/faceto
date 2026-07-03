@@ -387,16 +387,15 @@ pub fn replay(events: &[Event]) -> Model {
                     // Strictly inside → both halves keep ≥1 column. Otherwise nothing to split.
                     if from < *at_col && *at_col <= to {
                         m.phases[i].to_col = *at_col - 1;
-                        m.phases.insert(
-                            i + 1,
-                            Phase {
-                                id: new_id,
-                                label: new_label.clone(),
-                                from_col: *at_col,
-                                to_col: to,
-                                diff: None,
-                            },
-                        );
+                        // Placement doesn't matter — `normalize` (end of the fold) sorts by column,
+                        // so the new right half lands in order regardless; just push it.
+                        m.phases.push(Phase {
+                            id: new_id,
+                            label: new_label.clone(),
+                            from_col: *at_col,
+                            to_col: to,
+                            diff: None,
+                        });
                     }
                 }
             }

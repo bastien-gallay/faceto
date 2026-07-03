@@ -92,11 +92,31 @@ impl Ctx {
         f.write_all(&bytes)
     }
 
-    /// Mint a fresh id and append an `ElementAdded` — the answer to H6. The id is derived from
-    /// the log's `ElementAdded` history (next free `<PREFIX><N>` for this lane) rather than a
-    /// stored counter, so the log stays the only durable record. Both the read and the write
-    /// happen under `appends`, so two concurrent adds can never mint the same id. Returns the
-    /// minted event so the handler can log it.
+    /// Run a server-minted append under the `appends` lock: read + parse the log once, let `build`
+    /// construct the event from it (minting ids, deriving cols, or validating and returning `Err` to
+    /// refuse), then write the event atomically. The single home of the read → build → write critical
+    /// section (H4/H6) shared by every server-minted command — so the mint-under-lock contract, the
+    /// corrupt-log error path, and the atomic write live in exactly one place, not three copies.
+    fn append_minted(
+        &self,
+        build: impl FnOnce(&[events::Event]) -> Result<events::Event, String>,
+    ) -> Result<events::Event, String> {
+        let _guard = self.appends.lock().unwrap();
+        // Mint/validate from the *real* log. A corrupt/unreadable log must fail the append, not
+        // silently fold to empty (which would re-mint E1/C1… and collide).
+        let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&raw);
+        let log = events::parse_log(&text)?;
+        let ev = build(&log)?;
+        Self::write_line(&self.model_path, &events::line(&ev)).map_err(|e| e.to_string())?;
+        Ok(ev)
+    }
+
+    /// Mint a fresh id and append an `ElementAdded` (H6). The id is derived from the log's
+    /// `ElementAdded` history (next free `<PREFIX><N>` for this lane) rather than a stored counter,
+    /// so the log stays the only durable record. A lane-title `+` (prepend) derives its col from the
+    /// live projection *under the lock* — a first-in-lane add aligns to the board's left column, a
+    /// prepend into a non-empty lane marches left — so concurrent adds can't race the min.
     fn append_add(
         &self,
         kind: &str,
@@ -105,62 +125,45 @@ impl Ctx {
         detail: Option<String>,
         prepend: bool,
     ) -> Result<events::Event, String> {
-        let _guard = self.appends.lock().unwrap();
-        // Mint from the *real* log. A corrupt/unreadable log must fail the add, not silently
-        // fold to empty (which would re-mint E1/C1… and collide).
-        let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
-        let text = String::from_utf8_lossy(&raw);
-        let log = events::parse_log(&text)?;
-        // A lane-title `+` (prepend) derives its col from the live projection *under this lock* —
-        // a first-in-lane add aligns to the board's left column, a prepend into a non-empty lane
-        // marches left — so concurrent adds can't race the min, the same reason id is minted here.
-        let col = if prepend {
-            Some(model::lane_left_col(&events::replay(&log), kind))
-        } else {
-            col
-        };
-        let ev = events::Event::ElementAdded {
-            id: mint_id(kind, &log),
-            kind: kind.to_string(),
-            label,
-            col,
-            detail,
-            y: None,
-        };
-        Self::write_line(&self.model_path, &events::line(&ev)).map_err(|e| e.to_string())?;
-        Ok(ev)
+        self.append_minted(|log| {
+            let col = if prepend {
+                Some(model::lane_left_col(&events::replay(log), kind))
+            } else {
+                col
+            };
+            Ok(events::Event::ElementAdded {
+                id: mint_id(kind, log),
+                kind: kind.to_string(),
+                label,
+                col,
+                detail,
+                y: None,
+            })
+        })
     }
 
-    /// Mint a fresh region id and append a `PhaseAdded` — the region-mint half of Stage 5,
-    /// mirroring `append_add`'s H6 answer for elements. Minted and written under `appends`, so
-    /// two concurrent region adds can never collide. Returns the minted event so the handler can
-    /// log it.
+    /// Mint a fresh region id and append a `PhaseAdded` — the region counterpart of `append_add`.
     fn append_region_add(
         &self,
         label: String,
         from_col: i64,
         to_col: i64,
     ) -> Result<events::Event, String> {
-        let _guard = self.appends.lock().unwrap();
-        let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
-        let text = String::from_utf8_lossy(&raw);
-        let log = events::parse_log(&text)?;
-        let ev = events::Event::PhaseAdded {
-            id: Some(mint_region_id(&log)),
-            label,
-            from_col,
-            to_col,
-        };
-        Self::write_line(&self.model_path, &events::line(&ev)).map_err(|e| e.to_string())?;
-        Ok(ev)
+        self.append_minted(|log| {
+            Ok(events::Event::PhaseAdded {
+                id: Some(mint_region_id(log)),
+                label,
+                from_col,
+                to_col,
+            })
+        })
     }
 
     /// Mint the right-half id and append a `PhaseSplit` — the partition's "add" (F-region-frontiers).
     /// The split target `id` keeps its left half; the minted `new_id` (same namespace as
-    /// `append_region_add`, so the two never collide) takes the right half with `new_label`. Minted
-    /// and written under `appends`, so a concurrent add/split can't race the id. Validates the split
-    /// column **under the lock** against the replayed board: an out-of-range or stale `at_col` (the
-    /// target phase moved/merged/vanished since the client hovered) returns `Err` *before* writing —
+    /// `append_region_add`, so the two never collide) takes the right half with `new_label`. Validates
+    /// the split column against the replayed board: an out-of-range or stale `at_col` (the target
+    /// phase moved/merged/vanished since the client hovered) returns `Err` *before* writing —
     /// otherwise it would burn a region id and leave a permanent dead event in the append-only log
     /// while the client falsely reported success. `replay` still guards the fold as a backstop.
     fn append_phase_split(
@@ -169,27 +172,23 @@ impl Ctx {
         at_col: i64,
         new_label: String,
     ) -> Result<events::Event, String> {
-        let _guard = self.appends.lock().unwrap();
-        let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
-        let text = String::from_utf8_lossy(&raw);
-        let log = events::parse_log(&text)?;
-        let covers = events::replay(&log)
-            .phases
-            .iter()
-            .any(|p| p.id == id && p.from_col < at_col && at_col <= p.to_col);
-        if !covers {
-            return Err(format!(
-                "phase-split: {at_col} not strictly inside phase {id}"
-            ));
-        }
-        let ev = events::Event::PhaseSplit {
-            id,
-            at_col,
-            new_id: mint_region_id(&log),
-            new_label,
-        };
-        Self::write_line(&self.model_path, &events::line(&ev)).map_err(|e| e.to_string())?;
-        Ok(ev)
+        self.append_minted(|log| {
+            let covers = events::replay(log)
+                .phases
+                .iter()
+                .any(|p| p.id == id && p.from_col < at_col && at_col <= p.to_col);
+            if !covers {
+                return Err(format!(
+                    "phase-split: {at_col} not strictly inside phase {id}"
+                ));
+            }
+            Ok(events::Event::PhaseSplit {
+                id,
+                at_col,
+                new_id: mint_region_id(log),
+                new_label,
+            })
+        })
     }
 }
 
@@ -486,6 +485,15 @@ fn query_get(query: &str, key: &str) -> Option<String> {
     None
 }
 
+/// The non-blank `text` label a creation command requires, or `400` — the one place the
+/// "a minted element/region must carry a label" rule turns into an HTTP status, shared by every
+/// server-minted command so `add`, `region-add`, and `phase-split` can't diverge on it. A blank
+/// label would mint a permanent, never-renumbered empty box; the same `nonblank` rule the `rename`
+/// guard uses (a direct POST must not slip a blank in even though the client modal guards it).
+fn required_label(v: &json::Json) -> Result<String, u16> {
+    v.get_str("text").and_then(events::nonblank).ok_or(400u16)
+}
+
 /// Handle a `kind:"add"` post: an element-creation command rather than a comment on an
 /// existing one. `type` (the lane) and a non-empty `text` (label) are required; optional
 /// `col`/`detail`. The server mints the id (H6). Returns the HTTP status to fail with: `400` for
@@ -499,10 +507,7 @@ fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
         .filter(|s| render::lane_prefix(s).is_some())
         .ok_or(400u16)?
         .to_string();
-    // A blank label would mint a permanent, never-renumbered empty element — refuse it here
-    // (the client modal already guards it, but a direct POST must not slip a blank box in). Same
-    // `nonblank` rule the `rename` guard uses, so add and rename can't diverge.
-    let label = v.get_str("text").and_then(events::nonblank).ok_or(400u16)?;
+    let label = required_label(v)?;
     let col = v.get_i64("col");
     // The lane-title `+` posts `prepend:true` (no col); the server derives the left-edge col so the
     // rule lives in one place and stays consistent under concurrent adds.
@@ -524,7 +529,7 @@ fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
 /// Returns the HTTP status to fail with: `400` for a missing label or an absent/inverted/
 /// zero-width span, `500` if the append itself fails.
 fn add_region_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
-    let label = v.get_str("text").and_then(events::nonblank).ok_or(400u16)?;
+    let label = required_label(v)?;
     let from_col = v.get_i64("fromCol").ok_or(400u16)?;
     let to_col = v.get_i64("toCol").ok_or(400u16)?;
     if !events::valid_span(from_col, to_col) {
@@ -537,12 +542,12 @@ fn add_region_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u
 /// Handle a `kind:"phase-split"` post: divide the region `regionId` at `atCol` into two, the
 /// server minting the right half's id (F-region-frontiers, the partition's "add"). A non-empty
 /// `text` (the new right-half label) and an `atCol` are required; whether the column falls strictly
-/// inside the phase is enforced in `replay` (an out-of-range split folds to a no-op), so the border
-/// rule lives in one place. Returns the HTTP status to fail with: `400` for a missing label or
-/// atCol, `500` if the append itself fails.
+/// inside the phase is validated under the lock in `append_phase_split` (a stale/out-of-range split
+/// is refused before writing). Returns the HTTP status to fail with: `400` for a missing label or
+/// atCol, `500` if the append itself fails or the split is out of range.
 fn split_region_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
     let id = v.get_str("regionId").map(str::to_string).ok_or(400u16)?;
-    let label = v.get_str("text").and_then(events::nonblank).ok_or(400u16)?;
+    let label = required_label(v)?;
     let at_col = v.get_i64("atCol").ok_or(400u16)?;
     ctx.append_phase_split(id, at_col, label)
         .map_err(|_| 500u16)
