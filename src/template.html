@@ -417,9 +417,9 @@ function applyLayout() {
 
 // Rebuild positions from the authored layout + every move comment, in order. Idempotent: each
 // move carries an *absolute* target col, so re-applying the same comment converges (no drift).
-// In log mode this is a no-op — the server folds moves into the board via `ElementMoved` and
-// `/comments` returns feedback only — so the loop iterates nothing; it still drives the legacy
-// `comments.jsonl` mode, where the board SVG is the authored layout and moves ride on top.
+// Against the server this is a no-op — it folds moves into the board via `ElementMoved` and
+// `/comments` returns feedback only — so the loop iterates nothing; it still replays any
+// offline-stashed moves (the `localStorage` fallback), riding on top of the authored layout.
 function replayMoves() {
   for (const id in baseCol) colOf[id] = baseCol[id];
   yFrac = {};
