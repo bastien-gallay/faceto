@@ -26,8 +26,8 @@ faceto board* — see [`../examples/faceto-event-sourced.model.json`](../example
 - **H1 — replay cost → cache the projection.** `version = fnv12(raw log bytes)`; reuse
   `serve.rs`'s existing recent-models ring keyed on that hash; replay runs only on a cache
   miss (i.e. when a new event lands). Snapshotting (a future `compact`) will bound replay length.
-- **H4 — concurrency / append ordering → serialize through an `appends` mutex.** Every append
-  (log events *and* legacy `comments.jsonl`) goes through `Ctx::append_line`, which holds a
+- **H4 — concurrency / append ordering → serialize through an `appends` mutex.** Every append to
+  the event log goes through `Ctx::append_line`, which holds a
   dedicated `Mutex<()>` and writes the whole line+`\n` in a single `write_all`. Concurrent
   `POST /comment` handlers (one thread each) can no longer interleave mid-line. Covered by
   `concurrent_appends_never_interleave` (8 threads × 50 appends, all lines land whole).
@@ -38,10 +38,10 @@ faceto board* — see [`../examples/faceto-event-sourced.model.json`](../example
 | --- | --- |
 | `src/events.rs` *(new)* | `Event` enum (10 variants); `parse_log`/`read_log`; `replay(&[Event]) -> Model`; `from_model(&Model) -> Vec<Event>` (genesis/migration); JSON (de)serialization. 7 in-file tests incl. a model→events→model round-trip. |
 | `src/main.rs` | `render`/`serve` accept a log by extension (`is_log_path`). New verb **`faceto genesis [MODEL]`** writes `event-log.jsonl` next to a model (refuses to clobber). |
-| `src/serve.rs` | `current()` replays in log mode (version hashes raw bytes → ring caches the projection). `POST /comment` **appends an event** (`move`→`ElementMoved` ×2 on a swap, `resolve`→`HotspotResolved`, `rename`→`ElementRenamed`, `drop`→`ElementRemoved`, else `ElementAnnotated`). `GET /comments` projects feedback events back for the sidebar. |
+| `src/serve.rs` | Event-log-only (F-auto-genesis): `main` resolves a `model.json` to its sibling log before `serve` (auto-genesis if none exists), so `current()` always replays (version hashes raw bytes → ring caches the projection). `POST /comment` **appends an event** (`move`→`ElementMoved` ×2 on a swap, `resolve`→`HotspotResolved`, `rename`→`ElementRenamed`, `drop`→`ElementRemoved`, else `ElementAnnotated`). `GET /comments` projects feedback events back for the sidebar. |
 
-The pipeline is now `event-log.jsonl → replay → Model → SVG → HTML`, with `model.json → Model`
-still supported for the legacy/genesis path.
+The pipeline is now `event-log.jsonl → replay → Model → SVG → HTML`. `model.json → Model` remains
+the genesis/bootstrap input and a read-only `render` source; serving always goes through the log.
 
 ### Event schema (one JSON object per line, discriminated by `"event"`)
 
@@ -146,6 +146,14 @@ reports them (`… N not migrated from comments.jsonl`) instead of dropping them
 `genesis sample.model.json` next to a 4-line inbox seeded `24 genesis + 2 folded` (the garbage and
 orphan lines dropped), with `ElementAnnotated`/`ElementRenamed` for `E1` appended after the batch.
 
+The migration is **one-shot**: once folded, the inbox is renamed to `comments.jsonl.migrated`, so
+re-running genesis (e.g. after deleting the log, or via serve-time auto-genesis) cannot re-fold —
+and resurrect — feedback already resolved on the board. The genesis write itself is an **exclusive
+create** (`create_new`): it refuses to overwrite an existing `event-log.jsonl` rather than truncate
+the append-only truth log, so no check-then-write race can clobber a live log. Covered by
+`write_genesis_refuses_to_clobber_an_existing_log` and
+`write_genesis_folds_then_archives_the_inbox_one_shot`.
+
 ### `faceto compact` — fold the log to a snapshot → **done.**
 
 `faceto compact [LOG]` (default `event-log.jsonl`) replays the log, then rewrites it as a
@@ -166,11 +174,11 @@ byte-for-byte intact and the rename/move gone from the log.
 
 Audited `src/template.html` against the event semantics, three findings:
 
-- **`replayMoves` is redundant in log mode but safe.** `/comments` (`comments_from_log`) returns
-  feedback only — no `ElementMoved` — so the move loop iterates nothing and the server's
-  re-rendered board is authoritative; it still drives legacy `comments.jsonl` mode. Moves carry an
-  *absolute* target col (`colOf = c.col`), so re-applying a duplicate converges — idempotent, no
-  drift. Kept, with a clarifying comment.
+- **`replayMoves` is redundant against the server but safe.** `/comments` (`comments_from_log`)
+  returns feedback only — no `ElementMoved` — so the move loop iterates nothing and the server's
+  re-rendered board is authoritative. It still replays **offline-stashed** moves (the
+  `localStorage` fallback). Moves carry an *absolute* target col (`colOf = c.col`), so re-applying a
+  duplicate converges — idempotent, no drift. Kept, with a clarifying comment.
 - **Offline `add` was mishandled (fixed).** A stashed `add` has no `elemId`, but `paint()` only
   excluded `move` from feedback, so it fell into `byEl[undefined]` and inflated the comment count.
   Now `move` *and* `add` are excluded and `byEl` is guarded against a missing `elemId`. Verified in

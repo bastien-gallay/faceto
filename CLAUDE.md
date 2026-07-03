@@ -65,9 +65,9 @@ lockstep. For board behaviour not covered by tests, render `examples/sample.mode
 
 ## Architecture
 
-In log mode the pipeline is `event-log.jsonl → replay → Model → SVG → HTML`; the legacy
-`model.json → Model` path still works (and is the genesis/bootstrap input). Six source files, each
-one stage:
+The pipeline is `event-log.jsonl → replay → Model → SVG → HTML`; the `model.json → Model` path is
+the genesis/bootstrap input and a read-only `render` source (serving always goes through the log).
+Six source files, each one stage:
 
 - **`src/json.rs`** — minimal JSON parser/serializer (`parse`, `to_string`, the `Json` enum with
   `get`/`as_str`/`as_f64`/`as_bool`/`as_array`). Everything else builds on this.
@@ -84,14 +84,15 @@ one stage:
 - **`src/render.rs`** — pure layout + SVG generation (`render_svg`) and HTML wrapping
   (`render_html`). Holds the lane order (`LANES`), the colour grammar (`colour`), geometry
   constants (`COL_W`, `LANE_H`, etc.), label wrapping, the serif nameplate, and diff styling.
-- **`src/serve.rs`** — std-only HTTP server. Routes: `GET /` (page), `GET /board.svg`
-  (re-rendered each request, `?base=<version>` produces a diff overlay), `GET /model-version`,
-  `GET /comments`, `GET /health`, `POST /comment`. In **log mode** `POST /comment` appends an
-  *event* (the comment's `kind` maps to `ElementAdded`/`ElementMoved`/`ElementRenamed`/
-  `HotspotResolved`/`ElementRemoved` (`drop`)/`ElementAnnotated`); `add` mints a server-side
-  type-prefixed id. In legacy
-  mode it appends to `comments.jsonl`. All appends serialize through one mutex so concurrent posts
-  never interleave (H4).
+- **`src/serve.rs`** — std-only HTTP server, **event-log-only** (F-auto-genesis killed legacy
+  mode: `main` resolves any `model.json` to its sibling `event-log.jsonl` via `serve_log_path`
+  before calling `serve`, auto-running genesis if no log exists yet, so the server only ever
+  mutates the log). Routes: `GET /` (page), `GET /board.svg` (re-rendered each request,
+  `?base=<version>` produces a diff overlay), `GET /model-version`, `GET /comments`, `GET /health`,
+  `POST /comment`. `POST /comment` appends an *event* (the comment's `kind` maps to
+  `ElementAdded`/`ElementMoved`/`ElementRenamed`/`HotspotResolved`/`ElementRemoved` (`drop`)/
+  `ElementAnnotated`); `add` mints a server-side type-prefixed id. All appends serialize through
+  one mutex so concurrent posts never interleave (H4).
 - **`src/template.html`** — the client, embedded into the binary via `include_str!` in
   `render.rs`. `render_html` substitutes `__SVG__`, `__TITLE__`, and `__CONFIG__`. Client polls
   `/model-version`, swaps in diff/plain SVGs, and posts comments/structural ops (falling back to

@@ -14,7 +14,9 @@ mod model;
 mod render;
 mod serve;
 
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::io::{ErrorKind, Write};
+use std::path::{Path, PathBuf};
 use std::process::exit;
 
 fn main() {
@@ -26,8 +28,15 @@ fn main() {
             cmd_render(&model);
         }
         "serve" => {
-            let (model, port) = parse_serve(&args[2..]);
-            if let Err(e) = serve::serve(Path::new(&model), port) {
+            let (source, port) = parse_serve(&args[2..]);
+            let log = match serve_log_path(Path::new(&source)) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    exit(1);
+                }
+            };
+            if let Err(e) = serve::serve(&log, port) {
                 eprintln!("error: {e}");
                 exit(1);
             }
@@ -50,7 +59,9 @@ fn main() {
     }
 }
 
-/// Load a board from either a legacy `model.json` or an event log, chosen by extension.
+/// Load a board (read-only) from either a `model.json` bootstrap form or an event log, chosen by
+/// extension. Used by `render`, which never mutates; `serve` always goes through the log
+/// (`serve_log_path`), since serving mutates and the log is the truth.
 fn load_source(path: &Path) -> Result<model::Model, String> {
     if events::is_log_path(path) {
         events::load(path)
@@ -59,11 +70,17 @@ fn load_source(path: &Path) -> Result<model::Model, String> {
     }
 }
 
-fn dir_of(path: &Path) -> std::path::PathBuf {
+fn dir_of(path: &Path) -> PathBuf {
     path.parent()
         .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// The event log for a source: `event-log.jsonl` in the source's directory. The one place this
+/// convention lives, so the clobber-check path and the write path can never drift apart.
+fn log_beside(source: &Path) -> PathBuf {
+    dir_of(source).join("event-log.jsonl")
 }
 
 fn cmd_render(model_path: &str) {
@@ -94,66 +111,167 @@ fn cmd_render(model_path: &str) {
     );
 }
 
-/// Migrate a legacy `model.json` into the genesis batch of an `event-log.jsonl` written
-/// alongside it — the bootstrap path into the event-sourced world. A sibling `comments.jsonl`
-/// (the legacy feedback inbox) is folded in too (H5): its annotations/resolutions/renames/moves
-/// land as events *after* the genesis batch, which minted the ids they reference — so the inbox
-/// is preserved on the board instead of stranded. Refuses to clobber an existing log.
-fn cmd_genesis(model_path: &str) {
-    let path = Path::new(model_path);
-    let model = match model::load(path) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("error: {e}");
-            exit(1);
-        }
-    };
-    let dir = dir_of(path);
-    let out = dir.join("event-log.jsonl");
-    if out.exists() {
-        eprintln!(
-            "error: {} already exists — refusing to overwrite",
-            out.display()
-        );
-        exit(1);
+/// What a genesis migration produced, enough to report it. `write_genesis` returns this so both
+/// the explicit `genesis` command and the implicit serve-time migration print the same line.
+struct GenesisReport {
+    /// The event log written (`event-log.jsonl` beside the model).
+    out: PathBuf,
+    /// The model migrated from.
+    source: PathBuf,
+    /// The sibling comments inbox that was folded in (whether or not it existed).
+    comments_path: PathBuf,
+    /// Total events written: `genesis_len + folded_len`.
+    total: usize,
+    /// Events from the model itself (the genesis batch).
+    genesis_len: usize,
+    /// Comment lines folded onto the batch (H5).
+    folded_len: usize,
+    /// Comment lines that could not be migrated — reported, never dropped silently.
+    skipped: usize,
+    /// Where the inbox was archived to once folded (`<comments>.migrated`), so a later
+    /// re-genesis can't re-fold the same feedback. `None` if there was no inbox to archive.
+    archived_inbox: Option<PathBuf>,
+}
+
+impl GenesisReport {
+    /// One line, with an optional inbox clause: how many comment lines folded in, and how many
+    /// could not be migrated.
+    fn summary(&self) -> String {
+        let inbox = if self.folded_len > 0 || self.skipped > 0 {
+            let mut clause = format!(
+                " ({} genesis + {} folded",
+                self.genesis_len, self.folded_len
+            );
+            if self.skipped > 0 {
+                clause.push_str(&format!(", {} not migrated", self.skipped));
+            }
+            clause.push_str(&format!(" from {})", self.comments_path.display()));
+            clause
+        } else {
+            String::new()
+        };
+        let archived = match &self.archived_inbox {
+            Some(p) => format!(" · inbox archived to {}", p.display()),
+            None => String::new(),
+        };
+        format!(
+            "seeded {} events from {}{} → {}{}",
+            self.total,
+            self.source.display(),
+            inbox,
+            self.out.display(),
+            archived
+        )
     }
+}
+
+/// Migrate a `model.json` into the genesis batch of an `event-log.jsonl` written alongside it —
+/// the bootstrap path into the event-sourced world. A sibling `comments.jsonl` (the legacy
+/// feedback inbox) is folded in too (H5): its annotations/resolutions/renames/moves land as events
+/// *after* the genesis batch, which minted the ids they reference — so the inbox is preserved on
+/// the board instead of stranded.
+///
+/// The write is an **exclusive create** (`create_new`): if a log already exists it fails rather
+/// than truncate it, so the "log is append-only truth" invariant is enforced by the write itself —
+/// no caller-side guard to forget, and no check-then-write race can clobber a live log. The model
+/// is loaded *before* the write, so a malformed model surfaces its own error even when a log is
+/// also present. Once folded, the inbox is renamed to `<comments>.migrated` so re-running genesis
+/// (e.g. after deleting the log) can't re-fold — and resurrect — feedback already on the board.
+fn write_genesis(model_path: &Path) -> Result<GenesisReport, String> {
+    let model = model::load(model_path)?;
+    let out = log_beside(model_path);
     let mut batch = events::from_model(&model);
     let genesis_len = batch.len();
 
     // Fold a sibling comments.jsonl, if one exists, into the same migration. Reading it is
     // best-effort: a missing file is the common case (nothing to fold), and the inbox itself
     // tolerates stray lines (see `events::from_comments`).
-    let comments_path = dir.join("comments.jsonl");
-    let (folded, skipped) = std::fs::read_to_string(&comments_path)
-        .ok()
-        .map(|text| events::from_comments(&text))
+    let comments_path = dir_of(model_path).join("comments.jsonl");
+    let inbox = std::fs::read_to_string(&comments_path).ok();
+    let (folded, skipped) = inbox
+        .as_deref()
+        .map(events::from_comments)
         .unwrap_or_default();
     let folded_len = folded.len();
     batch.extend(folded);
 
-    if let Err(e) = std::fs::write(&out, events::to_jsonl(&batch)) {
-        eprintln!("error writing {}: {e}", out.display());
-        exit(1);
-    }
-    // One message, with an optional inbox clause: how many comment lines folded in, and how many
-    // could not be migrated (reported, never dropped silently).
-    let inbox = if folded_len > 0 || skipped > 0 {
-        let mut clause = format!(" ({genesis_len} genesis + {folded_len} folded");
-        if skipped > 0 {
-            clause.push_str(&format!(", {skipped} not migrated"));
+    // Exclusive create: refuse to overwrite an existing log (append-only truth), race-free.
+    let mut f = match OpenOptions::new().write(true).create_new(true).open(&out) {
+        Ok(f) => f,
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+            return Err(format!(
+                "{} already exists — refusing to overwrite",
+                out.display()
+            ));
         }
-        clause.push_str(&format!(" from {})", comments_path.display()));
-        clause
-    } else {
-        String::new()
+        Err(e) => return Err(format!("writing {}: {e}", out.display())),
     };
-    println!(
-        "seeded {} events from {}{} → {}",
-        batch.len(),
-        path.display(),
-        inbox,
-        out.display()
-    );
+    f.write_all(events::to_jsonl(&batch).as_bytes())
+        .map_err(|e| format!("writing {}: {e}", out.display()))?;
+
+    // The log is written; archive the inbox so this migration is one-shot. Best-effort: a failed
+    // rename only means a future genesis could re-fold it — the pre-fix behaviour, not data loss.
+    let archived_inbox = inbox.is_some().then(|| {
+        let mut dest = comments_path.clone().into_os_string();
+        dest.push(".migrated");
+        let dest = PathBuf::from(dest);
+        std::fs::rename(&comments_path, &dest).ok().map(|()| dest)
+    });
+
+    Ok(GenesisReport {
+        out,
+        source: model_path.to_path_buf(),
+        comments_path,
+        total: batch.len(),
+        genesis_len,
+        folded_len,
+        skipped,
+        archived_inbox: archived_inbox.flatten(),
+    })
+}
+
+fn cmd_genesis(model_path: &str) {
+    // `write_genesis` refuses to clobber intrinsically (exclusive create), so there is no
+    // separate exists-check to keep in sync — and loading the model first means a broken model
+    // reports *its* error, not "already exists".
+    match write_genesis(Path::new(model_path)) {
+        Ok(report) => println!("{}", report.summary()),
+        Err(e) => {
+            eprintln!("error: {e}");
+            exit(1);
+        }
+    }
+}
+
+/// Resolve the source a `serve` command must mutate to an event log, auto-running genesis for a
+/// bare `model.json` (F-auto-genesis). Serving mutates, and every mutation must land in the log —
+/// the truth — never in the derived model, so:
+///
+///   * an event log is served as-is;
+///   * a `model.json` beside an existing `event-log.jsonl` redirects to that log (the log already
+///     won; the model is a derived/bootstrap form, so it is ignored once a log exists);
+///   * a `model.json` with no sibling log is migrated once (genesis, folding a sibling
+///     `comments.jsonl`) and the fresh log is served.
+///
+/// This is what kills legacy mode: `serve` never opens a `model.json` for writing, so the old
+/// `comments.jsonl` append path — and its "structural gestures stored as dead comments" defect —
+/// cannot be reached.
+fn serve_log_path(source: &Path) -> Result<std::path::PathBuf, String> {
+    if events::is_log_path(source) {
+        return Ok(source.to_path_buf());
+    }
+    let log = log_beside(source);
+    if log.exists() {
+        println!(
+            "{} exists beside {} — serving the log (it is the truth; the model is derived)",
+            log.display(),
+            source.display()
+        );
+        return Ok(log);
+    }
+    let report = write_genesis(source)?;
+    println!("{}", report.summary());
+    Ok(report.out)
 }
 
 /// Fold an event log to a minimal snapshot — a `LogCompacted` marker plus the genesis batch of
@@ -260,4 +378,114 @@ fn print_help() {
          SOURCE is a model.json or an event log (*.jsonl / *.log); it defaults to ./model.json.",
         env!("CARGO_PKG_VERSION")
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MODEL: &str =
+        r#"{"title":"T","elements":[{"id":"E1","type":"event","label":"Hello","col":0}]}"#;
+
+    /// A fresh, empty scratch directory unique to this tag (all tests share one process id, so the
+    /// tag keeps parallel tests apart).
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("faceto-mt-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn log_beside_is_the_sibling_event_log() {
+        assert_eq!(
+            log_beside(Path::new("/a/b/model.json")),
+            PathBuf::from("/a/b/event-log.jsonl")
+        );
+        // A bare filename resolves against ".".
+        assert_eq!(
+            log_beside(Path::new("model.json")),
+            PathBuf::from("./event-log.jsonl")
+        );
+    }
+
+    #[test]
+    fn write_genesis_refuses_to_clobber_an_existing_log() {
+        // The exclusive-create write must fail rather than truncate the append-only truth log.
+        let dir = scratch("clobber");
+        let model = dir.join("model.json");
+        std::fs::write(&model, MODEL).unwrap();
+        let log = dir.join("event-log.jsonl");
+        std::fs::write(&log, "PRIOR\n").unwrap();
+
+        assert!(write_genesis(&model).is_err());
+        // The prior log is byte-for-byte intact — not truncated.
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "PRIOR\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_genesis_folds_then_archives_the_inbox_one_shot() {
+        // A sibling comments.jsonl is folded once, then renamed so a later re-genesis (after the
+        // log is deleted) cannot re-fold — and resurrect — feedback already on the board.
+        let dir = scratch("inbox");
+        let model = dir.join("model.json");
+        std::fs::write(&model, MODEL).unwrap();
+        let comments = dir.join("comments.jsonl");
+        std::fs::write(
+            &comments,
+            "{\"elemId\":\"E1\",\"kind\":\"comment\",\"text\":\"note\"}\n",
+        )
+        .unwrap();
+
+        let report = write_genesis(&model).unwrap();
+        assert_eq!(report.folded_len, 1);
+        assert!(report.archived_inbox.is_some());
+        assert!(!comments.exists(), "inbox should be renamed away");
+        assert!(dir.join("comments.jsonl.migrated").exists());
+
+        // Delete the log and re-run: the inbox is gone, so nothing re-folds.
+        std::fs::remove_file(dir.join("event-log.jsonl")).unwrap();
+        let again = write_genesis(&model).unwrap();
+        assert_eq!(again.folded_len, 0);
+        assert!(again.archived_inbox.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn serve_log_path_passes_a_log_through_untouched() {
+        // An event-log source is served as-is — no filesystem access, no migration.
+        let p = Path::new("/nowhere/event-log.jsonl");
+        assert_eq!(serve_log_path(p).unwrap(), p.to_path_buf());
+    }
+
+    #[test]
+    fn serve_log_path_redirects_a_model_to_its_existing_log() {
+        // When a log already sits beside the model, it wins and is returned unchanged.
+        let dir = scratch("redirect");
+        let model = dir.join("model.json");
+        std::fs::write(&model, MODEL).unwrap();
+        let log = dir.join("event-log.jsonl");
+        std::fs::write(&log, "PRIOR\n").unwrap();
+
+        assert_eq!(serve_log_path(&model).unwrap(), log);
+        // The redirect must not rewrite the log.
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "PRIOR\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn serve_log_path_migrates_a_bare_model() {
+        // No sibling log → genesis runs once and the fresh log is what gets served.
+        let dir = scratch("migrate");
+        let model = dir.join("model.json");
+        std::fs::write(&model, MODEL).unwrap();
+
+        let served = serve_log_path(&model).unwrap();
+        assert_eq!(served, dir.join("event-log.jsonl"));
+        assert!(served.exists());
+        // It replays back to the one-element board.
+        assert_eq!(events::load(&served).unwrap().elements.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
