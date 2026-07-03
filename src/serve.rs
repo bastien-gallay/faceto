@@ -154,6 +154,31 @@ impl Ctx {
         Self::write_line(&self.model_path, &events::line(&ev)).map_err(|e| e.to_string())?;
         Ok(ev)
     }
+
+    /// Mint the right-half id and append a `PhaseSplit` — the partition's "add" (F-region-frontiers).
+    /// The split target `id` keeps its left half; the minted `new_id` (same namespace as
+    /// `append_region_add`, so the two never collide) takes the right half with `new_label`. Minted
+    /// and written under `appends`, so a concurrent add/split can't race the id. `replay` guards the
+    /// column range, so an out-of-range split simply folds to a no-op.
+    fn append_phase_split(
+        &self,
+        id: String,
+        at_col: i64,
+        new_label: String,
+    ) -> Result<events::Event, String> {
+        let _guard = self.appends.lock().unwrap();
+        let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&raw);
+        let log = events::parse_log(&text)?;
+        let ev = events::Event::PhaseSplit {
+            id,
+            at_col,
+            new_id: mint_region_id(&log),
+            new_label,
+        };
+        Self::write_line(&self.model_path, &events::line(&ev)).map_err(|e| e.to_string())?;
+        Ok(ev)
+    }
 }
 
 /// The single letter each lane stamps onto a freshly minted id. The 8-lane prefixes come from
@@ -195,8 +220,16 @@ fn mint_id(kind: &str, log: &[events::Event]) -> String {
 fn mint_region_id(log: &[events::Event]) -> String {
     let mut max_region = 0u32;
     for ev in log {
-        if let events::Event::PhaseAdded { id, .. } = ev {
-            model::resolve_region_id(id.as_deref(), &mut max_region);
+        match ev {
+            events::Event::PhaseAdded { id, .. } => {
+                model::resolve_region_id(id.as_deref(), &mut max_region);
+            }
+            // A split mints a new region id too (F-region-frontiers); fold it through the same
+            // watermark so a later add/split never re-mints a suffix already spent by a split.
+            events::Event::PhaseSplit { new_id, .. } => {
+                model::resolve_region_id(Some(new_id), &mut max_region);
+            }
+            _ => {}
         }
     }
     format!("K{}", max_region.saturating_add(1))
@@ -350,14 +383,17 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
             let text = String::from_utf8_lossy(&buf);
             match json::parse(&text) {
                 Ok(v @ json::Json::Obj(_))
-                    if matches!(v.get_str("kind"), Some("add") | Some("region-add")) =>
+                    if matches!(
+                        v.get_str("kind"),
+                        Some("add") | Some("region-add") | Some("phase-split")
+                    ) =>
                 {
-                    // Both need a server-minted id (H6 / review #3), so both go through the
-                    // same mint-and-respond path — only which append fn mints differs.
-                    let result = if v.get_str("kind") == Some("add") {
-                        add_from_comment(&ctx, &v)
-                    } else {
-                        add_region_from_comment(&ctx, &v)
+                    // All three need a server-minted id (H6 / review #3 / F-region-frontiers), so
+                    // they share the mint-and-respond path — only which append fn mints differs.
+                    let result = match v.get_str("kind") {
+                        Some("add") => add_from_comment(&ctx, &v),
+                        Some("region-add") => add_region_from_comment(&ctx, &v),
+                        _ => split_region_from_comment(&ctx, &v),
                     };
                     match result {
                         Ok(ev) => {
@@ -483,6 +519,20 @@ fn add_region_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u
         return Err(400u16);
     }
     ctx.append_region_add(label, from_col, to_col)
+        .map_err(|_| 500u16)
+}
+
+/// Handle a `kind:"phase-split"` post: divide the region `regionId` at `atCol` into two, the
+/// server minting the right half's id (F-region-frontiers, the partition's "add"). A non-empty
+/// `text` (the new right-half label) and an `atCol` are required; whether the column falls strictly
+/// inside the phase is enforced in `replay` (an out-of-range split folds to a no-op), so the border
+/// rule lives in one place. Returns the HTTP status to fail with: `400` for a missing label or
+/// atCol, `500` if the append itself fails.
+fn split_region_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
+    let id = v.get_str("regionId").map(str::to_string).ok_or(400u16)?;
+    let label = v.get_str("text").and_then(events::nonblank).ok_or(400u16)?;
+    let at_col = v.get_i64("atCol").ok_or(400u16)?;
+    ctx.append_phase_split(id, at_col, label)
         .map_err(|_| 500u16)
 }
 
@@ -685,6 +735,53 @@ mod tests {
         let k2 = model.phases.iter().find(|p| p.id == "K2").unwrap();
         assert_eq!(k2.label, "Checkout");
         assert_eq!((k2.from_col, k2.to_col), (3, 6));
+    }
+
+    #[test]
+    fn mint_region_id_reserves_split_ids() {
+        // A split's minted right-half id lives in the same namespace; the next mint must skip it.
+        let log = [
+            region_added("K1", 0, 5),
+            events::Event::PhaseSplit {
+                id: "K1".into(),
+                at_col: 3,
+                new_id: "K2".into(),
+                new_label: "Right".into(),
+            },
+        ];
+        assert_eq!(mint_region_id(&log), "K3", "K2 is spent by the split");
+    }
+
+    #[test]
+    fn append_phase_split_mints_the_right_half_and_replays_to_a_partition() {
+        let path =
+            std::env::temp_dir().join(format!("faceto-split-h6-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, events::line(&region_added("K1", 0, 5)) + "\n").unwrap();
+        let ctx = Ctx::new(path.clone());
+
+        let ev = ctx
+            .append_phase_split("K1".into(), 3, "Right".into())
+            .unwrap();
+        assert!(matches!(
+            &ev,
+            events::Event::PhaseSplit { id, at_col: 3, new_id, new_label }
+                if id == "K1" && new_id == "K2" && new_label == "Right"
+        ));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        let model = events::replay(&events::parse_log(&text).unwrap());
+        let spans: Vec<_> = model
+            .phases
+            .iter()
+            .map(|p| (p.id.as_str(), p.from_col, p.to_col))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![("K1", 0, 2), ("K2", 3, 5)],
+            "split carves K1 in two, contiguous partition preserved"
+        );
     }
 
     #[test]

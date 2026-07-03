@@ -27,7 +27,7 @@
   /* Drag-to-move owns horizontal touch travel on a box or a region edge — without this the browser
      claims the gesture to pan #board and pointercancels the drag. Labels are UI glass, not a text
      document: no selection, so a mouse drag can't smear highlight across the boxes it passes. */
-  .sticky, .region-edge { touch-action: none; }
+  .sticky, .frontier { touch-action: none; }
   #board svg { user-select: none; -webkit-user-select: none; }
   .edge, .sticky { transition: opacity .15s ease-out; }
   .edge.hl { stroke: #2f3c45; opacity: 1 !important; stroke-width: 2.4; }
@@ -98,11 +98,12 @@
      the keyboard-armed path — where the tab is both focused and armed, and danger must win. */
   .region-tab.arming rect { stroke: #b4232a; stroke-width: 2; stroke-dasharray: 5 3; }
   .region-rail { cursor: pointer; }
-  /* The resize handle is a transparent 8px hit-line on the band edge (render.rs) — it needs a
-     cursor or nothing signals it can be grabbed. ew-resize is the universal "drag this edge" hint. */
-  .region-edge { cursor: ew-resize; }
-  /* Resize drag guide: a thin ink-blue line that follows the cursor, snapped to the column the
-     drop would land on (F-inline-edit's live-pen accent, applied to a region boundary instead of
+  /* A frontier is a transparent 8px hit-line on a partition boundary (render.rs, F-region-frontiers)
+     — it needs a cursor or nothing signals it can be grabbed. ew-resize is the universal "drag this
+     edge" hint; dragging it re-borders the two neighbouring phases atomically. */
+  .frontier { cursor: ew-resize; }
+  /* Resize drag guide: a thin ink-blue line that follows the cursor, snapped to the boundary the
+     drop would land on (F-inline-edit's live-pen accent, applied to a region frontier instead of
      a label). No transition — a drag must track the cursor instantly. */
   #region-drag-guide { position: fixed; display: none; z-index: 18; width: 2px; background: #1A6FAE;
                         opacity: .8; pointer-events: none; }
@@ -216,8 +217,8 @@
     <div><kbd>Delete</kbd></div><div class="act">remove — press again to confirm, Esc keeps</div>
     <div><kbd>⌘/Ctrl</kbd> <kbd>Z</kbd></div><div class="act">undo the last move or rename</div>
     <div><kbd>Esc</kbd></div><div class="act">cancel a drag, a rename, or an armed remove</div>
-    <div><kbd>drag</kbd></div><div class="act">a box moves along the timeline; drop on an occupied slot to stack above / below (the lane grows); a region edge resizes</div>
-    <div><kbd>region</kbd></div><div class="act">tab: click renames, <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> resizes, <kbd>Delete</kbd> removes; hover a gap to add</div>
+    <div><kbd>drag</kbd></div><div class="act">a box moves along the timeline; drop on an occupied slot to stack above / below (the lane grows); a frontier drags to re-border two phases</div>
+    <div><kbd>region</kbd></div><div class="act">tab: click renames, <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> resizes, <kbd>Delete</kbd> merges into the neighbour; hover a band to split, empty board to add</div>
     <div><kbd>?</kbd></div><div class="act">this sheet</div>
   </div>
 </dialog>
@@ -230,7 +231,8 @@ const CFG = __CONFIG__;   // { colW, stickyW, stickyH, regionTab… } — geomet
 // belongs here: it edits the model's label, it is not a note — counting it as feedback painted
 // a permanent has-note ring and leaked "[rename]" lines into the channel the next session reads.
 const STRUCTURAL_KINDS = new Set([
-  "move", "add", "drop", "rename", "region-add", "region-resize", "region-rename", "region-remove",
+  "move", "add", "drop", "rename", "region-add", "region-rename", "region-remove",
+  "frontier-move", "phase-split",   // F-region-frontiers: resize = move a frontier, add = split a phase
 ]);
 // Of those, add/drop/region-* have no client-side fallback: there is no id to mint, or nothing to
 // remove/resize/rename locally without a server round-trip. `move` is the one exception — it
@@ -500,7 +502,7 @@ let stickyDrag = null;      // { id, pointerId, startX, startY, startCy, fromCol
                             //   col, frac, moved } while dragging, else null
 // One predicate for "a gesture owns the board" (inline edit, add, either drag): every gesture
 // entry point checks it, so mutual exclusion is one flag added here — not an edit at five sites.
-function gestureBusy() { return !!(renaming || adding || regionDrag || stickyDrag); }
+function gestureBusy() { return !!(renaming || adding || frontierDrag || stickyDrag); }
 function hideGlyphs() { document.querySelectorAll(".hovglyph.show").forEach((b) => b.classList.remove("show")); }
 // The column index whose centre is nearest an SVG-space x, searching the occupied span plus one
 // past each end (colCenter interpolates the empty ones at the default pitch) — snap-to-grid.
@@ -623,7 +625,7 @@ function endStickyDrag(e) {
 // enforces (events::nonblank) is applied here, and an unchanged label is a no-op, so a slip never
 // posts a dead event. `renaming` holds the open edit (and silences the board's move/remove keys).
 // A region's label tab reuses the same editor and function (`region` true), keyed by `regionId`
-// instead of `elemId` — a region isn't an element (F-container Stage 6). `regionDrag` also gates
+// instead of `elemId` — a region isn't an element (F-container Stage 6). `frontierDrag` also gates
 // this: a resize drag captures the pointer, but the keyboard (F2) isn't captured, so a rename must
 // not open mid-drag either (review: the two gestures had no mutual exclusion).
 let renaming = null;   // { id, original, region? } while editing, else null
@@ -763,17 +765,18 @@ function armRegion(regionId, tab) {
 const regionXBtn = graceGlyph($("#region-x"),
   (rid) => armRegion(rid, document.querySelector(`.region-tab[data-region="${rid}"]`)));
 
-// Keyboard resize parity for regions: Shift+←/→ on a focused region tab nudges its right (`to`)
-// edge in/out one column, posting the same kind:"region-resize" the edge-drag posts. Clamped so the
-// edge can't cross the region's start (mirrors events::valid_span). Region *create* stays a mouse
-// gesture — the rail has no single focus target — and is disclosed in the shortcut sheet.
+// Keyboard resize parity for regions: Shift+←/→ on a focused region tab nudges its right frontier
+// (the `"end"` edge) in/out one column, posting the same kind:"frontier-move" the frontier drag
+// posts — `replay`'s normalize re-borders the neighbour. Clamped so the phase keeps ≥1 column; a
+// grow past the neighbour is safe (normalize absorbs it) but the last phase's grow extends the
+// board. Region *create* stays a mouse gesture (hover a band to split) — disclosed in the sheet.
 function resizeRegionByKey(regionId, delta) {
   const b = regionBounds[regionId];
   if (!b) return;
   const toCol = b.to + delta;
-  if (toCol <= b.from) { note("region already at its smallest"); return; }
+  if (toCol < b.from) { note("region already at its smallest"); return; }
   note("region resized");
-  postComment({ regionId, kind: "region-resize", fromCol: b.from, toCol, ts: new Date().toISOString(), status: "open" });
+  postComment({ regionId, kind: "frontier-move", edge: "end", col: toCol, ts: new Date().toISOString(), status: "open" });
 }
 
 // ---- inline add (the + affordance) ----------------------------------------
@@ -823,6 +826,15 @@ function endAdd(commit) {
   if (!commit) { note("add cancelled"); return; }
   if (!text) { note("add needs a label — nothing added"); return; }   // mirrors the server guard
   const ts = new Date().toISOString();
+  // Split an existing phase in two (F-region-frontiers "add"): the server mints the right half's
+  // id, `text` names it, the original keeps the left half.
+  if (a.split) {
+    note("phase split");
+    postComment({ kind: "phase-split", regionId: a.regionId, atCol: a.atCol, text, ts, status: "open" });
+    return;
+  }
+  // First phase on an empty board: create one spanning the whole board (region-add). Once a phase
+  // exists the partition covers every column, so further phases come only from a split.
   if (a.region) {
     note("region added");
     postComment({ kind: "region-add", text, fromCol: a.fromCol, toCol: a.toCol, ts, status: "open" });
@@ -847,20 +859,18 @@ function bindLaneAdders() {
   });
 }
 
-// ---- region gestures (F-container Stage 6) --------------------------------
-// Create: hovering a `region-rail` cell (render.rs — one invisible hit-rect per visible column,
-// painted *under* any live region so a gap between/around regions is the only place it shows
-// through) reveals the same + as an element add; clicking it opens the same inline editor,
-// `endAdd` posting kind:"region-add" for a one-column-wide span at that col.
-// Rename: clicking (or Enter/Space on) the label tab opens the same editor, keyed by regionId.
-// Resize: dragging a `region-edge` hit-line (render.rs) picks a new boundary column, snapped to
-// the exact rail-cell edges the server itself renders — no pixel-to-column guessing needed, the
-// true bounds are read straight off the DOM (readRegionRail). `regionBounds` mirrors `baseCol` for
-// stickies: a snapshot of each region's current `[from, to]`, refreshed on every board swap.
-// regionBounds only tracks *live* regions (`.region:not(.removed)`) — a removed region's group
-// still carries `data-region`/`data-from-col`/`data-to-col` (so a diff overlay can identify it),
-// but nothing on the new side can resize/rename it, so its bounds have no business in a map every
-// live gesture reads by regionId.
+// ---- region gestures (F-region-frontiers) ---------------------------------
+// Regions are a contiguous partition, edited through their shared frontiers:
+// • Resize  — drag a `.frontier` hit-line (render.rs) to a column boundary; posts kind:"frontier-move"
+//             and `replay`'s normalize re-borders the neighbour atomically (no hole, no overlap).
+// • Split   — hover a region's band (not a sticky, not a frontier) → a + at the hovered column;
+//             clicking names the new right half, posting kind:"phase-split" (server mints its id).
+// • Create  — on an EMPTY board only, the rail's + makes the first full-width phase (region-add).
+// • Rename  — click / Enter on the label tab (keyed by regionId).
+// • Merge   — the tab × / Delete removes a phase; the partition absorbs its columns into the
+//             neighbour (region-remove + normalize). No directional-merge gesture in v1.
+// `regionBounds` snapshots each *live* region's `[from, to]` (refreshed per board swap) for the
+// keyboard resize + the split guard; a removed region's group is a diff-overlay ghost only.
 let regionBounds = {};      // regionId -> { from, to }
 let railLeft = {}, railRight = {};   // col -> its rail cell's left/right x, in SVG user units
 function readRegionRail() {
@@ -871,70 +881,70 @@ function readRegionRail() {
     railRight[col] = railLeft[col] + +r.getAttribute("width");
   });
 }
+function svgLeftPx() { return document.querySelector("#board svg").getBoundingClientRect().left; }
 // The column whose rail cell contains SVG-space x, or the nearest end column if x falls outside
-// every rail cell (dragged past the board's edge). The rail only covers the element-derived
-// column range, but render.rs now clamps each region's own data-from-col/data-to-col into that
-// same range (review: emitting the raw unclamped bound here let a drag target a column with no
-// rail cell, silently discarding an off-screen region's true extent) — so every bound this
-// function needs to resolve is always addressable.
+// every rail cell. render.rs clamps each region's own bounds into the rail's covered range, so a
+// column this resolves is always addressable.
 function colAtSvgX(x) {
   const cols = Object.keys(railLeft).map(Number).sort((a, b) => a - b);
   if (!cols.length) return null;
   for (const c of cols) if (x >= railLeft[c] && x < railRight[c]) return c;
   return x < railLeft[cols[0]] ? cols[0] : cols[cols.length - 1];
 }
+// The column *boundary* nearest SVG-space x, as { b, x }. Boundaries number one more than columns:
+// each column's left edge is boundary `b = col`; the last column's right edge is `b = last + 1`
+// (the board's right end). A frontier drag snaps to these, so it can reach the right board edge —
+// which a column-only snap (colAtSvgX clamps to the last column) never could.
+function boundaryAtSvgX(x) {
+  const cols = Object.keys(railLeft).map(Number).sort((a, b) => a - b);
+  if (!cols.length) return null;
+  const cands = cols.map((c) => ({ b: c, x: railLeft[c] }));
+  const last = cols[cols.length - 1];
+  cands.push({ b: last + 1, x: railRight[last] });
+  return cands.reduce((best, c) => (Math.abs(c.x - x) < Math.abs(best.x - x) ? c : best));
+}
 const dragGuide = $("#region-drag-guide");
-let regionDrag = null;   // { regionId, edge, otherCol, svgLeft, col? } while dragging, else null
-// Pointer Events + setPointerCapture (not mousedown/mousemove/mouseup on document): once captured,
-// every subsequent pointer event for this gesture — including its pointerup — is delivered to
-// `line` regardless of where the cursor ends up, even outside the browser window. Review: a plain
-// document-level mouseup misses entirely if the button is released off-window, leaking `regionDrag`
-// and the drag guide forever (no cleanup path existed for that case).
-function startRegionResize(e) {
+let frontierDrag = null;   // { regionId, edge, baseCol, svgLeft, pointerId, b? } while dragging
+// Pointer Events + setPointerCapture (the proven region-drag pattern): once captured every event —
+// including pointerup off-window — is delivered to the line, so the drag can never leak.
+function startFrontierDrag(e) {
   if (e.button !== 0 || gestureBusy()) return;
   e.preventDefault();
   const line = e.currentTarget;
-  const bounds = regionBounds[line.dataset.region];
-  if (!bounds) return;
-  const otherCol = line.dataset.edge === "from" ? bounds.to : bounds.from;
-  const svgLeft = document.querySelector("#board svg").getBoundingClientRect().left;
-  // Capture before any state — same leak guard as startStickyDrag: a throw here must not leave
-  // a regionDrag flag (or the guide) behind to gate every other gesture.
+  const svgLeft = svgLeftPx();
+  // Capture before any state — a throw here must not leave a frontierDrag flag (or the guide)
+  // behind to gate every other gesture.
   try { line.setPointerCapture(e.pointerId); } catch { return; }
-  regionDrag = { regionId: line.dataset.region, edge: line.dataset.edge, otherCol, svgLeft, pointerId: e.pointerId };
-  const bandRect = line.getBoundingClientRect();   // the edge line already spans band_top..band_bot
+  frontierDrag = { regionId: line.dataset.region, edge: line.dataset.edge, baseCol: +line.dataset.col, svgLeft, pointerId: e.pointerId };
+  const bandRect = line.getBoundingClientRect();   // the frontier line already spans band_top..band_bot
   Object.assign(dragGuide.style, { top: `${bandRect.top}px`, height: `${bandRect.height}px`, display: "block" });
-  line.addEventListener("pointermove", dragRegionEdge);
-  line.addEventListener("pointerup", endRegionResize);
-  line.addEventListener("pointercancel", endRegionResize);
+  line.addEventListener("pointermove", dragFrontier);
+  line.addEventListener("pointerup", endFrontierDrag);
+  line.addEventListener("pointercancel", endFrontierDrag);
 }
-function dragRegionEdge(e) {
-  if (!regionDrag || e.pointerId !== regionDrag.pointerId) return;   // see dragSticky
-  const col = colAtSvgX(e.clientX - regionDrag.svgLeft);
-  if (col === null) return;
-  // Clamp so the dragged edge can never cross the fixed other edge (mirrors events::valid_span —
-  // the client never even offers an invalid target, rather than posting one the server rejects).
-  regionDrag.col = regionDrag.edge === "from"
-    ? Math.min(col, regionDrag.otherCol - 1)
-    : Math.max(col, regionDrag.otherCol + 1);
-  const x = regionDrag.edge === "from" ? railLeft[regionDrag.col] : railRight[regionDrag.col];
-  dragGuide.style.left = `${regionDrag.svgLeft + x}px`;
+function dragFrontier(e) {
+  if (!frontierDrag || e.pointerId !== frontierDrag.pointerId) return;   // see dragSticky
+  const bnd = boundaryAtSvgX(e.clientX - frontierDrag.svgLeft);
+  if (!bnd) return;
+  frontierDrag.b = bnd.b;
+  dragGuide.style.left = `${frontierDrag.svgLeft + bnd.x}px`;
 }
-function endRegionResize(e) {
-  if (regionDrag && e.pointerId !== regionDrag.pointerId) return;   // another finger lifting, not ours
-  e.currentTarget.removeEventListener("pointermove", dragRegionEdge);
-  e.currentTarget.removeEventListener("pointerup", endRegionResize);
-  e.currentTarget.removeEventListener("pointercancel", endRegionResize);
+function endFrontierDrag(e) {
+  if (frontierDrag && e.pointerId !== frontierDrag.pointerId) return;   // another finger lifting, not ours
+  e.currentTarget.removeEventListener("pointermove", dragFrontier);
+  e.currentTarget.removeEventListener("pointerup", endFrontierDrag);
+  e.currentTarget.removeEventListener("pointercancel", endFrontierDrag);
   dragGuide.style.display = "none";
-  const d = regionDrag;
-  regionDrag = null;
-  if (!d || d.col === undefined) return;   // pointerdown with no drag (or a cancel) — nothing to commit
-  const fromCol = d.edge === "from" ? d.col : d.otherCol;
-  const toCol = d.edge === "from" ? d.otherCol : d.col;
-  const bounds = regionBounds[d.regionId];
-  if (bounds && bounds.from === fromCol && bounds.to === toCol) { note("no change"); return; }
+  const d = frontierDrag;
+  frontierDrag = null;
+  if (!d || d.b === undefined) return;   // pointerdown with no drag (or a cancel) — nothing to commit
+  if (d.b === d.baseCol) { note("no change"); return; }
+  // A frontier at boundary `b` sits between columns b-1 and b: its left phase ends at b-1, its right
+  // phase starts at b. So a "start" edge posts the new from_col (= b); every other edge posts the new
+  // to_col (= b-1). normalize re-borders the neighbour from that single border.
+  const col = d.edge === "start" ? d.b : d.b - 1;
   note("region resized");
-  postComment({ regionId: d.regionId, kind: "region-resize", fromCol, toCol, ts: new Date().toISOString(), status: "open" });
+  postComment({ regionId: d.regionId, kind: "frontier-move", edge: d.edge, col, ts: new Date().toISOString(), status: "open" });
 }
 // Re-bound after every board swap, alongside the stickies and lane adders.
 function bindRegions() {
@@ -943,14 +953,21 @@ function bindRegions() {
   document.querySelectorAll(".region:not(.removed)").forEach((g) => {
     regionBounds[g.dataset.region] = { from: +g.dataset.fromCol, to: +g.dataset.toCol };
   });
-  document.querySelectorAll(".region-rail").forEach((r) => {
-    r.onmouseenter = () => {
-      const rect = r.getBoundingClientRect();
-      showPlus(rect.left + rect.width / 2 - 11, rect.top + 4,
-        { region: true, fromCol: +r.dataset.col, toCol: +r.dataset.col + 1, sx: rect.left + 2, sy: rect.top + 2 });
-    };
-    r.onmouseleave = hidePlusSoon;
-  });
+  // Create the FIRST phase (empty board): the rail shows through everywhere, its + spans the whole
+  // board. Once any phase exists the partition covers every column, so the rail is fully painted
+  // over and further phases come only from a split.
+  const cols = Object.keys(railLeft).map(Number).sort((a, b) => a - b);
+  if (!Object.keys(regionBounds).length && cols.length) {
+    const lo = cols[0], hi = Math.max(cols[cols.length - 1], lo + 1);   // ≥1 col wide (valid_span)
+    document.querySelectorAll(".region-rail").forEach((r) => {
+      r.onmouseenter = () => {
+        const rect = r.getBoundingClientRect();
+        showPlus(rect.left + rect.width / 2 - 11, rect.top + 4,
+          { region: true, fromCol: lo, toCol: hi, sx: rect.left + 2, sy: rect.top + 2 });
+      };
+      r.onmouseleave = hidePlusSoon;
+    });
+  }
   document.querySelectorAll(".region-tab").forEach((g) => {
     g.onclick = () => startRename(g, true);
     g.onkeydown = (e) => {
@@ -968,8 +985,25 @@ function bindRegions() {
     };
     g.onmouseleave = () => regionXBtn.hideSoon();
   });
-  document.querySelectorAll(".region-edge").forEach((edge) => {
-    edge.onpointerdown = startRegionResize;
+  // Split affordance: a + follows the cursor over a region's band, snapped to the column boundary a
+  // split would create. Guarded to columns strictly inside the phase (a split at its very start is a
+  // no-op, and leaves the label tab's corner alone). Frontiers and stickies paint over the band, so
+  // hovering a boundary gives the resize cursor and hovering a sticky its own glyphs — the + shows
+  // only in the open band, exactly where a new boundary makes sense.
+  document.querySelectorAll(".region:not(.removed)").forEach((g) => {
+    g.onmousemove = (e) => {
+      if (gestureBusy()) return;
+      const b = regionBounds[g.dataset.region];
+      if (!b) return;
+      const col = colAtSvgX(e.clientX - svgLeftPx());
+      if (col === null || col <= b.from || col > b.to) { hidePlusSoon(); return; }
+      showPlus(svgLeftPx() + railLeft[col] - 11, e.clientY - 11,
+        { split: true, regionId: g.dataset.region, atCol: col, sx: svgLeftPx() + railLeft[col] + 4, sy: e.clientY - 6 });
+    };
+    g.onmouseleave = hidePlusSoon;
+  });
+  document.querySelectorAll(".frontier").forEach((line) => {
+    line.onpointerdown = startFrontierDrag;
   });
 }
 
@@ -984,11 +1018,11 @@ function bindRegions() {
 // retries forever — turning Reload itself into a silent infinite no-op. Force-clear and move on.
 function whenNoDrag(fn) {
   if (stickyDrag && !document.getElementById(stickyDrag.id)?.hasPointerCapture(stickyDrag.pointerId)) stickyDrag = null;
-  if (regionDrag && !document.querySelector(`.region-edge[data-region="${regionDrag.regionId}"][data-edge="${regionDrag.edge}"]`)?.hasPointerCapture(regionDrag.pointerId)) {
-    regionDrag = null;
+  if (frontierDrag && !document.querySelector(`.frontier[data-region="${frontierDrag.regionId}"][data-edge="${frontierDrag.edge}"]`)?.hasPointerCapture(frontierDrag.pointerId)) {
+    frontierDrag = null;
     dragGuide.style.display = "none";
   }
-  stickyDrag || regionDrag ? setTimeout(() => whenNoDrag(fn), 150) : fn();
+  stickyDrag || frontierDrag ? setTimeout(() => whenNoDrag(fn), 150) : fn();
 }
 // The ids this client just wrote, so the next version bump reads as "my edit landed" (a plain
 // refresh + settle pulse) rather than foreign change (the diff overlay). The freshness window
@@ -1017,7 +1051,7 @@ async function postComment(c) {
 // Reload: re-pull comments, and when the model changed under us, redraw the board with the
 // changes-since-you-last-looked overlay (diffed against the version currently on screen).
 async function load() {
-  if (stickyDrag || regionDrag) { whenNoDrag(load); return; }   // defer the swap, keep the gesture
+  if (stickyDrag || frontierDrag) { whenNoDrag(load); return; }   // defer the swap, keep the gesture
   serverLive = false;
   try {
     const r = await fetch("/comments", { cache: "no-store" });
@@ -1136,7 +1170,7 @@ function bindStickies() {
   hideGlyphs();
   hoverOff();
   if (stickyDrag) { stickyDrag = null; growGuide.style.display = "none"; }
-  if (regionDrag) { regionDrag = null; dragGuide.style.display = "none"; }
+  if (frontierDrag) { frontierDrag = null; dragGuide.style.display = "none"; }
   buildGraph();
   readLayout();
   document.querySelectorAll(".sticky").forEach((g) => {
@@ -1282,7 +1316,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && regionArm) { e.preventDefault(); disarmRegion(); return; }
   // Escape bails out of a live drag before anything else: snap back, release the pointer,
   // nothing posted. Clearing the flag first makes the release's lostpointercapture a no-op.
-  if (e.key === "Escape" && (stickyDrag || regionDrag)) {
+  if (e.key === "Escape" && (stickyDrag || frontierDrag)) {
     e.preventDefault();
     if (stickyDrag) {
       const d = stickyDrag, g = document.getElementById(d.id);
@@ -1294,10 +1328,10 @@ document.addEventListener("keydown", (e) => {
       applyLayout();
       g?.focus();
     } else {
-      const d = regionDrag;
-      regionDrag = null;
+      const d = frontierDrag;
+      frontierDrag = null;
       dragGuide.style.display = "none";
-      const line = document.querySelector(`.region-edge[data-region="${d.regionId}"][data-edge="${d.edge}"]`);
+      const line = document.querySelector(`.frontier[data-region="${d.regionId}"][data-edge="${d.edge}"]`);
       try { line?.releasePointerCapture(d.pointerId); } catch {}
     }
     return;

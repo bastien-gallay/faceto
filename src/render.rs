@@ -689,28 +689,16 @@ pub fn render_svg(model: &Model) -> String {
             "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1\"{}/>",
             x, band_top, right, band_top, top_stroke, dash
         ));
-        for (edge_x, edge) in [(x, "from"), (right, "to")] {
-            p.push(format!(
-                "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1.5\"{}/>",
-                edge_x, band_top, edge_x, band_bot, stroke, dash
-            ));
-            // A wide transparent hit-region carries the resize affordance for the Stage-6 client to
-            // grab (the *visual* half of D5: grab target = the band border, not a sticky). A removed
-            // region is gone on the new side — there is nothing to resize, so no handle. The dragged
-            // edge's own bound is resolved client-side from the rail cell under the cursor, not from
-            // an attribute here — only the enclosing `<g>`'s `data-from-col`/`data-to-col` carry a
-            // stored bound (the *other*, undragged edge's).
-            if !removed {
+        // The band's vertical sides. A *live* region's sides are the partition's frontiers, drawn
+        // once (deduped) by the frontier pass after this loop — a boundary is shared by two
+        // neighbours, so drawing it per-region is exactly the doubled/overlapping-edge bug
+        // F-region-frontiers kills. Only a *removed* ghost — not part of the partition — draws its
+        // own faint, non-grabbable sides here so the diff overlay still outlines where it was.
+        if removed {
+            for edge_x in [x, right] {
                 p.push(format!(
-                    "<line class=\"region-edge\" data-region=\"{}\" data-edge=\"{}\" \
-                     x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"transparent\" \
-                     stroke-width=\"8\"/>",
-                    esc(&ph.id),
-                    edge,
-                    edge_x,
-                    band_top,
-                    edge_x,
-                    band_bot
+                    "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1.5\"{}/>",
+                    edge_x, band_top, edge_x, band_bot, stroke, dash
                 ));
             }
         }
@@ -770,6 +758,65 @@ pub fn render_svg(model: &Model) -> String {
             p.push("</g>".to_string());
         }
         p.push("</g>".to_string());
+    }
+
+    // Frontier lines — the grabbable boundaries of the contiguous partition (F-region-frontiers).
+    // Live phases are sorted and contiguous, so each internal boundary is shared by two neighbours
+    // and drawn *once* (killing the doubled/overlapping edges the independent-span model produced).
+    // Every frontier maps to the one (region, edge) the client posts as a `FrontierMoved`: the
+    // leftmost board edge is the first phase's `"start"`; every other frontier — internal or the
+    // rightmost board edge — is a phase's `"end"`, so a drag re-borders exactly one phase and
+    // `replay`'s `normalize` follows the neighbour. `data-col` is the boundary column the frontier
+    // sits *before* (its left side); the rightmost board edge sits after the last column (+1). Bounds
+    // are clamped into the present range so the client's drag math matches what's drawn (WYSIWYG).
+    let live: Vec<&crate::model::Phase> = model
+        .phases
+        .iter()
+        .filter(|p| p.diff.as_deref() != Some("removed"))
+        .collect();
+    if let (Some(first), Some(last)) = (live.first(), live.last()) {
+        let bx = |c: i64| col_left(clamp_idx(c)); // left x of a (clamped) column
+                                                  // (region_id, edge, boundary_col, x)
+        let mut frontiers: Vec<(&str, &str, i64, f64)> = vec![(
+            first.id.as_str(),
+            "start",
+            min_col + clamp_idx(first.from_col) as i64,
+            bx(first.from_col),
+        )];
+        for pair in live.windows(2) {
+            let r = pair[1];
+            frontiers.push((
+                pair[0].id.as_str(),
+                "end",
+                min_col + clamp_idx(r.from_col) as i64,
+                bx(r.from_col),
+            ));
+        }
+        frontiers.push((
+            last.id.as_str(),
+            "end",
+            min_col + clamp_idx(last.to_col) as i64 + 1,
+            col_left(clamp_idx(last.to_col)) + COL_W,
+        ));
+        for (id, edge, bcol, fx) in frontiers {
+            // Visible boundary (neutral instrument grey — a frontier is structural, shared by two
+            // regions; diff emphasis stays on each region's top rule + tab, not the shared line).
+            p.push(format!(
+                "<line x1=\"{fx:.1}\" y1=\"{band_top}\" x2=\"{fx:.1}\" y2=\"{band_bot}\" \
+                 stroke=\"#cfcfda\" stroke-width=\"1.5\"/>"
+            ));
+            // Wide transparent hit-line — the grab target (D5: the border, not a sticky), reusing
+            // the proven pointer-capture drag. `data-col` lets the client detect "no change" and
+            // resolve the post without inverse pixel math.
+            p.push(format!(
+                "<line class=\"frontier\" data-region=\"{}\" data-edge=\"{}\" data-col=\"{}\" \
+                 x1=\"{fx:.1}\" y1=\"{band_top}\" x2=\"{fx:.1}\" y2=\"{band_bot}\" \
+                 stroke=\"transparent\" stroke-width=\"8\"/>",
+                esc(id),
+                edge,
+                bcol
+            ));
+        }
     }
 
     // One pivotal node per unique boundary position (sorted for deterministic output; a node shared
@@ -1382,10 +1429,10 @@ mod tests {
     }
 
     // A region renders as a thin labelled outline (scope D1, calm instrument): a label tab carrying
-    // its name, two grabbable border edges keyed by region id + side (the visual half of D5), and a
+    // its name, grabbable partition frontiers keyed by region id + edge (F-region-frontiers), and a
     // pivotal node where an event sits on a boundary col (derived, scope D3).
     #[test]
-    fn region_renders_as_a_labelled_outline_with_grab_handles_and_pivotal_node() {
+    fn region_renders_as_a_labelled_outline_with_frontier_handles_and_pivotal_node() {
         let m = Model {
             title: "t".into(),
             phases: vec![phase("K1", "Context A", 0, 2, None)],
@@ -1395,9 +1442,14 @@ mod tests {
         };
         let svg = render_svg(&m);
         assert!(svg.contains(">Context A<"), "region label tab is missing");
-        // Both border edges carry the resize affordance, addressed by region id + side.
-        assert!(svg.contains("class=\"region-edge\" data-region=\"K1\" data-edge=\"from\""));
-        assert!(svg.contains("class=\"region-edge\" data-region=\"K1\" data-edge=\"to\""));
+        // A lone phase draws its two board-end frontiers: the leftmost is its "start", the rightmost
+        // its "end". `data-col` is the clamped boundary each sits before (start at col 0; the right
+        // board edge sits after the last visible column 1, so col 2).
+        assert!(svg
+            .contains("class=\"frontier\" data-region=\"K1\" data-edge=\"start\" data-col=\"0\""));
+        assert!(
+            svg.contains("class=\"frontier\" data-region=\"K1\" data-edge=\"end\" data-col=\"2\"")
+        );
         // The enclosing group carries the region's *clamped* bounds — K1's authored to_col (2) is
         // past the last visible column (elements only reach col 1), so the group reports the
         // clamped bound (1), matching the visual box exactly. Review: emitting the raw, unclamped
@@ -1415,6 +1467,40 @@ mod tests {
             svg.matches("<circle").count(),
             1,
             "expected one pivotal node"
+        );
+    }
+
+    // Two adjacent regions in the partition share their boundary: it is drawn as ONE grabbable
+    // frontier (the left region's "end"), not two overlapping edges. Three phases → four frontiers
+    // (two board ends + two internal), each addressable exactly once.
+    #[test]
+    fn adjacent_regions_share_a_single_frontier() {
+        let m = Model {
+            title: "t".into(),
+            phases: vec![
+                phase("K1", "A", 0, 1, None),
+                phase("K2", "B", 2, 3, None),
+                phase("K3", "C", 4, 5, None),
+            ],
+            elements: vec![el("E1", "event", 0), el("E2", "event", 5)],
+            edges: vec![],
+            diff_meta: None,
+        };
+        let svg = render_svg(&m);
+        assert_eq!(
+            svg.matches("class=\"frontier\"").count(),
+            4,
+            "3 phases → 4 frontiers, no doubled boundary"
+        );
+        // The K1|K2 boundary is the left region's "end" at col 2; the K2|K3 boundary K2's "end" at 4.
+        assert!(svg.contains("data-region=\"K1\" data-edge=\"end\" data-col=\"2\""));
+        assert!(svg.contains("data-region=\"K2\" data-edge=\"end\" data-col=\"4\""));
+        // No frontier is keyed to a *right* region's "start" for an internal boundary (that would be
+        // the doubled edge). Only the leftmost board edge is a "start".
+        assert_eq!(
+            svg.matches("data-edge=\"start\"").count(),
+            1,
+            "one board-left start only"
         );
     }
 
