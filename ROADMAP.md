@@ -26,7 +26,7 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | F-new-diagrams | new formats | ☐ | Parked | New diagram types: C4, User Story Mapping, BPMN. The long-term PRODUCT.md ambition; deferred until the event-storming board is excellent. |
 | F-model-smells | linting | ☐ | Parked | Detect model smells — orphans, loops, heavy bounded-contexts. Needs the F-container primitive and a graph pass; open once grouping exists. |
 | F-board-gestures | UI · direct edit | ✅ | **Now** | Richer on-element gestures layered over F-inline-add: **chromeless** bare ghost glyphs (`+` add · `×` remove · comment), not a floating toolbar (DESIGN §6); single-click focuses only (select-then-edit), double-click / F2 rename, drag left/right moves, `c` / comment glyph opens the modal. The modal then carries only prose actions, and `resolve` shows only on hotspots / open questions. Working note below; shipped 2026-07-01. |
-| F-region-frontiers | model · grouping | ☐ | Next | *(reshaped by feature-torture 2026-07-03 — frontier core only.)* Regions as a **contiguous partition defined by shared *frontiers***, not independent `[fromCol, toCol]` spans. One primitive: resize = move a frontier (both neighbours re-border atomically, one `FrontierMoved` event), add = *split* a phase, remove = *merge* two, the outermost frontiers resize the **whole board**. Kills by construction the hole / overlap / unreachable-edge confusions of the independent-span model. New **additive** kinds (`FrontierMoved` / `PhaseSplit` / `PhaseMerged` — never repurpose `PhaseResized`); `replay` normalizes any log — legacy spans included — to a contiguous partition via one pure, deterministic rule. **Cut from v1:** the pivot / interstice column (a layout seam co-owned with F-lane-flow (c) and F-floating-hotspots — shape jointly; until then the frontier draws on the column boundary) and move-region-as-reorder (deferred to a candidate F-region-reorder until a real session needs it). Model-spine change (`events.rs` frontier semantics + client rebind). Follows F-container; surfaced by dogfood 2026-07-02. Working note below; torture report: `.personal/feature-torture/reports/F-region-frontiers.md`. |
+| F-region-frontiers | model · grouping | ✅ | Next | *(reshaped by feature-torture 2026-07-03 — frontier core only; shipped 2026-07-03.)* Regions are now a **contiguous partition defined by shared *frontiers***, not independent `[fromCol, toCol]` spans. `model::normalize` — one pure, deterministic, idempotent sweep — projects **any** phase list (new frontier events *and* legacy spans with holes/overlaps) onto a gap-free, overlap-free partition, in **both** `replay` and `from_json`, so every `Model` obeys the invariant. Resize = drag a `.frontier` (`FrontierMoved {id, edge, col}`; normalize re-borders the neighbour atomically), add = **split** a phase (`PhaseSplit`, server-minted right-half id), remove = **merge** (`PhaseRemoved` + normalize absorbs the columns — no hole), the outermost frontiers resize the **whole board**. Kills by construction the hole / overlap / unreachable-edge confusions. **As-built deltas from the shaping** (see working note): `PhaseMerged` **deferred** (YAGNI — no v1 gesture picks merge direction; `PhaseRemoved`+normalize already merges); `FrontierMoved` carries an `edge` discriminator (moves *both* board ends); render draws **one** grabbable frontier per boundary (dedup), not two per-region edges. **Cut from v1 (unchanged):** the pivot / interstice column (co-owned with F-lane-flow (c) / F-floating-hotspots — frontier draws on the column boundary meanwhile) and move-region-as-reorder (→ candidate F-region-reorder). Model-spine change across all five files. Working note below; torture report: `.personal/feature-torture/reports/F-region-frontiers.md`. |
 | F-region-collapse | UI · legibility | ☐ | Later | Collapse / hide a region to concentrate readability: fold its stickies **and the edges that cross it** into a summarised band. Pure **view-state** — no model / event change — so it is orthogonal to F-region-frontiers and works under either border model. Surfaced alongside F-region-frontiers (dogfood 2026-07-02). |
 | F-2d-placement | model · layout | ✅ | **Now** | Replace the rows / columns / grid **packing** (and its dark grey group box — a poor 2D representation) with a **stored 2D sub-position**: keep `x = col` (global timeline) and `type = lane` — both invariants — but give each element a free **Y within its lane band** instead of auto-packing. Removes the packing control entirely and fixes two dogfood bugs: moving within a stacked group force-**swaps** (can't re-insert without displacing the survivor), and moving from / into a group **superposes**. Model change — `ElementMoved` gains the sub-position. Absorbs feedback #1 / #3 / #4 / #10. Shipped 2026-07-02 (PR #17); as-built note below. |
 | F-lane-flow | UI · legibility | ☐ | Next | Reorder the 8 lanes to the **canonical event-storming flow** (actor → command → aggregate / system → event → policy → … → read-model → UI → actor) so system and policy sit *near* events / commands, not at the bottom. Forks to shape: (a) reorder `LANES`; (b) **merge** adjacent lanes (aggregate+external, readmodel+policy) as an expandable *display grouping* — `type` still selects a pure lane, so the 8-colour grammar invariant holds; (c) alternate event / non-event **column cadence** — recoups the pivot / interstice column of F-region-frontiers, so shape together. Also shares the `LANES` / `colour` / `lane_prefix` seam with **F-floating-hotspots** (removes the hotspot lane) and **F-es-vocabulary** (adds `timer` / `process` lanes) — touch the lane set once, not three times. Feedback #2. |
@@ -256,6 +256,45 @@ the pointer-capture edge drag is already proven), and **move-region-as-reorder**
 real session needs it. Top open question: the deterministic normalization rule `replay` applies to
 legacy span logs with holes / overlaps. Full ADR + spec stub:
 `.personal/feature-torture/reports/F-region-frontiers.md`.
+
+**As built (2026-07-03, branch `feat/F-region-frontiers`).** Shipped across all five files; 5 stages,
+gate green. Three decisions departed from the shaping spec — each surfaced for review, none reversing
+the thesis:
+
+- **The normalization rule (the top open question), resolved.** `model::normalize` is one left→right
+  sweep: sort phases by `(from_col, to_col, id)`; anchor the board-left bound at the first phase's
+  `from_col`; then start each phase where the previous ended (+1) and keep its own `to_col` as the
+  right edge (clamped ≥1 col). Pure, deterministic, **idempotent** (a partition is its fixed point).
+  A clean partition renders byte-identically; a legacy overlap/hole resolves to a defined partition
+  (named diff, the accepted cost). Proven by an **800-seed property test** — random interleavings of
+  `PhaseAdded`/`PhaseResized`/`FrontierMoved`/`PhaseSplit`/`PhaseRemoved` never replay to a hole or
+  overlap. Placed in `model.rs` (domain-rules home) and called by **both** `replay` (log) and
+  `from_json` (bootstrap `model.json`), so **every `Model` is a partition** whatever the source — a
+  small scope extension beyond "replay normalizes", needed so render can trust a partition. The old
+  `region_of` "innermost-on-overlap" test became a "normalizes-overlap-into-a-partition" test:
+  overlaps are unrepresentable now.
+- **`PhaseMerged` deferred, not shipped.** Under the partition, `PhaseRemoved` + normalize already
+  merges (the neighbour absorbs the freed columns, no hole). A distinct `PhaseMerged` only earns its
+  keep with a gesture that picks merge **direction** / surviving label — and v1's remove (tab ×/
+  Delete) has none. So the two new kinds are **`FrontierMoved` + `PhaseSplit`**; `PhaseMerged` waits
+  with the deferred `F-region-reorder`. (YAGNI over the spec's "three kinds"; reversible.)
+- **`FrontierMoved { id, edge, col }` carries an `edge` (`"start"`/`"end"`).** The sweep anchors the
+  board-left bound and honours each `to_col`, so an internal frontier and the right board edge post
+  a left phase's `"end"`; only the leftmost frontier posts the first phase's `"start"`. It's the
+  clean way to move *both* board ends and is plainly not `PhaseResized` (which set both borders at
+  once — the span model we killed).
+
+**Render / client contract (interstice still cut).** Frontiers draw **on the column boundary**, one
+grabbable `<line class="frontier" data-region data-edge data-col>` per boundary (internal + two
+board ends) — the doubled/overlapping per-region edges are gone. Client rebind: drag a frontier →
+`frontier-move` (snaps to a column boundary via `boundaryAtSvgX`, reaching the right board edge a
+column-snap can't); **add = split** — hover a region's open band → a `+` at the hovered column →
+`phase-split` (server mints the right-half id); **create first phase** — on an empty board only, the
+rail's `+` makes one full-width phase; **remove = merge** — tab ×/Delete, unchanged `region-remove`.
+Split's discoverability (hover-band `+`) is the interstice's stand-in; revisit when the interstice
+lands with F-lane-flow (c). Live browser gesture testing was blocked (extension offline); verified via
+the server round-trip (all four gestures) + JS syntax + the Rust suite — **dogfood the drags** to
+confirm feel.
 
 ## Working note — dogfood batch (2026-07-02): layout, lanes, hotspots, headers, commit
 
