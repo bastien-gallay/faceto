@@ -334,18 +334,43 @@ pub fn replay(events: &[Event]) -> Model {
                     p.label = label.clone();
                 }
             }
-            Event::PhaseRemoved { id } => m.phases.retain(|p| &p.id != id),
-            Event::FrontierMoved { id, edge, col } => {
-                // Set the named border; `normalize` (after the fold) re-borders the neighbour so
-                // the partition stays gap-free. A `"start"` on a non-leftmost phase is harmless —
-                // `normalize` derives every inner `from_col` from the sweep and only honours the
-                // very first phase's start, so such a raw post simply no-ops.
-                if let Some(p) = m.phases.iter_mut().find(|p| &p.id == id) {
-                    if edge == "start" {
-                        p.from_col = *col;
-                    } else {
-                        p.to_col = *col;
+            Event::PhaseRemoved { id } => {
+                // Remove = merge under the partition. An interior phase's freed columns are absorbed
+                // by the neighbour `normalize` sweeps into; but a *board-end* phase would otherwise
+                // shrink the board and strand its columns (region-less), contradicting "merge into
+                // the neighbour". So when the removed phase held a board end, extend the outermost
+                // survivor to cover its span — the neighbour absorbs it either way.
+                if let Some(pos) = m.phases.iter().position(|p| &p.id == id) {
+                    let rem = m.phases.remove(pos);
+                    if !m.phases.is_empty() {
+                        if rem.from_col <= m.phases.iter().map(|p| p.from_col).min().unwrap() {
+                            let lo = m.phases.iter_mut().min_by_key(|p| p.from_col).unwrap();
+                            lo.from_col = lo.from_col.min(rem.from_col);
+                        }
+                        if rem.to_col >= m.phases.iter().map(|p| p.to_col).max().unwrap() {
+                            let hi = m.phases.iter_mut().max_by_key(|p| p.to_col).unwrap();
+                            hi.to_col = hi.to_col.max(rem.to_col);
+                        }
                     }
+                }
+            }
+            Event::FrontierMoved { id, edge, col } => {
+                // Set the named border; `normalize` (after the fold) re-borders the neighbour so the
+                // partition stays gap-free. `"start"` moves only the board-left bound — the current
+                // leftmost phase's `from_col`. Applying it to any other phase would change
+                // `normalize`'s sort key and *reorder* the timeline, so restrict it to the leftmost
+                // (a stray `"start"` on any other phase is then a true no-op, not a silent reorder).
+                if edge == "start" {
+                    let leftmost = m.phases.iter().map(|p| p.from_col).min();
+                    if let (Some(min), Some(p)) =
+                        (leftmost, m.phases.iter_mut().find(|p| &p.id == id))
+                    {
+                        if p.from_col == min {
+                            p.from_col = *col;
+                        }
+                    }
+                } else if let Some(p) = m.phases.iter_mut().find(|p| &p.id == id) {
+                    p.to_col = *col;
                 }
             }
             Event::PhaseSplit {
@@ -982,6 +1007,64 @@ mod tests {
         let m = replay(&evs);
         assert_eq!((m.phases[0].from_col, m.phases[0].to_col), (-2, 3));
         assert_eq!((m.phases[1].from_col, m.phases[1].to_col), (4, 7));
+    }
+
+    #[test]
+    fn frontier_move_start_on_a_non_leftmost_phase_is_a_true_noop() {
+        // Defensive (review #6): a "start" only moves the board-left bound — the current leftmost
+        // phase. Applied to any other phase it would set that phase's from_col (normalize's sort
+        // key) and reorder the timeline; replay must ignore it instead.
+        let evs = vec![
+            ev(r#"{"event":"PhaseAdded","id":"K1","label":"A","fromCol":0,"toCol":3}"#),
+            ev(r#"{"event":"PhaseAdded","id":"K2","label":"B","fromCol":4,"toCol":7}"#),
+            ev(r#"{"event":"FrontierMoved","id":"K2","edge":"start","col":-9}"#),
+        ];
+        let m = replay(&evs);
+        let ids: Vec<_> = m.phases.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["K1", "K2"],
+            "K2's stray start did not reorder the partition"
+        );
+        assert_eq!((m.phases[0].from_col, m.phases[0].to_col), (0, 3));
+        assert_eq!((m.phases[1].from_col, m.phases[1].to_col), (4, 7));
+    }
+
+    #[test]
+    fn removing_a_board_end_phase_merges_into_the_neighbour() {
+        // Review #4: removing a *board-end* phase must not strand its columns (shrink the board);
+        // the neighbour absorbs them, so remove is always a merge. Remove the first phase → the new
+        // first phase extends left to cover it; remove the last → the new last extends right.
+        let seed = vec![
+            ev(r#"{"event":"PhaseAdded","id":"K1","label":"A","fromCol":0,"toCol":3}"#),
+            ev(r#"{"event":"PhaseAdded","id":"K2","label":"B","fromCol":4,"toCol":7}"#),
+            ev(r#"{"event":"PhaseAdded","id":"K3","label":"C","fromCol":8,"toCol":11}"#),
+        ];
+        let mut first = seed.clone();
+        first.push(ev(r#"{"event":"PhaseRemoved","id":"K1"}"#));
+        let m = replay(&first);
+        assert_eq!(
+            m.phases.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            ["K2", "K3"]
+        );
+        assert_eq!(
+            (m.phases[0].from_col, m.phases[0].to_col),
+            (0, 7),
+            "K2 absorbed K1's columns"
+        );
+
+        let mut last = seed;
+        last.push(ev(r#"{"event":"PhaseRemoved","id":"K3"}"#));
+        let m = replay(&last);
+        assert_eq!(
+            m.phases.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            ["K1", "K2"]
+        );
+        assert_eq!(
+            (m.phases[1].from_col, m.phases[1].to_col),
+            (4, 11),
+            "K2 absorbed K3's columns"
+        );
     }
 
     #[test]

@@ -663,15 +663,20 @@ pub fn render_svg(model: &Model) -> String {
             ""
         };
 
-        // One group per region carries its identity + *clamped* bounds (Stage 6: the client reads
-        // `data-from-col`/`data-to-col` to know a resize's *other* edge without inverse pixel math;
-        // clamped so that edge always falls on a column the region-rail actually covers).
+        // One group per region carries its identity + *clamped* bounds (the client reads
+        // `data-from-col`/`data-to-col` to snap a drag to a rail column without inverse pixel math;
+        // clamped so that edge always falls on a column the region-rail actually covers). It also
+        // carries the *unclamped* `data-real-to`: the keyboard resize (which nudges the true
+        // `to_col`, not the visible edge) must not read the clamped value or a "grow" would truncate
+        // a region whose stored extent runs past the last element column.
         p.push(format!(
-            "<g class=\"region{}\" data-region=\"{}\" data-from-col=\"{}\" data-to-col=\"{}\">",
+            "<g class=\"region{}\" data-region=\"{}\" data-from-col=\"{}\" data-to-col=\"{}\" \
+             data-real-to=\"{}\">",
             if removed { " removed" } else { "" },
             esc(&ph.id),
             clamped_from,
-            clamped_to
+            clamped_to,
+            ph.to_col
         ));
         if removed {
             p.push("<g opacity=\"0.45\">".to_string());
@@ -689,19 +694,13 @@ pub fn render_svg(model: &Model) -> String {
             "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1\"{}/>",
             x, band_top, right, band_top, top_stroke, dash
         ));
-        // The band's vertical sides. A *live* region's sides are the partition's frontiers, drawn
-        // once (deduped) by the frontier pass after this loop — a boundary is shared by two
-        // neighbours, so drawing it per-region is exactly the doubled/overlapping-edge bug
-        // F-region-frontiers kills. Only a *removed* ghost — not part of the partition — draws its
-        // own faint, non-grabbable sides here so the diff overlay still outlines where it was.
-        if removed {
-            for edge_x in [x, right] {
-                p.push(format!(
-                    "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1.5\"{}/>",
-                    edge_x, band_top, edge_x, band_bot, stroke, dash
-                ));
-            }
-        }
+        // The band's vertical sides are the partition's frontiers, drawn once (deduped) by the
+        // frontier pass after this loop — a boundary is shared by two neighbours, so drawing it
+        // per-region is exactly the doubled/overlapping-edge bug F-region-frontiers kills. A
+        // *removed* ghost draws NO sides: under the partition a removal is a merge, so the absorbing
+        // neighbour sweeps a live band (and its frontier) over the ghost's old columns — hard ghost
+        // side-lines there would collide with that live frontier and read as the neighbour's. The
+        // faint wash + top rule + label tab still mark where the region was.
 
         // Label tab — the region's identity handle, a quiet folder tab straddling the top-left
         // corner (instrument grey, no domain colour: the Bench-Is-Grey Rule). Carries the diff badge

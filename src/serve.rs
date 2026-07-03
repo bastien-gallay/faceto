@@ -158,8 +158,11 @@ impl Ctx {
     /// Mint the right-half id and append a `PhaseSplit` — the partition's "add" (F-region-frontiers).
     /// The split target `id` keeps its left half; the minted `new_id` (same namespace as
     /// `append_region_add`, so the two never collide) takes the right half with `new_label`. Minted
-    /// and written under `appends`, so a concurrent add/split can't race the id. `replay` guards the
-    /// column range, so an out-of-range split simply folds to a no-op.
+    /// and written under `appends`, so a concurrent add/split can't race the id. Validates the split
+    /// column **under the lock** against the replayed board: an out-of-range or stale `at_col` (the
+    /// target phase moved/merged/vanished since the client hovered) returns `Err` *before* writing —
+    /// otherwise it would burn a region id and leave a permanent dead event in the append-only log
+    /// while the client falsely reported success. `replay` still guards the fold as a backstop.
     fn append_phase_split(
         &self,
         id: String,
@@ -170,6 +173,15 @@ impl Ctx {
         let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
         let text = String::from_utf8_lossy(&raw);
         let log = events::parse_log(&text)?;
+        let covers = events::replay(&log)
+            .phases
+            .iter()
+            .any(|p| p.id == id && p.from_col < at_col && at_col <= p.to_col);
+        if !covers {
+            return Err(format!(
+                "phase-split: {at_col} not strictly inside phase {id}"
+            ));
+        }
         let ev = events::Event::PhaseSplit {
             id,
             at_col,
@@ -782,6 +794,30 @@ mod tests {
             vec![("K1", 0, 2), ("K2", 3, 5)],
             "split carves K1 in two, contiguous partition preserved"
         );
+    }
+
+    #[test]
+    fn append_phase_split_rejects_an_out_of_range_split_without_writing() {
+        // Review #2: a stale/out-of-range split (atCol not strictly inside the target phase) must
+        // Err *before* writing — no dead event in the append-only log, no burned region id, no false
+        // success. Here atCol=9 is past K1[0,5]'s to_col.
+        let path =
+            std::env::temp_dir().join(format!("faceto-split-oor-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let seed = events::line(&region_added("K1", 0, 5)) + "\n";
+        std::fs::write(&path, &seed).unwrap();
+        let ctx = Ctx::new(path.clone());
+
+        assert!(
+            ctx.append_phase_split("K1".into(), 9, "Right".into())
+                .is_err(),
+            "out-of-range split is rejected"
+        );
+        let after = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(after, seed, "nothing was appended");
+        // The next mint is still K2 — no id was burned by the rejected split.
+        assert_eq!(mint_region_id(&events::parse_log(&after).unwrap()), "K2");
     }
 
     #[test]

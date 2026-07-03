@@ -773,8 +773,8 @@ const regionXBtn = graceGlyph($("#region-x"),
 function resizeRegionByKey(regionId, delta) {
   const b = regionBounds[regionId];
   if (!b) return;
-  const toCol = b.to + delta;
-  if (toCol < b.from) { note("region already at its smallest"); return; }
+  const toCol = b.realTo + delta;   // nudge the TRUE to_col, not the clamped visible edge (fix: a
+  if (toCol < b.from) { note("region already at its smallest"); return; }  // grow must not truncate
   note("region resized");
   postComment({ regionId, kind: "frontier-move", edge: "end", col: toCol, ts: new Date().toISOString(), status: "open" });
 }
@@ -873,6 +873,7 @@ function bindLaneAdders() {
 // keyboard resize + the split guard; a removed region's group is a diff-overlay ghost only.
 let regionBounds = {};      // regionId -> { from, to }
 let railLeft = {}, railRight = {};   // col -> its rail cell's left/right x, in SVG user units
+let railCols = [];   // ascending list of covered columns; cached per swap (rail is fixed between swaps)
 function readRegionRail() {
   railLeft = {}; railRight = {};
   document.querySelectorAll(".region-rail").forEach((r) => {
@@ -880,28 +881,36 @@ function readRegionRail() {
     railLeft[col] = +r.getAttribute("x");
     railRight[col] = railLeft[col] + +r.getAttribute("width");
   });
+  railCols = Object.keys(railLeft).map(Number).sort((a, b) => a - b);
 }
-function svgLeftPx() { return document.querySelector("#board svg").getBoundingClientRect().left; }
+let _svg = null;
+function svgLeftPx() { return (_svg ??= document.querySelector("#board svg")).getBoundingClientRect().left; }
 // The column whose rail cell contains SVG-space x, or the nearest end column if x falls outside
 // every rail cell. render.rs clamps each region's own bounds into the rail's covered range, so a
 // column this resolves is always addressable.
 function colAtSvgX(x) {
-  const cols = Object.keys(railLeft).map(Number).sort((a, b) => a - b);
-  if (!cols.length) return null;
-  for (const c of cols) if (x >= railLeft[c] && x < railRight[c]) return c;
-  return x < railLeft[cols[0]] ? cols[0] : cols[cols.length - 1];
+  if (!railCols.length) return null;
+  for (const c of railCols) if (x >= railLeft[c] && x < railRight[c]) return c;
+  return x < railLeft[railCols[0]] ? railCols[0] : railCols[railCols.length - 1];
 }
 // The column *boundary* nearest SVG-space x, as { b, x }. Boundaries number one more than columns:
 // each column's left edge is boundary `b = col`; the last column's right edge is `b = last + 1`
 // (the board's right end). A frontier drag snaps to these, so it can reach the right board edge —
 // which a column-only snap (colAtSvgX clamps to the last column) never could.
 function boundaryAtSvgX(x) {
-  const cols = Object.keys(railLeft).map(Number).sort((a, b) => a - b);
-  if (!cols.length) return null;
-  const cands = cols.map((c) => ({ b: c, x: railLeft[c] }));
-  const last = cols[cols.length - 1];
-  cands.push({ b: last + 1, x: railRight[last] });
-  return cands.reduce((best, c) => (Math.abs(c.x - x) < Math.abs(best.x - x) ? c : best));
+  if (!railCols.length) return null;
+  const last = railCols[railCols.length - 1];
+  let best = { b: railCols[0], x: railLeft[railCols[0]] };
+  for (const c of railCols) {
+    if (Math.abs(railLeft[c] - x) < Math.abs(best.x - x)) best = { b: c, x: railLeft[c] };
+  }
+  if (Math.abs(railRight[last] - x) < Math.abs(best.x - x)) best = { b: last + 1, x: railRight[last] };
+  return best;
+}
+// The SVG-space x of boundary `b` (b == last+1 is the board's right edge).
+function boundaryX(b) {
+  const last = railCols[railCols.length - 1];
+  return b > last ? railRight[last] : railLeft[b];
 }
 const dragGuide = $("#region-drag-guide");
 let frontierDrag = null;   // { regionId, edge, baseCol, svgLeft, pointerId, b? } while dragging
@@ -915,7 +924,23 @@ function startFrontierDrag(e) {
   // Capture before any state — a throw here must not leave a frontierDrag flag (or the guide)
   // behind to gate every other gesture.
   try { line.setPointerCapture(e.pointerId); } catch { return; }
-  frontierDrag = { regionId: line.dataset.region, edge: line.dataset.edge, baseCol: +line.dataset.col, svgLeft, pointerId: e.pointerId };
+  const region = line.dataset.region, edge = line.dataset.edge, rb = regionBounds[region];
+  // Clamp the drag so a frontier can never cross its neighbours (the guard the old region-edge drag
+  // enforced): dragging past a neighbour would otherwise crush that phase to one column, or — for
+  // the leftmost "start" — reorder the whole partition. An "end" frontier stays within (its own
+  // start, +1) and the right neighbour's far edge (or the board's right rail end when it is last);
+  // the leftmost "start" stays within the board's left rail end and its own to_col (so the first
+  // region keeps ≥1 column and stays leftmost).
+  const railMin = railCols[0], railMax = railCols[railCols.length - 1] + 1;
+  let clampMin, clampMax;
+  if (edge === "start") {
+    clampMin = railMin; clampMax = rb ? rb.to : railMax;
+  } else {
+    clampMin = rb ? rb.from + 1 : railMin;
+    const right = rb && Object.values(regionBounds).find((n) => n.from === rb.to + 1);
+    clampMax = right ? right.to : railMax;
+  }
+  frontierDrag = { regionId: region, edge, baseCol: +line.dataset.col, svgLeft, pointerId: e.pointerId, clampMin, clampMax };
   const bandRect = line.getBoundingClientRect();   // the frontier line already spans band_top..band_bot
   Object.assign(dragGuide.style, { top: `${bandRect.top}px`, height: `${bandRect.height}px`, display: "block" });
   line.addEventListener("pointermove", dragFrontier);
@@ -926,8 +951,9 @@ function dragFrontier(e) {
   if (!frontierDrag || e.pointerId !== frontierDrag.pointerId) return;   // see dragSticky
   const bnd = boundaryAtSvgX(e.clientX - frontierDrag.svgLeft);
   if (!bnd) return;
-  frontierDrag.b = bnd.b;
-  dragGuide.style.left = `${frontierDrag.svgLeft + bnd.x}px`;
+  const b = Math.max(frontierDrag.clampMin, Math.min(frontierDrag.clampMax, bnd.b));
+  frontierDrag.b = b;
+  dragGuide.style.left = `${frontierDrag.svgLeft + boundaryX(b)}px`;
 }
 function endFrontierDrag(e) {
   if (frontierDrag && e.pointerId !== frontierDrag.pointerId) return;   // another finger lifting, not ours
@@ -951,7 +977,9 @@ function bindRegions() {
   readRegionRail();
   regionBounds = {};
   document.querySelectorAll(".region:not(.removed)").forEach((g) => {
-    regionBounds[g.dataset.region] = { from: +g.dataset.fromCol, to: +g.dataset.toCol };
+    // `to` is the clamped (visible) bound the drag snaps against; `realTo` is the true stored
+    // to_col the keyboard resize nudges (may run past the last visible column).
+    regionBounds[g.dataset.region] = { from: +g.dataset.fromCol, to: +g.dataset.toCol, realTo: +g.dataset.realTo };
   });
   // Create the FIRST phase (empty board): the rail shows through everywhere, its + spans the whole
   // board. Once any phase exists the partition covers every column, so the rail is fully painted

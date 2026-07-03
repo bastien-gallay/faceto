@@ -198,7 +198,9 @@ pub fn normalize(phases: &mut [Phase]) {
     for p in phases.iter_mut() {
         p.from_col = cursor;
         p.to_col = p.to_col.max(cursor);
-        cursor = p.to_col + 1;
+        // saturating: a crafted/legacy `to_col` at i64::MAX must not panic (debug) or wrap to MIN
+        // (release) — the same total-arithmetic rule `serve::mint_id` follows for suffixes.
+        cursor = p.to_col.saturating_add(1);
     }
 }
 
