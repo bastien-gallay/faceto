@@ -511,19 +511,31 @@ fn add_region_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u
 }
 
 /// The full `/comments` response body: stored feedback first, then the live lint findings,
-/// framed as one JSON array. The lint merge is **best-effort** — if the board doesn't parse
-/// (`ctx.current()` errors), the stored comments still come back on their own (they have their own
-/// error tolerance and, in legacy mode, live in a separate file). So a malformed source degrades
-/// to comments-only rather than hiding the reviewer's notes behind a 500 — the same resilience the
-/// endpoint had before lint was merged in.
+/// framed as one JSON array. The lint merge is **best-effort** — if the board doesn't parse, the
+/// stored comments still come back on their own (they have their own error tolerance and, in legacy
+/// mode, live in a separate file). So a malformed source degrades to comments-only rather than
+/// hiding the reviewer's notes behind a 500 — the same resilience the endpoint had before lint.
+///
+/// The source is read + replayed **once**: in log mode the single projection feeds both the comment
+/// fold ([`comments_from_log`]) and the lint pass, so the comment set and the findings always
+/// reflect the same snapshot (and the log isn't read/replayed twice per request).
 fn comments_body(ctx: &Ctx) -> String {
-    let mut items = if ctx.log_mode {
-        comments_from_log(&ctx.model_path)
+    let mut items = Vec::new();
+    let model = if ctx.log_mode {
+        match events::read_log(&ctx.model_path) {
+            Ok(log) => {
+                let model = events::replay(&log);
+                items.extend(comments_from_log(&log, &model));
+                Some(model)
+            }
+            Err(_) => None,
+        }
     } else {
-        read_comments_json(&ctx.comments_path)
+        items.extend(read_comments_json(&ctx.comments_path));
+        model::load(&ctx.model_path).ok()
     };
-    if let Ok((_version, model)) = ctx.current() {
-        items.extend(lint_items(&model));
+    if let Some(model) = &model {
+        items.extend(lint_items(model));
     }
     format!("[{}]", items.join(","))
 }
@@ -546,18 +558,14 @@ fn comment_item(elem_id: &str, kind: &str, text: &str) -> String {
 /// omitted — they already live in the rendered board. Feedback on an element that was later
 /// removed is dropped too, so the sidebar never lists a comment for a box that's off the board.
 ///
-/// Returns the item JSON strings (not the joined array); [`comments_body`] concatenates these
-/// with the live [`lint_items`] before framing the response.
-fn comments_from_log(path: &Path) -> Vec<String> {
-    let log = match events::read_log(path) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
-    };
-    let model = events::replay(&log);
+/// Takes the already-parsed `log` and its `model` projection ([`comments_body`] reads and replays
+/// the source once, then feeds both here and to [`lint_items`]). Returns the item JSON strings, not
+/// the joined array.
+fn comments_from_log(log: &[events::Event], model: &Model) -> Vec<String> {
     let present: std::collections::HashSet<&str> =
         model.elements.iter().map(|e| e.id.as_str()).collect();
     let mut items: Vec<String> = Vec::new();
-    for ev in &log {
+    for ev in log {
         let (id, kind, text) = match ev {
             events::Event::ElementAnnotated { id, text } => (id, "comment", text.clone()),
             events::Event::HotspotResolved { id, resolution } => {
@@ -950,7 +958,6 @@ mod tests {
     #[test]
     fn comments_from_log_skips_a_removed_elements_feedback() {
         // Annotate E2, then drop it — its comment must not surface for a box off the board.
-        let path = std::env::temp_dir().join(format!("faceto-cfl-{}.jsonl", std::process::id()));
         let log = [
             added("E2", "event"),
             events::Event::ElementAnnotated {
@@ -959,10 +966,11 @@ mod tests {
             },
             events::Event::ElementRemoved { id: "E2".into() },
         ];
-        std::fs::write(&path, events::to_jsonl(&log)).unwrap();
-        let items = comments_from_log(&path);
-        let _ = std::fs::remove_file(&path);
-        assert!(items.is_empty(), "feedback on a removed element is dropped");
+        let model = events::replay(&log);
+        assert!(
+            comments_from_log(&log, &model).is_empty(),
+            "feedback on a removed element is dropped"
+        );
     }
 
     // ---- F-es-lint: lint findings merged into the sidebar (derived on read) ----------------
