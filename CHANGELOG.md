@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Region frontiers** (F-region-frontiers): regions are now a **contiguous partition** of the
+  timeline defined by shared frontiers, not independent `[fromCol, toCol]` spans. A single pure,
+  deterministic, idempotent sweep (`model::normalize`, run in both `replay` and `from_json`)
+  projects any phase list — new frontier events *and* legacy spans with holes/overlaps — onto a
+  gap-free, overlap-free partition, so every `Model` obeys the invariant. New additive events
+  `FrontierMoved { id, edge, col }` (drag a boundary — the neighbour re-borders atomically, clamped
+  so it can't cross into a third phase) and `PhaseSplit { id, atCol, newId, newLabel }` (add = carve
+  a phase in two, server-minted id); remove merges into the neighbour (no stranded columns). The
+  board draws one grabbable frontier per boundary. Hole / overlap / unreachable-edge /
+  can't-resize-at-the-extremes are all unrepresentable by construction.
 - **ES-grammar linter** (F-es-lint): `faceto lint SOURCE` — a pure, zero-dep graph pass
   (`src/lint.rs`) that flags event-storming defects a workshop review would raise by hand
   (event with no producer, policy with no input/output, non-terminal event with no outbound
