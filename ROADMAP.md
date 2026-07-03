@@ -27,7 +27,7 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | F-model-smells | linting | ☐ | Parked | Detect model smells — orphans, loops, heavy bounded-contexts. Needs the F-container primitive and a graph pass; open once grouping exists. |
 | F-board-gestures | UI · direct edit | ✅ | **Now** | Richer on-element gestures layered over F-inline-add: **chromeless** bare ghost glyphs (`+` add · `×` remove · comment), not a floating toolbar (DESIGN §6); single-click focuses only (select-then-edit), double-click / F2 rename, drag left/right moves, `c` / comment glyph opens the modal. The modal then carries only prose actions, and `resolve` shows only on hotspots / open questions. Working note below; shipped 2026-07-01. |
 | F-region-frontiers | model · grouping | ✅ | Next | *(reshaped by feature-torture 2026-07-03 — frontier core only; shipped 2026-07-03.)* Regions are now a **contiguous partition defined by shared *frontiers***, not independent `[fromCol, toCol]` spans. `model::normalize` — one pure, deterministic, idempotent sweep — projects **any** phase list (new frontier events *and* legacy spans with holes/overlaps) onto a gap-free, overlap-free partition, in **both** `replay` and `from_json`, so every `Model` obeys the invariant. Resize = drag a `.frontier` (`FrontierMoved {id, edge, col}`; normalize re-borders the neighbour atomically), add = **split** a phase (`PhaseSplit`, server-minted right-half id), remove = **merge** (`PhaseRemoved` + normalize absorbs the columns — no hole), the outermost frontiers resize the **whole board**. Kills by construction the hole / overlap / unreachable-edge confusions. **As-built deltas from the shaping** (see working note): `PhaseMerged` **deferred** (YAGNI — no v1 gesture picks merge direction; `PhaseRemoved`+normalize already merges); `FrontierMoved` carries an `edge` discriminator (moves *both* board ends); render draws **one** grabbable frontier per boundary (dedup), not two per-region edges. **Cut from v1 (unchanged):** the pivot / interstice column (co-owned with F-lane-flow (c) / F-floating-hotspots — frontier draws on the column boundary meanwhile) and move-region-as-reorder (→ candidate F-region-reorder). Model-spine change across all five files. Working note below; torture report: `.personal/feature-torture/reports/F-region-frontiers.md`. |
-| F-region-collapse | UI · legibility | ☐ | Later | *(reshaped by feature-torture 2026-07-03 — ✂️ column-fold only; edge-fold spun out to F-region-edge-fold.)* Collapse / hide a region to concentrate readability: fold its stickies into a summarised band so a wide board gets **shorter**. Pure **view-state** — no model / event change — via the proven `?base=` seam extended to `GET /board.svg?collapse=<id,id>` (client holds the collapsed-set in `localStorage`, server re-lays-out a `col → x` remap). Orthogonal to F-region-frontiers; reads the normalized partition. v1 **drops** the crossing-edge summarisation (the risky endpoint-in-span / adjacent-band correctness surface) → that is **F-region-edge-fold**. Pairs with F-frozen-headers (same wide-board legibility push). Plan: [`docs/F-region-collapse-plan.md`](docs/F-region-collapse-plan.md); torture report: `.personal/feature-torture/reports/F-region-collapse.md`. |
+| F-region-collapse | UI · legibility | ✅ | Later | *(reshaped by feature-torture 2026-07-03 — ✂️ column-fold only; edge-fold spun out to F-region-edge-fold. Shipped 2026-07-03.)* Collapse / hide a region to concentrate readability: fold its stickies into a summarised band so a wide board gets **shorter**. Pure **view-state** — no model / event change — via the proven `?base=` seam extended to `GET /board.svg?collapse=<id,id>` (client holds the collapsed-set in `localStorage`, server re-lays-out a `col → x` remap). Orthogonal to F-region-frontiers; reads the normalized partition. v1 **drops** the crossing-edge summarisation (the risky endpoint-in-span / adjacent-band correctness surface) → that is **F-region-edge-fold**. Pairs with F-frozen-headers (same wide-board legibility push). Working note below; plan: [`docs/F-region-collapse-plan.md`](docs/F-region-collapse-plan.md); torture report: `.personal/feature-torture/reports/F-region-collapse.md`. |
 | F-region-edge-fold | UI · legibility | ☐ | Later | *(spawned by F-region-collapse torture 2026-07-03.)* The deferred v1 tier of F-region-collapse: once a region folds to a band, **reroute the edges that cross it** to the band's two frontiers with a count badge, instead of dropping them. The risky 30% held out of collapse v1 — endpoint-in-span math (which edges cross a `[from_col, to_col]` span in `col` space, before remap) plus adjacent-collapsed-band composition, each needing a pure red-first test. Depends on F-region-collapse; ships with **zero rework** of it. Revisit-trigger: first dogfood session where a hidden crossing-edge causes a misread. |
 | F-2d-placement | model · layout | ✅ | **Now** | Replace the rows / columns / grid **packing** (and its dark grey group box — a poor 2D representation) with a **stored 2D sub-position**: keep `x = col` (global timeline) and `type = lane` — both invariants — but give each element a free **Y within its lane band** instead of auto-packing. Removes the packing control entirely and fixes two dogfood bugs: moving within a stacked group force-**swaps** (can't re-insert without displacing the survivor), and moving from / into a group **superposes**. Model change — `ElementMoved` gains the sub-position. Absorbs feedback #1 / #3 / #4 / #10. Shipped 2026-07-02 (PR #17); as-built note below. |
 | F-lane-flow | UI · legibility | ☐ | Next | Reorder the 8 lanes to the **canonical event-storming flow** (actor → command → aggregate / system → event → policy → … → read-model → UI → actor) so system and policy sit *near* events / commands, not at the bottom. Forks to shape: (a) reorder `LANES`; (b) **merge** adjacent lanes (aggregate+external, readmodel+policy) as an expandable *display grouping* — `type` still selects a pure lane, so the 8-colour grammar invariant holds; (c) alternate event / non-event **column cadence** — recoups the pivot / interstice column of F-region-frontiers, so shape together. Also shares the `LANES` / `colour` / `lane_prefix` seam with **F-floating-hotspots** (removes the hotspot lane) and **F-es-vocabulary** (adds `timer` / `process` lanes) — touch the lane set once, not three times. Feedback #2. |
@@ -336,6 +336,50 @@ rethink of Export (a power-user escape hatch, not a primary action), not a new p
   requiring the subcommand. A CLI-contract change in `main.rs` dispatch — small, but it changes the
   bare-argument meaning, so keep `render` / `genesis` / `compact` explicit. **Reconciled** into the
   CLI cluster → tracked on **F-cli-help** (with `--help` / F-output-naming, one `main.rs` pass).
+
+## Working note — F-region-collapse (2026-07-03, branch `feat/F-region-collapse`, as built)
+
+**Scope built = the reshaped v1 exactly:** column-fold only, no crossing-edge reroute (that stays
+**F-region-edge-fold**). A folded region's clamped column span compresses to one thin `COLLAPSE_W`
+(60px) summary slot; its stickies hide behind a `▸ Label · N` count chip on the tab, and every
+column to its right shifts left so the board actually shortens. **Pure view-state** — no `Model`,
+event, `replay`, or `from_json` change; the whole delta is `render.rs`, one `serve.rs` query seam,
+and `template.html`.
+
+**As built.**
+
+- **`render.rs` — the fold is one pure `col → x` remap.** New `pub struct View { collapsed }`
+  threaded as `render_svg(&Model, &View)`. Before the draw loop, each collapsed phase's clamped
+  inclusive span `[lo,hi]` marks `is_band_rep[lo]` + `hidden[lo..=hi]`; a cumulative `xs[i]` gives
+  each column-index its post-fold left x (`COLLAPSE_W` at a band's leftmost column, `0` for its
+  interior, `COL_W` otherwise), and `col_left(c) = xs[c]`. In-band stickies and any edge with an
+  in-band endpoint are skipped; a *crossing* edge (both ends visible) stays a straight passthrough.
+  Empty / unknown-id set = identity remap, so `render`/`genesis`/`GET /` stay byte-identical
+  (`View::none()`). The region right-edge became `xs[hi+1]` (was `col_left(hi)+COL_W`, only correct
+  unfolded); the rightmost frontier likewise.
+- **`serve.rs` — `?collapse=K2,K5`** parsed by `parse_collapse` (empty segments dropped, absent =
+  identity) into the `View`; composes with `?base=` by folding the *baseline* model with the same
+  view so the diff overlay lines up.
+- **`template.html` — the reader's lens.** Collapsed-set in its own `localStorage` key
+  (`facetoCollapsed`, never the comment stash / log); `boardSrc` appends `collapse=` to *every*
+  board fetch so a fold survives each swap. Toggle: **`z`** on a focused region tab or click the
+  **▸/▾** disclosure glyph (a `.region-collapse` hit target inside the tab, `stopPropagation` keeps
+  it off the rename click). Reload re-applies the stored lens to the plain server render.
+
+**Deltas from the plan.** (1) The count chip is **element-count only** (`· N`) — no crossing-edge
+count, since edge-fold is deferred. (2) A crossing edge is left as a **full straight passthrough**,
+not the plan's "faint" one — dropping a real edge whose both nodes are on-screen would be a worse
+lie than drawing it. (3) Added a permanent **▾ disclosure triangle on every live region tab** (▸
+when folded) as the click affordance — the discoverable half of the `z`/click pair; kept subtle
+(grey, darkens on hover) for the calm register.
+
+**Tests to done (all green).** Pure UT (via rendered SVG, the observable contract): fold shortens
+the board + hides in-band stickies + emits the `· N` chip; empty/unknown set = identity; fold is
+order-independent + idempotent; adjacent folds stay independent (two chips); an in-band edge drops
+while a crossing edge passes through. `serve`: `parse_collapse` splitting + identity. Live-verified
+on `serve` (curl): plain 1240px → `?collapse=K2` 670px, `work · 7` chip, cols 2–4 hidden, identity
+holds, `?collapse=&base=` still returns `X-Diff-Base`. Browser click not driven (extension offline)
+— client JS syntax-checked; wiring is the standard region-tab glyph pattern.
 
 ## Working note — F-2d-placement (2026-07-02, branch `feat/F-2d-placement`, as built)
 

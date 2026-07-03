@@ -97,6 +97,10 @@
      AFTER :focus-visible (equal specificity) so the red danger stroke beats the blue focus ring on
      the keyboard-armed path — where the tab is both focused and armed, and danger must win. */
   .region-tab.arming rect { stroke: #b4232a; stroke-width: 2; stroke-dasharray: 5 3; }
+  /* The fold disclosure triangle: a quiet grey glyph at rest, darkening on hover so the toggle is
+     discoverable without adding chrome (calm instrument — DESIGN §6). */
+  .region-collapse { cursor: pointer; }
+  .region-collapse:hover { fill: #1a1a1a; }
   .region-rail { cursor: pointer; }
   /* A frontier is a transparent 8px hit-line on a partition boundary (render.rs, F-region-frontiers)
      — it needs a cursor or nothing signals it can be grabbed. ew-resize is the universal "drag this
@@ -219,6 +223,7 @@
     <div><kbd>Esc</kbd></div><div class="act">cancel a drag, a rename, or an armed remove</div>
     <div><kbd>drag</kbd></div><div class="act">a box moves along the timeline; drop on an occupied slot to stack above / below (the lane grows); a frontier drags to re-border two phases</div>
     <div><kbd>region</kbd></div><div class="act">tab: click renames, <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> resizes, <kbd>Delete</kbd> merges into the neighbour; hover a band to split, empty board to add</div>
+    <div><kbd>z</kbd> / ▸▾</div><div class="act">fold a region to a thin band (its own reading lens — not saved to the model); the ▸/▾ on the tab toggles it too</div>
     <div><kbd>?</kbd></div><div class="act">this sheet</div>
   </div>
 </dialog>
@@ -245,8 +250,18 @@ let comments = [];        // {elemId, kind, text, ts}  (kind:"move" carries col/
 let shownVersion = null;  // model hash the board currently displays — the diff baseline
 let diffing = false;
 let diffBase = null;      // baseline hash the current diff overlay is drawn against (if diffing)
+// F-region-collapse: the viewer's reading lens — which regions are folded to a thin band. Held in
+// its own localStorage key (never the comment stash, never the log): a fold is one viewer's view,
+// gone on reload only if they clear it, never shared or committed. `boardSrc` threads it onto EVERY
+// board fetch (plain, diff, own-edit refresh) so the fold survives each swap without per-call plumbing.
+const LS_COLLAPSE = "facetoCollapsed";
+const collapsedSet = () => { try { return new Set(JSON.parse(localStorage.getItem(LS_COLLAPSE) || "[]")); } catch { return new Set(); } };
+const setCollapsed = (s) => localStorage.setItem(LS_COLLAPSE, JSON.stringify([...s]));
 const boardSrc = (extra = {}) => {
-  const q = new URLSearchParams(extra).toString();
+  const params = { ...extra };
+  const c = [...collapsedSet()];
+  if (c.length) params.collapse = c.join(",");
+  const q = new URLSearchParams(params).toString();
   return "/board.svg" + (q ? "?" + q : "");
 };
 
@@ -1000,6 +1015,7 @@ function bindRegions() {
     g.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startRename(g, true); }
       else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); e.stopPropagation(); armRegion(g.dataset.region, g); }
+      else if (e.key === "z" || e.key === "Z") { e.preventDefault(); e.stopPropagation(); toggleCollapse(g.dataset.region); }
       else if (e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
         e.preventDefault(); e.stopPropagation();
         resizeRegionByKey(g.dataset.region, e.key === "ArrowRight" ? 1 : -1);
@@ -1011,6 +1027,11 @@ function bindRegions() {
       regionXBtn.at(r.right - 3, r.top - 9, g.dataset.region);
     };
     g.onmouseleave = () => regionXBtn.hideSoon();
+  });
+  // The disclosure triangle (▸/▾ in the tab's left gutter) toggles the fold. It lives inside the
+  // region-tab group, so stopPropagation keeps the click off the tab's rename gesture.
+  document.querySelectorAll(".region-collapse").forEach((t) => {
+    t.onclick = (e) => { e.stopPropagation(); toggleCollapse(t.dataset.region); };
   });
   // Split affordance: a + follows the cursor over a region's band, snapped to the column boundary a
   // split would create. Guarded to columns strictly inside the phase (a split at its very start is a
@@ -1094,7 +1115,12 @@ async function load() {
     if (ownEdit && Date.now() - ownEdit.at < 4000 && !diffing) await refreshPlain(live, ownEdit.ids);
     else await showDiff(shownVersion, live);
   }
-  else if (shownVersion === null) shownVersion = live;  // baseline the initial server-rendered board
+  else if (shownVersion === null) {
+    shownVersion = live;  // baseline the initial server-rendered board
+    // The embedded server render is always plain; if the viewer left regions folded, re-apply the
+    // lens now so a reload restores their view (F-region-collapse localStorage persistence).
+    if (collapsedSet().size) await redrawView();
+  }
   ownEdit = null;
   replayMoves();
   paint();
@@ -1167,6 +1193,30 @@ async function showPlain() {
   $("#plain").style.display = "none";
   note("");
   shownVersion = await liveVersion();
+}
+
+// Re-fetch and swap the board with the current view (fold set + any diff base) applied. `boardSrc`
+// carries the collapse set for us; we only preserve whichever baseline is on screen so a fold
+// mid-diff keeps the overlay. Used by the collapse toggle and by initial load when a stored fold exists.
+async function redrawView() {
+  const extra = diffing && diffBase ? { base: diffBase } : {};
+  try {
+    const r = await fetch(boardSrc(extra), { cache: "no-store" });
+    if (!r.ok) return;
+    swapBoard(await r.text());
+    if (!diffing) replayMoves();
+  } catch {}
+}
+
+// Fold / unfold a region — the reader's own lens, not a model edit (no POST, no event). Persisted
+// per-viewer in localStorage; the server re-lays-out via ?collapse= on the next fetch.
+async function toggleCollapse(id) {
+  const s = collapsedSet();
+  const folding = !s.has(id);
+  folding ? s.add(id) : s.delete(id);
+  setCollapsed(s);
+  await redrawView();
+  note(folding ? "region folded — z or ▸ to expand" : "region expanded");
 }
 
 let adj = {};          // id -> Set(neighbour id), built from the rendered edges
