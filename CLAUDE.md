@@ -45,6 +45,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 
 faceto render examples/sample.model.json     # → board.svg + index.html next to the model
+faceto lint   examples/sample.model.json     # → ES-grammar findings (warn-only, exits 0)
 faceto serve  examples/sample.model.json     # → live board at http://127.0.0.1:8753
 faceto serve  path/to/model.json -p 9000     # custom port
 
@@ -66,8 +67,8 @@ lockstep. For board behaviour not covered by tests, render `examples/sample.mode
 ## Architecture
 
 The pipeline is `event-log.jsonl → replay → Model → SVG → HTML`; the `model.json → Model` path is
-the genesis/bootstrap input and a read-only `render` source (serving always goes through the log).
-Six source files, each one stage:
+the genesis/bootstrap input and a read-only `render` / `lint` source (serving always goes through
+the log). Seven source files, each one stage:
 
 - **`src/json.rs`** — minimal JSON parser/serializer (`parse`, `to_string`, the `Json` enum with
   `get`/`as_str`/`as_f64`/`as_bool`/`as_array`). Everything else builds on this.
@@ -81,6 +82,13 @@ Six source files, each one stage:
   fields evolve additively, since a renamed field is indistinguishable from a new one by shape).
 - **`src/model.rs`** — the typed board (`Model`, `Element`, `Edge`, `Phase`), `from_json`/`load`,
   and `diff_models`. This is where the board's domain rules live.
+- **`src/lint.rs`** — ES-grammar lint. `lint(&Model) -> Vec<Finding>`, a pure graph pass (no IO,
+  no clocks) that flags event-storming defects (event with no producer, policy with no input /
+  output, non-terminal event with no outbound edge; plus, only when the board declares
+  `level: design`, a command with no output). Warn-only at every level; each `Finding` is keyed on
+  the stable `id` (the comment-sidecar join key). A real edge connects two distinct existing
+  elements. Findings surface in `serve`'s `/comments` sidebar as `kind:"lint"` entries, computed on
+  read and suppressed once the element is `resolved` (see `serve.rs`).
 - **`src/render.rs`** — pure layout + SVG generation (`render_svg`) and HTML wrapping
   (`render_html`). Holds the lane order (`LANES`), the colour grammar (`colour`), geometry
   constants (`COL_W`, `LANE_H`, etc.), label wrapping, the serif nameplate, and diff styling.
@@ -98,8 +106,8 @@ Six source files, each one stage:
   `/model-version`, swaps in diff/plain SVGs, and posts comments/structural ops (falling back to
   `localStorage` when offline — offline structural ops are local-only, not resynced).
 
-`src/main.rs` is the CLI dispatch only (`render` / `serve` / `genesis` / `compact` / `help` /
-`version`).
+`src/main.rs` is the CLI dispatch only (`render` / `lint` / `serve` / `genesis` / `compact` /
+`help` / `version`).
 
 ## Domain invariants (do not break these)
 
