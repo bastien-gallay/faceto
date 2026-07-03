@@ -146,6 +146,14 @@ reports them (`… N not migrated from comments.jsonl`) instead of dropping them
 `genesis sample.model.json` next to a 4-line inbox seeded `24 genesis + 2 folded` (the garbage and
 orphan lines dropped), with `ElementAnnotated`/`ElementRenamed` for `E1` appended after the batch.
 
+The migration is **one-shot**: once folded, the inbox is renamed to `comments.jsonl.migrated`, so
+re-running genesis (e.g. after deleting the log, or via serve-time auto-genesis) cannot re-fold —
+and resurrect — feedback already resolved on the board. The genesis write itself is an **exclusive
+create** (`create_new`): it refuses to overwrite an existing `event-log.jsonl` rather than truncate
+the append-only truth log, so no check-then-write race can clobber a live log. Covered by
+`write_genesis_refuses_to_clobber_an_existing_log` and
+`write_genesis_folds_then_archives_the_inbox_one_shot`.
+
 ### `faceto compact` — fold the log to a snapshot → **done.**
 
 `faceto compact [LOG]` (default `event-log.jsonl`) replays the log, then rewrites it as a
