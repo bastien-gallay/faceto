@@ -1,6 +1,7 @@
 //! faceto — a typed file → a visual workshop board you think through with an LLM.
 //!
 //!   faceto render  [SOURCE]           write board.svg + index.html next to SOURCE
+//!   faceto lint    [SOURCE]           check the board against the ES-grammar rules (warn-only)
 //!   faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar
 //!   faceto genesis [MODEL]            migrate a model.json into an event-log.jsonl
 //!   faceto compact [LOG]              fold a log to a snapshot, bounding replay length
@@ -10,6 +11,7 @@
 
 mod events;
 mod json;
+mod lint;
 mod model;
 mod render;
 mod serve;
@@ -24,6 +26,10 @@ fn main() {
         "render" => {
             let model = parse_render(&args[2..]);
             cmd_render(&model);
+        }
+        "lint" => {
+            let model = parse_render(&args[2..]);
+            cmd_lint(&model);
         }
         "serve" => {
             let (model, port) = parse_serve(&args[2..]);
@@ -92,6 +98,46 @@ fn cmd_render(model_path: &str) {
         dir.join("board.svg").display(),
         dir.join("index.html").display()
     );
+}
+
+/// Check a board against the ES-grammar rules and print any findings. **Warn-only**: a
+/// big-picture board is legitimately incomplete, so findings never fail the command (exit 0
+/// always) — the tool nudges, it does not gate. Findings are keyed on the stable `id`; the label
+/// is looked up here purely for a readable line.
+fn cmd_lint(model_path: &str) {
+    let path = Path::new(model_path);
+    let model = match load_source(path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            exit(1);
+        }
+    };
+    let findings = lint::lint(&model);
+    if findings.is_empty() {
+        println!(
+            "no grammar findings — {} elements checked in {}",
+            model.elements.len(),
+            path.display()
+        );
+        return;
+    }
+    let label_of = |id: &str| {
+        model
+            .elements
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| format!("{} \"{}\"", e.kind, e.label))
+            .unwrap_or_else(|| id.to_string())
+    };
+    let n = findings.len();
+    println!(
+        "{n} grammar {} (warn-only — a big-picture board is legitimately incomplete):\n",
+        if n == 1 { "finding" } else { "findings" }
+    );
+    for f in &findings {
+        println!("  {} [{}] — {}", label_of(&f.element_id), f.rule, f.message);
+    }
 }
 
 /// Migrate a legacy `model.json` into the genesis batch of an `event-log.jsonl` written
@@ -252,6 +298,7 @@ fn print_help() {
          \n\
          USAGE:\n\
          \x20 faceto render  [SOURCE]            write board.svg + index.html next to SOURCE\n\
+         \x20 faceto lint    [SOURCE]            check the board against the ES-grammar rules (warn-only)\n\
          \x20 faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar (default :8753)\n\
          \x20 faceto genesis [MODEL]             migrate a model.json into an event-log.jsonl\n\
          \x20 faceto compact [LOG]               fold a log to a snapshot, bounding replay (default event-log.jsonl)\n\

@@ -108,10 +108,11 @@ once, into the page).
 
 Do one thing well — **one file, one stage.**
 
-- `json` parses, `model` types & diffs, `render` lays out & draws, `serve`
-  serves, `events` is the log/replay spine, `template.html` is the client.
-- `src/main.rs` is CLI dispatch only (`render` / `serve` / `genesis` / `help` /
-  `version`) — no domain logic.
+- `json` parses, `model` types & diffs, `lint` checks ES-grammar, `render` lays
+  out & draws, `serve` serves, `events` is the log/replay spine, `template.html`
+  is the client.
+- `src/main.rs` is CLI dispatch only (`render` / `lint` / `serve` / `genesis` /
+  `compact` / `help` / `version`) — no domain logic.
 
 **Watch for**: a stage that "while we're here" takes on a neighbour's job. Push
 the decision back to the stage that owns it.
@@ -341,6 +342,7 @@ source file is exactly one stage:
 src/
 ├── json.rs       # hand-written JSON parser/serializer (the Json enum)
 ├── model.rs      # typed board: Model/Element/Edge/Phase, from_json, diff_models
+├── lint.rs       # ES-grammar lint: lint(&Model) → Vec<Finding>, warn-only, pure
 ├── events.rs     # event log: Event enum, replay() → Model, from_model() genesis
 ├── render.rs     # pure layout + SVG (render_svg) and HTML wrapping (render_html)
 ├── serve.rs      # std-only HTTP server (TcpListener + threads)

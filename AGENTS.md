@@ -42,7 +42,8 @@ with `uvx pre-commit install` (see [`CONTRIBUTING.md`](CONTRIBUTING.md)).
 
 `JSON file → Model → SVG → HTML`, with `event-log.jsonl → replay → Model` as the
 event-sourced path. Stages: `json` → `model` → `events` → `render` → `serve`,
-plus `template.html` (the client) and `main.rs` (CLI dispatch only).
+plus `lint` (`Model → findings`, warn-only), `template.html` (the client) and
+`main.rs` (CLI dispatch only).
 
 ## Three domain invariants (do not break)
 
