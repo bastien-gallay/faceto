@@ -1,6 +1,10 @@
 //! A tiny std-only HTTP server for the live board: serves the page, re-renders the SVG on
-//! demand (so an edited model shows without a restart), an in-page diff against a cached
-//! baseline, and a click→comment channel appended to `comments.jsonl`.
+//! demand (so an appended event shows without a restart), an in-page diff against a cached
+//! baseline, and a click→comment channel appended to the event log as events.
+//!
+//! The server always operates in event-log mode: `main` resolves any `model.json` to its
+//! sibling `event-log.jsonl` before calling [`serve`] (auto-running genesis if needed), so the
+//! log is the only file this server ever mutates. There is no legacy `comments.jsonl` path.
 
 use crate::{events, json, model, model::Model, render};
 use std::collections::{HashMap, VecDeque};
@@ -10,7 +14,6 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const CACHE_MAX: usize = 12;
 
@@ -20,11 +23,8 @@ struct Cache {
 }
 
 struct Ctx {
+    /// The event log — the single source of truth this server reads and appends to.
     model_path: PathBuf,
-    comments_path: PathBuf,
-    /// When the source is an event log, the model is a projection replayed from it and
-    /// comments are appended to the log as events rather than to `comments.jsonl`.
-    log_mode: bool,
     cache: Mutex<Cache>,
     /// Serializes appends to the log (H4): concurrent `POST /comment` handlers run on
     /// separate threads, so without this two events could interleave mid-line. Holding
@@ -33,19 +33,26 @@ struct Ctx {
 }
 
 impl Ctx {
-    /// The current board and its short content hash, recorded in the recent-model ring.
-    /// In log mode the board is replayed from the event log; otherwise it is the parsed
-    /// model file. Either way the version hashes the raw source bytes, so the cached
-    /// projection is rebuilt only when a new event (or edit) lands.
+    /// A context over an event log, with an empty recent-model ring and a free appends lock.
+    fn new(model_path: PathBuf) -> Self {
+        Ctx {
+            model_path,
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        }
+    }
+
+    /// The current board and its short content hash, recorded in the recent-model ring. The board
+    /// is replayed from the event log; the version hashes the raw log bytes, so the cached
+    /// projection is rebuilt only when a new event lands.
     fn current(&self) -> Result<(String, Model), String> {
         let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
         let version = fnv12(&raw);
         let text = String::from_utf8_lossy(&raw);
-        let model = if self.log_mode {
-            events::replay(&events::parse_log(&text)?)
-        } else {
-            model::from_json(&json::parse(&text)?)
-        };
+        let model = events::replay(&events::parse_log(&text)?);
         let mut c = self.cache.lock().unwrap();
         if !c.map.contains_key(&version) {
             c.map.insert(version.clone(), model.clone());
@@ -191,44 +198,24 @@ fn mint_region_id(log: &[events::Event]) -> String {
     format!("K{}", max_region.saturating_add(1))
 }
 
-pub fn serve(model_path: &Path, port: u16) -> Result<(), String> {
-    let dir = model_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let log_mode = events::is_log_path(model_path);
-    let ctx = Arc::new(Ctx {
-        model_path: model_path.to_path_buf(),
-        comments_path: dir.join("comments.jsonl"),
-        log_mode,
-        cache: Mutex::new(Cache {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-        }),
-        appends: Mutex::new(()),
-    });
+/// Serve the live board for an event log. `main` guarantees `log_path` is an `event-log.jsonl`
+/// (resolving any `model.json` through `serve_log_path` first), so this server only ever reads and
+/// appends to the log — the single source of truth.
+pub fn serve(log_path: &Path, port: u16) -> Result<(), String> {
+    let ctx = Arc::new(Ctx::new(log_path.to_path_buf()));
 
-    // Validate the model up front so a typo fails loudly, not per-request.
+    // Validate the log up front so a typo fails loudly, not per-request.
     let (_v, model) = ctx.current()?;
     let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| e.to_string())?;
     println!(
         "faceto board live → http://127.0.0.1:{}  (Ctrl-C to stop)",
         port
     );
-    if log_mode {
-        println!(
-            "  {} elements · event-sourced · comments append to {}",
-            model.elements.len(),
-            ctx.model_path.display()
-        );
-    } else {
-        println!(
-            "  {} elements · comments → {}",
-            model.elements.len(),
-            ctx.comments_path.display()
-        );
-    }
+    println!(
+        "  {} elements · event-sourced · edits append to {}",
+        model.elements.len(),
+        ctx.model_path.display()
+    );
 
     for stream in listener.incoming() {
         let stream = match stream {
@@ -342,11 +329,7 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
             ),
         },
         ("GET", "/comments") => {
-            let body = if ctx.log_mode {
-                comments_from_log(&ctx.model_path)
-            } else {
-                read_comments_json(&ctx.comments_path)
-            };
+            let body = comments_from_log(&ctx.model_path);
             send(&mut out, 200, "application/json", body.as_bytes(), &[])
         }
         ("GET", "/health") => send(&mut out, 200, "application/json", b"{\"ok\":true}", &[]),
@@ -356,60 +339,39 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                 return send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]);
             }
             let text = String::from_utf8_lossy(&buf);
-            if ctx.log_mode {
-                return match json::parse(&text) {
-                    Ok(v @ json::Json::Obj(_))
-                        if matches!(v.get_str("kind"), Some("add") | Some("region-add")) =>
-                    {
-                        // Both need a server-minted id (H6 / review #3), so both go through the
-                        // same mint-and-respond path — only which append fn mints differs.
-                        let result = if v.get_str("kind") == Some("add") {
-                            add_from_comment(&ctx, &v)
-                        } else {
-                            add_region_from_comment(&ctx, &v)
-                        };
-                        match result {
-                            Ok(ev) => {
-                                println!("  \u{2795} event: {}", events::line(&ev));
-                                send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
-                            }
-                            Err(code) => {
-                                send(&mut out, code, "application/json", b"{\"ok\":false}", &[])
-                            }
-                        }
-                    }
-                    Ok(v @ json::Json::Obj(_)) => {
-                        let evs = events::comment_to_events(&v);
-                        if evs.is_empty() {
-                            return send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]);
-                        }
-                        // Join so a multi-event action (a swap is two `ElementMoved`s) lands as
-                        // consecutive lines under one append — never split by another post.
-                        let block = evs.iter().map(events::line).collect::<Vec<_>>().join("\n");
-                        if ctx.append_line(&ctx.model_path, &block).is_err() {
-                            return send(&mut out, 500, "application/json", b"{\"ok\":false}", &[]);
-                        }
-                        println!("  \u{1F4AC} event: {}", block);
-                        send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
-                    }
-                    _ => send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]),
-                };
-            }
             match json::parse(&text) {
-                Ok(json::Json::Obj(mut o)) => {
-                    if !o.iter().any(|(k, _)| k == "status") {
-                        o.push(("status".into(), json::Json::Str("open".into())));
+                Ok(v @ json::Json::Obj(_))
+                    if matches!(v.get_str("kind"), Some("add") | Some("region-add")) =>
+                {
+                    // Both need a server-minted id (H6 / review #3), so both go through the
+                    // same mint-and-respond path — only which append fn mints differs.
+                    let result = if v.get_str("kind") == Some("add") {
+                        add_from_comment(&ctx, &v)
+                    } else {
+                        add_region_from_comment(&ctx, &v)
+                    };
+                    match result {
+                        Ok(ev) => {
+                            println!("  \u{2795} event: {}", events::line(&ev));
+                            send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
+                        }
+                        Err(code) => {
+                            send(&mut out, code, "application/json", b"{\"ok\":false}", &[])
+                        }
                     }
-                    o.push(("received".into(), json::Json::Str(now_iso())));
-                    let v = json::Json::Obj(o);
-                    let line = json::to_string(&v);
-                    if ctx.append_line(&ctx.comments_path, &line).is_err() {
+                }
+                Ok(v @ json::Json::Obj(_)) => {
+                    let evs = events::comment_to_events(&v);
+                    if evs.is_empty() {
+                        return send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]);
+                    }
+                    // Join so a multi-event action (a swap is two `ElementMoved`s) lands as
+                    // consecutive lines under one append — never split by another post.
+                    let block = evs.iter().map(events::line).collect::<Vec<_>>().join("\n");
+                    if ctx.append_line(&ctx.model_path, &block).is_err() {
                         return send(&mut out, 500, "application/json", b"{\"ok\":false}", &[]);
                     }
-                    let kind = v.get_str("kind").unwrap_or("comment");
-                    let elem = v.get_str("elemId").unwrap_or("?");
-                    let body = v.get_str("text").unwrap_or("");
-                    println!("  \u{1F4AC} [{}] {}: {}", kind, elem, body);
+                    println!("  \u{1F4AC} event: {}", block);
                     send(&mut out, 200, "application/json", b"{\"ok\":true}", &[])
                 }
                 _ => send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]),
@@ -550,24 +512,6 @@ fn comments_from_log(path: &Path) -> String {
     format!("[{}]", items.join(","))
 }
 
-fn read_comments_json(path: &Path) -> String {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(_) => return "[]".to_string(),
-    };
-    let mut items: Vec<String> = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if json::parse(line).is_ok() {
-            items.push(line.to_string());
-        }
-    }
-    format!("[{}]", items.join(","))
-}
-
 /// FNV-1a 64-bit, first 12 hex chars — a stable, dependency-free content version token.
 fn fnv12(bytes: &[u8]) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
@@ -576,36 +520,6 @@ fn fnv12(bytes: &[u8]) -> String {
         h = h.wrapping_mul(0x100000001b3);
     }
     format!("{:016x}", h)[..12].to_string()
-}
-
-/// Current UTC time as an ISO-8601 string, no chrono. (server-side `received` stamp)
-fn now_iso() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let days = secs.div_euclid(86400);
-    let rem = secs.rem_euclid(86400);
-    let (h, mi, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    let (y, mo, d) = civil_from_days(days);
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}+00:00",
-        y, mo, d, h, mi, s
-    )
-}
-
-/// Days since the Unix epoch → (year, month, day). Howard Hinnant's civil-from-days.
-fn civil_from_days(z0: i64) -> (i64, i64, i64) {
-    let z = z0 + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 #[cfg(test)]
@@ -624,28 +538,12 @@ mod tests {
     }
 
     #[test]
-    fn civil_from_days_maps_known_epochs() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(10957), (2000, 1, 1));
-        assert_eq!(civil_from_days(-1), (1969, 12, 31));
-    }
-
-    #[test]
     fn concurrent_appends_never_interleave() {
         // H4: many threads append to one log through a shared Ctx; every line must land
         // whole and intact, with the expected total count and no torn/merged lines.
         let path = std::env::temp_dir().join(format!("faceto-h4-{}.log", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let ctx = Arc::new(Ctx {
-            model_path: path.clone(),
-            comments_path: path.clone(),
-            log_mode: true,
-            cache: Mutex::new(Cache {
-                map: HashMap::new(),
-                order: VecDeque::new(),
-            }),
-            appends: Mutex::new(()),
-        });
+        let ctx = Arc::new(Ctx::new(path.clone()));
 
         const THREADS: usize = 8;
         const PER_THREAD: usize = 50;
@@ -766,16 +664,7 @@ mod tests {
             std::env::temp_dir().join(format!("faceto-region-h6-{}.jsonl", std::process::id()));
         let _ = std::fs::remove_file(&path);
         std::fs::write(&path, events::line(&region_added("K1", 0, 2)) + "\n").unwrap();
-        let ctx = Ctx {
-            model_path: path.clone(),
-            comments_path: path.clone(),
-            log_mode: true,
-            cache: Mutex::new(Cache {
-                map: HashMap::new(),
-                order: VecDeque::new(),
-            }),
-            appends: Mutex::new(()),
-        };
+        let ctx = Ctx::new(path.clone());
 
         let ev = ctx.append_region_add("Checkout".into(), 3, 6).unwrap();
         assert!(matches!(&ev, events::Event::PhaseAdded { id: Some(id), .. } if id == "K2"));
@@ -846,16 +735,7 @@ mod tests {
 
     #[test]
     fn add_region_from_comment_rejects_an_inverted_or_zero_width_span() {
-        let ctx = Ctx {
-            model_path: std::env::temp_dir().join("faceto-nonexistent-region.jsonl"),
-            comments_path: std::env::temp_dir().join("faceto-nonexistent-region.jsonl"),
-            log_mode: true,
-            cache: Mutex::new(Cache {
-                map: HashMap::new(),
-                order: VecDeque::new(),
-            }),
-            appends: Mutex::new(()),
-        };
+        let ctx = Ctx::new(std::env::temp_dir().join("faceto-nonexistent-region.jsonl"));
         // The span check runs before any file access, same as the label check — no file needed.
         let inverted =
             json::parse(r#"{"kind":"region-add","text":"X","fromCol":5,"toCol":2}"#).unwrap();
@@ -923,16 +803,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("faceto-h6-{}.jsonl", std::process::id()));
         let _ = std::fs::remove_file(&path);
         std::fs::write(&path, events::line(&added("E1", "event")) + "\n").unwrap();
-        let ctx = Ctx {
-            model_path: path.clone(),
-            comments_path: path.clone(),
-            log_mode: true,
-            cache: Mutex::new(Cache {
-                map: HashMap::new(),
-                order: VecDeque::new(),
-            }),
-            appends: Mutex::new(()),
-        };
+        let ctx = Ctx::new(path.clone());
 
         let ev = ctx
             .append_add("event", "DayStarted".into(), Some(2), None, false)
@@ -981,16 +852,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("faceto-corrupt-{}.jsonl", std::process::id()));
         std::fs::write(&path, "{ this is not json\n").unwrap();
-        let ctx = Ctx {
-            model_path: path.clone(),
-            comments_path: path.clone(),
-            log_mode: true,
-            cache: Mutex::new(Cache {
-                map: HashMap::new(),
-                order: VecDeque::new(),
-            }),
-            appends: Mutex::new(()),
-        };
+        let ctx = Ctx::new(path.clone());
         let r = ctx.append_add("event", "X".into(), None, None, false);
         let _ = std::fs::remove_file(&path);
         assert!(r.is_err());
@@ -999,16 +861,7 @@ mod tests {
     #[test]
     fn add_with_a_blank_label_is_rejected() {
         // The label check fires before any file access, so a bare Ctx is enough.
-        let ctx = Ctx {
-            model_path: std::env::temp_dir().join("faceto-nonexistent.jsonl"),
-            comments_path: std::env::temp_dir().join("faceto-nonexistent.jsonl"),
-            log_mode: true,
-            cache: Mutex::new(Cache {
-                map: HashMap::new(),
-                order: VecDeque::new(),
-            }),
-            appends: Mutex::new(()),
-        };
+        let ctx = Ctx::new(std::env::temp_dir().join("faceto-nonexistent.jsonl"));
         let v = json::parse(r#"{"kind":"add","type":"event","text":"   "}"#).unwrap();
         assert_eq!(add_from_comment(&ctx, &v), Err(400));
 
@@ -1026,16 +879,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("faceto-rn-{}.jsonl", std::process::id()));
         let _ = std::fs::remove_file(&path);
         std::fs::write(&path, events::line(&added("E1", "event")) + "\n").unwrap();
-        let ctx = Ctx {
-            model_path: path.clone(),
-            comments_path: path.clone(),
-            log_mode: true,
-            cache: Mutex::new(Cache {
-                map: HashMap::new(),
-                order: VecDeque::new(),
-            }),
-            appends: Mutex::new(()),
-        };
+        let ctx = Ctx::new(path.clone());
         let before = std::fs::read_to_string(&path).unwrap();
 
         // Blank rename → empty event vec → the handler appends nothing.
@@ -1062,14 +906,5 @@ mod tests {
         let model = events::replay(&events::parse_log(&text).unwrap());
         let e1 = model.elements.iter().find(|e| e.id == "E1").unwrap();
         assert_eq!(e1.label, "Reborn");
-    }
-
-    #[test]
-    fn now_iso_has_iso8601_utc_shape() {
-        let s = now_iso();
-        assert_eq!(s.len(), "1970-01-01T00:00:00+00:00".len());
-        assert!(s.ends_with("+00:00"));
-        assert_eq!(s.as_bytes()[4], b'-');
-        assert_eq!(s.as_bytes()[10], b'T');
     }
 }
