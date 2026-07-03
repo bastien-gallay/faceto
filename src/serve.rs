@@ -17,6 +17,10 @@ use std::thread;
 
 const CACHE_MAX: usize = 12;
 
+/// Upper bound on a `POST /comment` body. Comments and structural ops are a few hundred bytes;
+/// 1 MiB is generous headroom while refusing an attacker-sized `Content-Length` before allocating.
+const MAX_BODY: usize = 1 << 20;
+
 struct Cache {
     map: HashMap<String, Model>,
     order: VecDeque<String>,
@@ -334,6 +338,11 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
         }
         ("GET", "/health") => send(&mut out, 200, "application/json", b"{\"ok\":true}", &[]),
         ("POST", "/comment") => {
+            // Cap the body before allocating: `content_length` is attacker-controlled (a header),
+            // and a comment/structural op is tiny, so a huge value is a bug or a DoS, never real.
+            if content_length > MAX_BODY {
+                return send(&mut out, 413, "application/json", b"{\"ok\":false}", &[]);
+            }
             let mut buf = vec![0u8; content_length];
             if reader.read_exact(&mut buf).is_err() {
                 return send(&mut out, 400, "application/json", b"{\"ok\":false}", &[]);
@@ -398,6 +407,7 @@ fn send(
         200 => "OK",
         400 => "Bad Request",
         404 => "Not Found",
+        413 => "Payload Too Large",
         500 => "Internal Server Error",
         _ => "OK",
     };
