@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ES-grammar linter** (F-es-lint): `faceto lint SOURCE` — a pure, zero-dep graph pass
+  (`src/lint.rs`) that flags event-storming defects a workshop review would raise by hand
+  (event with no producer, policy with no input/output, non-terminal event with no outbound
+  edge). **Warn-only**, always exits 0. An optional board `level: big-picture | design`
+  (top-level in `model.json`, a `BoardLeveled` log event) adds one stricter rule at `design`
+  — `command-no-output`, a command that emits no event. `serve`'s `/comments` sidebar now
+  merges the live findings as `kind:"lint"` entries (computed on read, suppressed once the
+  element is resolved), so the tool's nudges sit beside human notes in the review loop.
 - **Direct on-board editing** (F-inline-edit): rename a sticky in place (double-click
   or **F2** → an inline field; Enter commits, Escape cancels) and remove one with
   **Delete / Backspace** (with a confirm). Move was already direct (← / →), so the

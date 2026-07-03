@@ -341,22 +341,10 @@ fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
                 &[],
             ),
         },
-        ("GET", "/comments") => match ctx.current() {
-            Ok((_version, model)) => {
-                // Stored feedback first, then the live lint findings — so a reviewer sees human
-                // notes and the tool's grammar nudges in one list. `ctx.current()` already gave us
-                // the (cached) projection, so merging costs one extra O(V+E) lint pass per request.
-                let mut items = if ctx.log_mode {
-                    comments_from_log(&ctx.model_path)
-                } else {
-                    read_comments_json(&ctx.comments_path)
-                };
-                items.extend(lint_items(&model));
-                let body = format!("[{}]", items.join(","));
-                send(&mut out, 200, "application/json", body.as_bytes(), &[])
-            }
-            Err(e) => send(&mut out, 500, "application/json", e.as_bytes(), &[]),
-        },
+        ("GET", "/comments") => {
+            let body = comments_body(&ctx);
+            send(&mut out, 200, "application/json", body.as_bytes(), &[])
+        }
         ("GET", "/health") => send(&mut out, 200, "application/json", b"{\"ok\":true}", &[]),
         ("POST", "/comment") => {
             let mut buf = vec![0u8; content_length];
@@ -522,13 +510,44 @@ fn add_region_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u
         .map_err(|_| 500u16)
 }
 
+/// The full `/comments` response body: stored feedback first, then the live lint findings,
+/// framed as one JSON array. The lint merge is **best-effort** — if the board doesn't parse
+/// (`ctx.current()` errors), the stored comments still come back on their own (they have their own
+/// error tolerance and, in legacy mode, live in a separate file). So a malformed source degrades
+/// to comments-only rather than hiding the reviewer's notes behind a 500 — the same resilience the
+/// endpoint had before lint was merged in.
+fn comments_body(ctx: &Ctx) -> String {
+    let mut items = if ctx.log_mode {
+        comments_from_log(&ctx.model_path)
+    } else {
+        read_comments_json(&ctx.comments_path)
+    };
+    if let Ok((_version, model)) = ctx.current() {
+        items.extend(lint_items(&model));
+    }
+    format!("[{}]", items.join(","))
+}
+
+/// One sidebar comment item — the `{elemId, kind, text, status:"open"}` JSON string the client
+/// renders. The single definition of the sidebar wire-shape, shared by the log projection
+/// ([`comments_from_log`]) and the lint merge ([`lint_items`]) so the two lanes can never drift.
+fn comment_item(elem_id: &str, kind: &str, text: &str) -> String {
+    let obj = json::Json::Obj(vec![
+        ("elemId".into(), json::Json::Str(elem_id.to_string())),
+        ("kind".into(), json::Json::Str(kind.to_string())),
+        ("text".into(), json::Json::Str(text.to_string())),
+        ("status".into(), json::Json::Str("open".into())),
+    ]);
+    json::to_string(&obj)
+}
+
 /// Project the log's *feedback* events (annotations, resolutions, renames) back into the
 /// comment shape the client sidebar expects. Structural events (adds, moves, edges) are
 /// omitted — they already live in the rendered board. Feedback on an element that was later
 /// removed is dropped too, so the sidebar never lists a comment for a box that's off the board.
 ///
-/// Returns the item JSON strings (not the joined array); the `GET /comments` handler concatenates
-/// these with the live [`lint_items`] before framing the response.
+/// Returns the item JSON strings (not the joined array); [`comments_body`] concatenates these
+/// with the live [`lint_items`] before framing the response.
 fn comments_from_log(path: &Path) -> Vec<String> {
     let log = match events::read_log(path) {
         Ok(e) => e,
@@ -550,13 +569,7 @@ fn comments_from_log(path: &Path) -> Vec<String> {
         if !present.contains(id.as_str()) {
             continue;
         }
-        let obj = json::Json::Obj(vec![
-            ("elemId".into(), json::Json::Str(id.clone())),
-            ("kind".into(), json::Json::Str(kind.into())),
-            ("text".into(), json::Json::Str(text)),
-            ("status".into(), json::Json::Str("open".into())),
-        ]);
-        items.push(json::to_string(&obj));
+        items.push(comment_item(id, kind, &text));
     }
     items
 }
@@ -589,23 +602,18 @@ fn read_comments_json(path: &Path) -> Vec<String> {
 /// — that is the whole "reuse serve→review→resolve" story, keyed on `Finding.element_id` == the
 /// same stable id `HotspotResolved.id` uses. Per-finding acknowledgement is F-comment-lifecycle's.
 fn lint_items(model: &Model) -> Vec<String> {
+    // Build the resolved-id set once (O(V)) so the per-finding suppression check is O(1) — the
+    // same present-set idiom `comments_from_log` uses, instead of an O(findings × elements) rescan.
+    let resolved: std::collections::HashSet<&str> = model
+        .elements
+        .iter()
+        .filter(|e| e.resolved)
+        .map(|e| e.id.as_str())
+        .collect();
     crate::lint::lint(model)
         .into_iter()
-        .filter(|f| {
-            !model
-                .elements
-                .iter()
-                .any(|e| e.id == f.element_id && e.resolved)
-        })
-        .map(|f| {
-            let obj = json::Json::Obj(vec![
-                ("elemId".into(), json::Json::Str(f.element_id.clone())),
-                ("kind".into(), json::Json::Str("lint".into())),
-                ("text".into(), json::Json::Str(f.message.into())),
-                ("status".into(), json::Json::Str("open".into())),
-            ]);
-            json::to_string(&obj)
-        })
+        .filter(|f| !resolved.contains(f.element_id.as_str()))
+        .map(|f| comment_item(&f.element_id, "lint", f.message))
         .collect()
 }
 
@@ -1016,6 +1024,51 @@ mod tests {
         let items = lint_items(&m);
         assert_eq!(items.len(), 1);
         assert!(items[0].contains(r#""elemId":"C1""#) && items[0].contains(r#""kind":"lint""#));
+    }
+
+    #[test]
+    fn comments_body_degrades_to_comments_only_on_a_malformed_source() {
+        // A corrupt log must not 500 the sidebar: comments_body still returns a valid (here empty)
+        // JSON array instead of failing, so a malformed source can't hide the stored comments.
+        let path = std::env::temp_dir().join(format!("faceto-cb-bad-{}.jsonl", std::process::id()));
+        std::fs::write(&path, "not json at all\n").unwrap();
+        let ctx = Ctx {
+            model_path: path.clone(),
+            comments_path: path.clone(),
+            log_mode: true,
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        };
+        let body = comments_body(&ctx);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            body, "[]",
+            "a malformed source degrades to comments-only, never a 500"
+        );
+    }
+
+    #[test]
+    fn comments_body_merges_lint_findings_when_the_board_parses() {
+        // A valid log with an orphan event: no stored comments, two lint nudges, framed as an array.
+        let path = std::env::temp_dir().join(format!("faceto-cb-ok-{}.jsonl", std::process::id()));
+        std::fs::write(&path, events::line(&added("E1", "event")) + "\n").unwrap();
+        let ctx = Ctx {
+            model_path: path.clone(),
+            comments_path: path.clone(),
+            log_mode: true,
+            cache: Mutex::new(Cache {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            appends: Mutex::new(()),
+        };
+        let body = comments_body(&ctx);
+        let _ = std::fs::remove_file(&path);
+        assert!(body.starts_with('[') && body.ends_with(']'));
+        assert_eq!(body.matches(r#""kind":"lint""#).count(), 2);
     }
 
     #[test]
