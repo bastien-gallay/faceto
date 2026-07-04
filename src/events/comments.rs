@@ -1,10 +1,9 @@
-//! Fold a legacy `comments.jsonl` into events ([`from_comments`]) and map one posted comment
-//! to the events it implies ([`comment_to_events`]) — the single source of truth shared with
-//! `serve.rs`'s `POST /comment`.
+//! The comment→event seam: [`comment_to_events`] maps one posted/stored comment to the events it
+//! implies (the single source of truth shared with `serve.rs`'s `POST /comment`), plus the small
+//! write-seam guards it shares with the server (`nonblank`, `valid_span`, `clamp_y`).
 
-use super::log::jsonl_records;
 use super::Event;
-use crate::json::{self, Json};
+use crate::json::Json;
 
 /// A label with content: the string trimmed, or `None` when it is blank. The one place the
 /// "a label must carry content" rule lives — a blank one would mint or rename into a permanent,
@@ -35,9 +34,8 @@ pub fn clamp_y(y: f64) -> f64 {
 }
 
 /// Map one posted/stored comment object to the event(s) it persists — the single source of
-/// truth for the comment→event translation, shared by the live server (`POST /comment` in log
-/// mode) and the `comments.jsonl` migration ([`from_comments`]). `move`/`resolve`/`rename`/`drop`
-/// carry structural intent and fold straight into the projection; `split`/`question`/`comment`
+/// truth for the comment→event translation, used by the live server (`POST /comment`).
+/// `move`/`resolve`/`rename`/`drop` carry structural intent and fold straight into the projection; `split`/`question`/`comment`
 /// stay advisory annotations. A `move` that displaces an occupant — the client sends
 /// `swapId`/`swapCol` — yields **two** `ElementMoved`s so the swap round-trips. Returns an empty
 /// vec when the comment names no element, when a `move` carries no target col, or when a `rename`
@@ -119,9 +117,9 @@ fn region_comment_to_events(v: &Json, kind: &str) -> Vec<Event> {
         return Vec::new();
     };
     match kind {
-        // Legacy independent-span resize (old clients / stashed offline / `comments.jsonl`
-        // migration). The live client posts `frontier-move` instead; either way `normalize`
-        // projects the result onto a contiguous partition.
+        // Legacy independent-span resize (old clients / stashed offline). The live client posts
+        // `frontier-move` instead; either way `normalize` projects the result onto a contiguous
+        // partition.
         "region-resize" => match (v.get_i64("fromCol"), v.get_i64("toCol")) {
             (Some(from_col), Some(to_col)) if valid_span(from_col, to_col) => {
                 vec![Event::PhaseResized {
@@ -155,38 +153,6 @@ fn region_comment_to_events(v: &Json, kind: &str) -> Vec<Event> {
         "region-remove" => vec![Event::PhaseRemoved { id }],
         _ => Vec::new(),
     }
-}
-
-/// Fold a legacy `comments.jsonl` into the events it represents — the answer to H5, the second
-/// half of the migration story alongside [`from_model`](crate::events::from_model). Each non-blank
-/// line is one stored comment;
-/// [`comment_to_events`] translates it. Unlike the log proper, the comments inbox was always a
-/// *best-effort* sidecar, so a line that cannot be migrated is **skipped** (not a hard error) —
-/// migrating disposable feedback must not abort on one stray line. Append the result after a
-/// model's genesis batch: the batch mints the ids these comments reference, so replaying the two
-/// together reconstructs the board *and* its annotations/resolutions/renames.
-///
-/// Returns the events **and the count of non-blank lines that produced none** — unparseable, not
-/// an object, naming no element, or a kind that carries no board change (e.g. a legacy `add`, which
-/// in non-log mode was only ever an inbox note and carries no `elemId` to attach to). The count
-/// lets the caller report the loss instead of dropping those lines silently.
-pub fn from_comments(text: &str) -> (Vec<Event>, usize) {
-    let mut out = Vec::new();
-    let mut skipped = 0usize;
-    for (_, line) in jsonl_records(text) {
-        match json::parse(line) {
-            Ok(v @ Json::Obj(_)) => {
-                let evs = comment_to_events(&v);
-                if evs.is_empty() {
-                    skipped += 1;
-                } else {
-                    out.extend(evs);
-                }
-            }
-            _ => skipped += 1,
-        }
-    }
-    (out, skipped)
 }
 
 #[cfg(test)]
@@ -291,57 +257,6 @@ mod tests {
                 "posted {posted}: got {evs:?}"
             );
         }
-    }
-
-    // H5: a legacy comments.jsonl folded after a model's genesis batch must reconstruct both the
-    // board and its feedback (annotation, resolution, rename, move).
-    #[test]
-    fn from_comments_folds_a_legacy_inbox_onto_the_genesis_batch() {
-        let model_src = r#"{
-            "title":"Legacy",
-            "elements":[
-                {"id":"E1","type":"event","label":"Born","col":0},
-                {"id":"H1","type":"hotspot","label":"open?","col":2}
-            ]
-        }"#;
-        let model = crate::model::from_json(&json::parse(model_src).unwrap());
-        let inbox = "\
-            {\"elemId\":\"E1\",\"kind\":\"comment\",\"text\":\"a note\"}\n\
-            {\"elemId\":\"E1\",\"kind\":\"rename\",\"text\":\"Reborn\"}\n\
-            {\"elemId\":\"E1\",\"kind\":\"move\",\"col\":4}\n\
-            {\"elemId\":\"H1\",\"kind\":\"resolve\",\"text\":\"settled\"}\n";
-
-        let (folded, skipped) = from_comments(inbox);
-        assert_eq!(skipped, 0); // every line migrated
-        let mut log = from_model(&model);
-        log.extend(folded);
-        let m = replay(&log);
-
-        let e1 = m.elements.iter().find(|e| e.id == "E1").unwrap();
-        assert_eq!(e1.label, "Reborn"); // rename applied
-        assert_eq!(e1.col, Some(4)); // move applied
-                                     // The annotation lands first, then the rename overwrites the label — but `detail` keeps
-                                     // the note (annotation sets detail; rename only touches the label).
-        assert_eq!(e1.detail.as_deref(), Some("a note"));
-        let h1 = m.elements.iter().find(|e| e.id == "H1").unwrap();
-        assert!(h1.resolved);
-        assert_eq!(h1.detail.as_deref(), Some("settled"));
-    }
-
-    #[test]
-    fn from_comments_skips_blank_malformed_and_element_less_lines() {
-        let inbox = "\
-            \n  \n\
-            {not json}\n\
-            {\"kind\":\"comment\",\"text\":\"orphan, no elemId\"}\n\
-            {\"kind\":\"add\",\"type\":\"event\",\"text\":\"legacy add, no elemId\"}\n\
-            {\"elemId\":\"E1\",\"kind\":\"comment\",\"text\":\"kept\"}\n";
-        let (evs, skipped) = from_comments(inbox);
-        assert_eq!(evs.len(), 1);
-        assert!(matches!(&evs[0], Event::ElementAnnotated { id, text }
-            if id == "E1" && text == "kept"));
-        // Blank lines are not counted; the malformed line, the orphan, and the legacy `add` are.
-        assert_eq!(skipped, 3);
     }
 
     #[test]
