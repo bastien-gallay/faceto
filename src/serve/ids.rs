@@ -46,3 +46,93 @@ pub(crate) fn mint_region_id(log: &[events::Event]) -> String {
     // side we just take one past the highest suffix ever spent.
     format!("K{}", events::region_watermark(log).saturating_add(1))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events;
+    use crate::serve::testutil::*;
+
+    #[test]
+    fn mint_id_picks_next_free_suffix_per_lane() {
+        // H6: ids are type-prefixed and never renumbered — minting takes one past the
+        // highest suffix already used under that prefix, independently per lane.
+        let log = [
+            added("E1", "event"),
+            added("E3", "event"),
+            added("C1", "command"),
+        ];
+        assert_eq!(mint_id("event", &log), "E4"); // past the highest E, not filling the E2 gap
+        assert_eq!(mint_id("command", &log), "C2");
+        assert_eq!(mint_id("hotspot", &log), "H1"); // empty lane starts at 1
+        assert_eq!(mint_id("actor", &log), "X1"); // actor stamps X, not A
+        assert_eq!(mint_id("aggregate", &log), "A1");
+    }
+
+    #[test]
+    fn mint_id_does_not_reuse_a_removed_id() {
+        // A dropped element's ElementAdded stays in the log (until compaction), so its id must
+        // stay reserved — re-minting it would alias leftover events (e.g. its annotations).
+        let log = [
+            added("E1", "event"),
+            added("E2", "event"),
+            events::Event::ElementRemoved { id: "E2".into() },
+        ];
+        assert_eq!(mint_id("event", &log), "E3");
+    }
+
+    #[test]
+    fn mint_region_id_picks_next_free_k_suffix() {
+        let log = [region_added("K1", 0, 2), region_added("K3", 3, 5)];
+        assert_eq!(mint_region_id(&log), "K4"); // past the highest K, not filling the K2 gap
+        assert_eq!(mint_region_id(&[]), "K1"); // empty log starts at 1
+    }
+
+    #[test]
+    fn mint_region_id_does_not_reuse_a_removed_id() {
+        let log = [
+            region_added("K1", 0, 2),
+            region_added("K2", 3, 5),
+            events::Event::PhaseRemoved { id: "K2".into() },
+        ];
+        assert_eq!(mint_region_id(&log), "K3");
+    }
+
+    #[test]
+    fn mint_region_id_shares_the_namespace_with_replays_synthetic_ids() {
+        // Review #3: a legacy id-less PhaseAdded replays to a synthetic K<n> (resolve_region_id).
+        // The mint must reserve that suffix too, or a fresh region could collide with one replay
+        // would later synthesize for the same log.
+        let log = [events::Event::PhaseAdded {
+            id: None,
+            label: "Legacy".into(),
+            from_col: 0,
+            to_col: 2,
+        }];
+        assert_eq!(mint_region_id(&log), "K2"); // K1 is reserved for the legacy band
+        let model = events::replay(&log);
+        assert_eq!(model.phases[0].id, "K1");
+    }
+
+    #[test]
+    fn mint_region_id_reserves_split_ids() {
+        // A split's minted right-half id lives in the same namespace; the next mint must skip it.
+        let log = [
+            region_added("K1", 0, 5),
+            events::Event::PhaseSplit {
+                id: "K1".into(),
+                at_col: 3,
+                new_id: "K2".into(),
+                new_label: "Right".into(),
+            },
+        ];
+        assert_eq!(mint_region_id(&log), "K3", "K2 is spent by the split");
+    }
+
+    #[test]
+    fn mint_id_saturates_instead_of_overflowing() {
+        // A hand-edited log with a suffix at u32::MAX must not panic/wrap.
+        let log = [added("E4294967295", "event")];
+        assert_eq!(mint_id("event", &log), "E4294967295");
+    }
+}

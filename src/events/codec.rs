@@ -1,5 +1,5 @@
 //! JSON codec for [`Event`]: parse a raw log record into an `Event` (with the legacy-kind
-//! [`upcast`] seam) and serialize one back out ([`to_json`] / [`line`] / [`to_jsonl`]).
+//! [`upcast`] seam) and serialize one back out ([`to_json`] / [`line()`] / [`to_jsonl`]).
 
 use super::Event;
 use crate::json::{self, Json};
@@ -37,6 +37,40 @@ fn upcast(j: &Json) -> Cow<'_, Json> {
         },
         _ => Cow::Borrowed(j),
     }
+}
+
+/// The event kinds this build understands — the current schema plus the legacy aliases [`upcast`]
+/// migrates forward. The single named list of the kind vocabulary, so [`parse_event`]'s match arms
+/// and the malformed-vs-unknown split in `parse_log` read from one place instead of scattering the
+/// strings. Keep in sync with [`parse_event`] / [`to_json`] whenever a variant is added.
+pub(crate) const KNOWN_KINDS: &[&str] = &[
+    "BoardTitled",
+    "BoardLeveled",
+    "PhaseAdded",
+    "PhaseResized",
+    "PhaseRenamed",
+    "PhaseRemoved",
+    "FrontierMoved",
+    "PhaseSplit",
+    "ElementAdded",
+    "ElementRenamed",
+    "ElementMoved",
+    "ElementAnnotated",
+    "HotspotResolved",
+    "ElementRemoved",
+    "EdgeAdded",
+    "EdgeRemoved",
+    "LogCompacted",
+    // legacy aliases upcast() rewrites to a current kind
+    "CommentAdded",
+    "Comment",
+];
+
+/// Whether `kind` is one [`parse_event`] recognises (current schema + [`upcast`] aliases). Lets
+/// `parse_log` distinguish a *malformed known* event (in this set, but [`parse_event`] couldn't
+/// build it → hard error) from a *future/unknown* kind (outside it → skipped).
+pub(crate) fn is_known_kind(kind: &str) -> bool {
+    KNOWN_KINDS.contains(&kind)
 }
 
 /// One JSON object → an `Event`, or `None` for an unknown/ill-shaped event kind. The object is
@@ -273,4 +307,109 @@ pub fn to_jsonl(events: &[Event]) -> String {
         out.push('\n');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::testutil::*;
+    use crate::events::*;
+    use crate::json::{self};
+
+    #[test]
+    fn phase_added_round_trips_its_id() {
+        let e = ev(r#"{"event":"PhaseAdded","id":"K1","label":"Checkout","fromCol":0,"toCol":3}"#);
+        assert!(matches!(&e, Event::PhaseAdded { id: Some(id), label, .. }
+            if id == "K1" && label == "Checkout"));
+        // serialize → parse is a fixed point
+        assert_eq!(
+            json::to_string(&to_json(&ev(&line(&e)))),
+            json::to_string(&to_json(&e))
+        );
+    }
+
+    #[test]
+    fn frontier_and_split_events_round_trip() {
+        for line in [
+            r#"{"event":"FrontierMoved","id":"K1","edge":"end","col":5}"#,
+            r#"{"event":"FrontierMoved","id":"K1","edge":"start","col":-2}"#,
+            r#"{"event":"PhaseSplit","id":"K1","atCol":3,"newId":"K2","newLabel":"Right"}"#,
+        ] {
+            let e = ev(line);
+            assert_eq!(super::line(&e), line, "canonical serialize round-trips");
+            assert_eq!(ev(&super::line(&e)), e, "reparse round-trips");
+        }
+    }
+
+    // H3: a renamed event kind from an older schema is migrated forward at the upcast seam, so an
+    // old log still replays. `CommentAdded` predates the rename to `ElementAnnotated`.
+    #[test]
+    fn legacy_comment_kind_upcasts_to_element_annotated() {
+        let log = [
+            ev(r#"{"event":"ElementAdded","id":"E1","type":"event","label":"A"}"#),
+            ev(r#"{"event":"CommentAdded","id":"E1","text":"from an old log"}"#),
+            ev(r#"{"event":"Comment","id":"E1","text":"older still"}"#),
+        ];
+        assert!(matches!(&log[1], Event::ElementAnnotated { id, text }
+            if id == "E1" && text == "from an old log"));
+        assert!(matches!(&log[2], Event::ElementAnnotated { .. }));
+        // …and the migrated event folds into the projection like any annotation.
+        assert_eq!(
+            replay(&log).elements[0].detail.as_deref(),
+            Some("older still")
+        );
+    }
+
+    // H3: additive change is free — an unknown field on a known event is ignored, not an error,
+    // so a log written by a newer schema still replays on older code.
+    #[test]
+    fn unknown_fields_on_a_known_event_are_ignored() {
+        let e = ev(
+            r#"{"event":"ElementAdded","id":"E1","type":"event","label":"A","fromTheFuture":42}"#,
+        );
+        assert!(matches!(e, Event::ElementAdded { id, .. } if id == "E1"));
+    }
+
+    #[test]
+    fn events_serialize_to_canonical_jsonl_and_reparse() {
+        let original = ev(
+            r#"{"event":"ElementAdded","id":"E1","type":"event","label":"A","col":2,"detail":"d"}"#,
+        );
+        assert_eq!(ev(&line(&original)), original);
+        let moved = Event::ElementMoved {
+            id: "E1".into(),
+            col: Some(4),
+            kind: None,
+            y: None,
+        };
+        assert_eq!(
+            line(&moved),
+            r#"{"event":"ElementMoved","id":"E1","col":4}"#
+        );
+    }
+
+    // ---- F-2d-placement: the stored vertical sub-position ---------------------------------
+    // `y` is a fraction of the lane-band interior in [0, 1] — never identity (`id`), never the
+    // lane (`type`), never the timeline (`col`). It evolves the schema additively: an old log
+    // simply has no `y` and replays exactly as before.
+
+    #[test]
+    fn element_moved_round_trips_its_y() {
+        let e = ev(r#"{"event":"ElementMoved","id":"E1","y":0.35}"#);
+        assert!(
+            matches!(&e, Event::ElementMoved { id, col: None, y: Some(y), .. }
+            if id == "E1" && *y == 0.35)
+        );
+        assert_eq!(line(&e), r#"{"event":"ElementMoved","id":"E1","y":0.35}"#);
+    }
+
+    #[test]
+    fn board_leveled_is_a_serialize_parse_fixed_point() {
+        let e = ev(r#"{"event":"BoardLeveled","level":"design"}"#);
+        assert!(matches!(&e, Event::BoardLeveled { level } if level == "design"));
+        assert_eq!(
+            json::to_string(&to_json(&ev(&line(&e)))),
+            json::to_string(&to_json(&e))
+        );
+    }
 }

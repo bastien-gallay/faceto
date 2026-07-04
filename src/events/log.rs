@@ -1,7 +1,7 @@
 //! Log-file IO and framing: recognise a log path and read/parse `event-log.jsonl` into
 //! [`Event`]s, distinguishing a malformed known event (hard error) from an unknown kind (skip).
 
-use super::codec::parse_event;
+use super::codec::{is_known_kind, parse_event};
 use super::replay::replay;
 use super::Event;
 use crate::json::{self, Json};
@@ -30,7 +30,8 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, String> {
 
 /// Iterate the meaningful records of JSONL text: each non-blank line, trimmed, paired with its
 /// 1-based line number. The single place the line grammar (skip blanks, trim) lives, shared by
-/// the log reader ([`parse_log`]) and the comments fold ([`from_comments`]) so the two never drift.
+/// the log reader ([`parse_log`]) and the comments fold ([`from_comments`](crate::events::from_comments))
+/// so the two never drift.
 pub(crate) fn jsonl_records(text: &str) -> impl Iterator<Item = (usize, &str)> {
     text.lines()
         .enumerate()
@@ -68,33 +69,47 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
     Ok(events)
 }
 
-/// The event kinds this build understands — the current schema plus the legacy aliases [`upcast`]
-/// migrates forward. Distinguishes a *malformed known event* (in this set, but [`parse_event`]
-/// couldn't build it → hard error) from a *future/unknown kind* (outside it → skipped). Must list
-/// exactly the kinds `parse_event` matches (plus upcast's aliases); kept adjacent so the two are
-/// edited together whenever a variant is added.
-fn is_known_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "BoardTitled"
-            | "BoardLeveled"
-            | "PhaseAdded"
-            | "PhaseResized"
-            | "PhaseRenamed"
-            | "PhaseRemoved"
-            | "FrontierMoved"
-            | "PhaseSplit"
-            | "ElementAdded"
-            | "ElementRenamed"
-            | "ElementMoved"
-            | "ElementAnnotated"
-            | "HotspotResolved"
-            | "ElementRemoved"
-            | "EdgeAdded"
-            | "EdgeRemoved"
-            | "LogCompacted"
-            // legacy aliases upcast() rewrites to a current kind
-            | "CommentAdded"
-            | "Comment"
-    )
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn parse_log_errors_on_a_malformed_known_event_but_skips_an_unknown_kind() {
+        // An unknown/future kind is skipped for forward compatibility.
+        assert_eq!(
+            parse_log(r#"{"event":"FromTheFuture","x":1}"#)
+                .unwrap()
+                .len(),
+            0
+        );
+        // A *known* kind missing a required field is a hard error: the fact is in the append-only
+        // log but would otherwise vanish from the projection with no diagnostic.
+        assert!(parse_log(r#"{"event":"ElementAdded","id":"E1"}"#).is_err()); // no type/label
+        assert!(parse_log(r#"{"event":"PhaseAdded","label":"A","fromCol":0}"#).is_err());
+        // no toCol
+    }
+
+    #[test]
+    fn unknown_event_kinds_are_skipped_for_forward_compat() {
+        let log = parse_log(
+            "{\"event\":\"ElementAdded\",\"id\":\"E1\",\"type\":\"event\",\"label\":\"A\"}\n\
+             {\"event\":\"SomethingFromTheFuture\",\"id\":\"E1\"}\n",
+        )
+        .unwrap();
+        assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn blank_lines_skipped_but_malformed_json_is_an_error() {
+        assert!(parse_log("\n  \n").unwrap().is_empty());
+        assert!(parse_log("{not json}").is_err());
+    }
+
+    #[test]
+    fn is_log_path_keys_on_extension() {
+        assert!(is_log_path(Path::new("event-log.jsonl")));
+        assert!(is_log_path(Path::new("a.log")));
+        assert!(!is_log_path(Path::new("model.json")));
+    }
 }

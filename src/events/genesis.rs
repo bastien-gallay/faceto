@@ -75,3 +75,145 @@ pub fn compact(events: &[Event]) -> Vec<Event> {
     out.extend(from_model(&model));
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::testutil::*;
+    use crate::events::*;
+    use crate::json::{self};
+
+    #[test]
+    fn from_model_emits_region_ids_so_genesis_round_trips() {
+        // compact()/genesis fold the final state into PhaseAdded; the id must survive so a
+        // compacted log keeps stable region identity.
+        let log = vec![
+            ev(r#"{"event":"PhaseAdded","id":"K1","label":"A","fromCol":0,"toCol":2}"#),
+            ev(r#"{"event":"PhaseResized","id":"K1","fromCol":0,"toCol":9}"#),
+        ];
+        let folded = compact(&log);
+        let m = replay(&folded);
+        assert_eq!(m.phases[0].id, "K1");
+        assert_eq!(m.phases[0].to_col, 9, "resize survives the fold");
+    }
+
+    // ---- F-inline-edit: a direct rename must not be able to blank a label -----------------
+    // Inline editing makes "select-all → delete → Enter" a one-gesture mistake. A blank rename
+    // must persist nothing (an empty label would replay into a never-renumbered empty box — the
+    // exact failure the `add` path already guards). These name the contract before it exists.
+
+    // The migration contract: an existing model → genesis events → replay must reproduce it.
+    #[test]
+    fn from_model_then_replay_round_trips() {
+        let src = r#"{
+            "title":"Round Trip",
+            "phases":[{"label":"p","fromCol":0,"toCol":2}],
+            "elements":[
+                {"id":"E1","type":"event","label":"Made","col":1},
+                {"id":"E2","type":"command","label":"Do","col":0,"detail":"a note"},
+                {"id":"H1","type":"hotspot","label":"q","col":2,"resolved":true,"detail":"done"}
+            ],
+            "edges":[["E2","E1"]]
+        }"#;
+        let original = crate::model::from_json(&json::parse(src).unwrap());
+        let rebuilt = replay(&from_model(&original));
+
+        assert_eq!(rebuilt.title, original.title);
+        assert_eq!(rebuilt.phases.len(), 1);
+        assert_eq!(rebuilt.elements.len(), 3);
+        assert_eq!(rebuilt.edges.len(), 1);
+        let h1 = rebuilt.elements.iter().find(|e| e.id == "H1").unwrap();
+        assert!(h1.resolved);
+        assert_eq!(h1.detail.as_deref(), Some("done"));
+        let e2 = rebuilt.elements.iter().find(|e| e.id == "E2").unwrap();
+        assert_eq!(e2.detail.as_deref(), Some("a note"));
+    }
+
+    // ---- F-es-lint: the board level round-trips through the log ----------------------------
+
+    #[test]
+    fn from_model_emits_board_leveled_only_for_a_design_board() {
+        // A design board round-trips its level and writes exactly one BoardLeveled event.
+        let design =
+            crate::model::from_json(&json::parse(r#"{"level":"design","elements":[]}"#).unwrap());
+        let batch = from_model(&design);
+        assert_eq!(
+            batch
+                .iter()
+                .filter(|e| matches!(e, Event::BoardLeveled { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(replay(&batch).level, crate::model::Level::Design);
+
+        // A big-picture (default) board emits none, so its genesis batch is unchanged.
+        let big = crate::model::from_json(&json::parse(r#"{"elements":[]}"#).unwrap());
+        assert!(!from_model(&big)
+            .iter()
+            .any(|e| matches!(e, Event::BoardLeveled { .. })));
+    }
+
+    #[test]
+    fn a_design_board_survives_compaction() {
+        let design =
+            crate::model::from_json(&json::parse(r#"{"level":"design","elements":[]}"#).unwrap());
+        let folded = compact(&from_model(&design));
+        assert_eq!(replay(&folded).level, crate::model::Level::Design);
+    }
+
+    #[test]
+    fn compact_preserves_the_projection_and_folds_history() {
+        let log = [
+            ev(r#"{"event":"BoardTitled","title":"T"}"#),
+            ev(r#"{"event":"ElementAdded","id":"E1","type":"event","label":"Born","col":1}"#),
+            ev(r#"{"event":"ElementRenamed","id":"E1","label":"Reborn"}"#),
+            ev(r#"{"event":"ElementAnnotated","id":"E1","text":"a note"}"#),
+            ev(r#"{"event":"ElementAdded","id":"H1","type":"hotspot","label":"q"}"#),
+            ev(r#"{"event":"HotspotResolved","id":"H1","resolution":"settled"}"#),
+        ];
+        let folded = compact(&log);
+
+        // Leads with a provenance marker recording the prior length, and reparses cleanly.
+        assert!(matches!(folded[0], Event::LogCompacted { folded: 6 }));
+        let reparsed = parse_log(&to_jsonl(&folded)).unwrap();
+        assert!(matches!(reparsed[0], Event::LogCompacted { folded: 6 }));
+
+        // Shorter than the original: the rename + annotate + resolve history collapsed.
+        assert!(folded.len() < log.len());
+
+        // Same projection: title, the *latest* label, the note folded into detail, the resolution.
+        let (before, after) = (replay(&log), replay(&folded));
+        assert_eq!(after.title, before.title);
+        let e1 = after.elements.iter().find(|e| e.id == "E1").unwrap();
+        assert_eq!(e1.label, "Reborn");
+        assert_eq!(e1.detail.as_deref(), Some("a note"));
+        let h1 = after.elements.iter().find(|e| e.id == "H1").unwrap();
+        assert!(h1.resolved);
+        assert_eq!(h1.detail.as_deref(), Some("settled"));
+    }
+
+    #[test]
+    fn compacting_twice_leaves_the_snapshot_stable() {
+        let log = [
+            ev(r#"{"event":"ElementAdded","id":"E1","type":"event","label":"A","col":0}"#),
+            ev(r#"{"event":"ElementMoved","id":"E1","col":2}"#),
+        ];
+        let once = compact(&log);
+        let twice = compact(&once);
+        // The genesis tail (everything past the marker) is a fixed point; only the count moves.
+        assert_eq!(to_jsonl(&once[1..]), to_jsonl(&twice[1..]));
+    }
+
+    #[test]
+    fn a_placed_elements_y_survives_compact() {
+        // `compact` folds the projection into ElementAdded lines; without `y` on the add the
+        // whole 2D placement would silently flatten on every snapshot.
+        let log = [
+            ev(r#"{"event":"ElementAdded","id":"E1","type":"event","label":"A","col":0}"#),
+            ev(r#"{"event":"ElementMoved","id":"E1","y":0.25}"#),
+        ];
+        let folded = compact(&log);
+        let reparsed = parse_log(&to_jsonl(&folded)).unwrap();
+        assert_eq!(replay(&reparsed).elements[0].y, Some(0.25));
+    }
+}

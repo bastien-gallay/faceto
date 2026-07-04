@@ -4,7 +4,7 @@
 //! This inverts the older "model file is truth, comments are a disposable inbox" stance
 //! (see `docs/source-of-truth.md`). Here `event-log.jsonl` is the only durable record and
 //! the only write path; `model.json` becomes derived output. Each log line is one JSON
-//! object discriminated by an `"event"` field; [`replay`] folds a sequence into a `Model`,
+//! object discriminated by an `"event"` field; [`replay()`] folds a sequence into a `Model`,
 //! and [`from_model`] turns an existing model file into a genesis batch (the migration and
 //! bootstrap path).
 //!
@@ -15,7 +15,7 @@
 //!   so this is the preferred way to extend. *Fields* evolve only this way: a renamed field is, by
 //!   shape, indistinguishable from a new optional one, so add the new name and keep reading the old.
 //! - *A renamed event kind is migrated forward at one seam.* Renaming a kind is the
-//!   backward-incompatible change [`upcast`] repairs: it is the single place a legacy kind string
+//!   backward-incompatible change `upcast` repairs: it is the single place a legacy kind string
 //!   is rewritten to today's, so the rest of the pipeline only ever sees current kinds. Detection
 //!   is by shape (the old kind's presence), not a stored version counter — an old log replays with
 //!   nothing to set.
@@ -141,4 +141,4 @@ pub use log::{is_log_path, load, parse_log, read_log};
 pub use replay::{region_watermark, replay};
 
 #[cfg(test)]
-mod tests;
+mod testutil;

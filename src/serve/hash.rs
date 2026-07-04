@@ -10,3 +10,19 @@ pub(crate) fn fnv12(bytes: &[u8]) -> String {
     }
     format!("{:016x}", h)[..12].to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fnv12_is_deterministic_and_twelve_hex_chars() {
+        // FNV-1a offset basis, for empty input.
+        assert_eq!(fnv12(b""), "cbf29ce48422");
+        let h = fnv12(b"faceto");
+        assert_eq!(h.len(), 12);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(fnv12(b"faceto"), h);
+        assert_ne!(fnv12(b"faceto"), fnv12(b"faceto "));
+    }
+}

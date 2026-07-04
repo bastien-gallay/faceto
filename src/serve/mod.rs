@@ -26,7 +26,7 @@ mod ids;
 mod sidebar;
 
 #[cfg(test)]
-mod tests;
+mod testutil;
 
 const CACHE_MAX: usize = 12;
 
@@ -265,4 +265,167 @@ pub fn serve(log_path: &Path, port: u16) -> Result<(), String> {
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events;
+    use crate::serve::testutil::*;
+
+    use std::sync::Arc;
+    use std::thread;
+
+    #[test]
+    fn concurrent_appends_never_interleave() {
+        // H4: many threads append to one log through a shared Ctx; every line must land
+        // whole and intact, with the expected total count and no torn/merged lines.
+        let path = std::env::temp_dir().join(format!("faceto-h4-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let ctx = Arc::new(Ctx::new(path.clone()));
+
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 50;
+        let handles: Vec<_> = (0..THREADS)
+            .map(|t| {
+                let ctx = Arc::clone(&ctx);
+                let path = path.clone();
+                thread::spawn(move || {
+                    for i in 0..PER_THREAD {
+                        // A long payload makes a torn write easy to detect if the lock fails.
+                        let line = format!("t{t}-i{i}-{}", "x".repeat(200));
+                        ctx.append_line(&path, &line).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), THREADS * PER_THREAD);
+        // Every line is whole: matches the exact shape we wrote, nothing spliced.
+        for line in &lines {
+            assert!(
+                line.starts_with('t') && line.ends_with(&"x".repeat(200)),
+                "torn line: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn append_region_add_mints_persists_and_replays() {
+        let path =
+            std::env::temp_dir().join(format!("faceto-region-h6-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, events::line(&region_added("K1", 0, 2)) + "\n").unwrap();
+        let ctx = Ctx::new(path.clone());
+
+        let ev = ctx.append_region_add("Checkout".into(), 3, 6).unwrap();
+        assert!(matches!(&ev, events::Event::PhaseAdded { id: Some(id), .. } if id == "K2"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        let model = events::replay(&events::parse_log(&text).unwrap());
+        let k2 = model.phases.iter().find(|p| p.id == "K2").unwrap();
+        assert_eq!(k2.label, "Checkout");
+        assert_eq!((k2.from_col, k2.to_col), (3, 6));
+    }
+
+    #[test]
+    fn append_phase_split_mints_the_right_half_and_replays_to_a_partition() {
+        let path =
+            std::env::temp_dir().join(format!("faceto-split-h6-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, events::line(&region_added("K1", 0, 5)) + "\n").unwrap();
+        let ctx = Ctx::new(path.clone());
+
+        let ev = ctx
+            .append_phase_split("K1".into(), 3, "Right".into())
+            .unwrap();
+        assert!(matches!(
+            &ev,
+            events::Event::PhaseSplit { id, at_col: 3, new_id, new_label }
+                if id == "K1" && new_id == "K2" && new_label == "Right"
+        ));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        let model = events::replay(&events::parse_log(&text).unwrap());
+        let spans: Vec<_> = model
+            .phases
+            .iter()
+            .map(|p| (p.id.as_str(), p.from_col, p.to_col))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![("K1", 0, 2), ("K2", 3, 5)],
+            "split carves K1 in two, contiguous partition preserved"
+        );
+    }
+
+    #[test]
+    fn append_phase_split_rejects_an_out_of_range_split_without_writing() {
+        // Review #2: a stale/out-of-range split (atCol not strictly inside the target phase) must
+        // Err *before* writing — no dead event in the append-only log, no burned region id, no false
+        // success. Here atCol=9 is past K1[0,5]'s to_col.
+        let path =
+            std::env::temp_dir().join(format!("faceto-split-oor-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let seed = events::line(&region_added("K1", 0, 5)) + "\n";
+        std::fs::write(&path, &seed).unwrap();
+        let ctx = Ctx::new(path.clone());
+
+        assert!(
+            ctx.append_phase_split("K1".into(), 9, "Right".into())
+                .is_err(),
+            "out-of-range split is rejected"
+        );
+        let after = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(after, seed, "nothing was appended");
+        // The next mint is still K2 — no id was burned by the rejected split.
+        assert_eq!(mint_region_id(&events::parse_log(&after).unwrap()), "K2");
+    }
+
+    #[test]
+    fn append_add_mints_persists_and_replays() {
+        // The minted id round-trips: append_add writes an ElementAdded that replay folds
+        // back into a real element, and a second add under the same lane increments.
+        let path = std::env::temp_dir().join(format!("faceto-h6-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, events::line(&added("E1", "event")) + "\n").unwrap();
+        let ctx = Ctx::new(path.clone());
+
+        let ev = ctx
+            .append_add("event", "DayStarted".into(), Some(2), None, false)
+            .unwrap();
+        assert!(matches!(&ev, events::Event::ElementAdded { id, .. } if id == "E2"));
+        let ev2 = ctx
+            .append_add("command", "start".into(), None, None, false)
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        let model = events::replay(&events::parse_log(&text).unwrap());
+        let e2 = model.elements.iter().find(|e| e.id == "E2").unwrap();
+        assert_eq!(e2.label, "DayStarted");
+        assert_eq!(e2.col, Some(2));
+        assert!(matches!(&ev2, events::Event::ElementAdded { id, .. } if id == "C1"));
+    }
+
+    #[test]
+    fn append_add_errors_on_a_corrupt_log_rather_than_minting_from_empty() {
+        // A malformed log must fail the add — not fold to an empty model and re-mint E1.
+        let path =
+            std::env::temp_dir().join(format!("faceto-corrupt-{}.jsonl", std::process::id()));
+        std::fs::write(&path, "{ this is not json\n").unwrap();
+        let ctx = Ctx::new(path.clone());
+        let r = ctx.append_add("event", "X".into(), None, None, false);
+        let _ = std::fs::remove_file(&path);
+        assert!(r.is_err());
+    }
 }
