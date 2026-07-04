@@ -88,7 +88,7 @@ pub(crate) fn phase_log_strategy() -> impl Strategy<Value = Vec<Event>> {
             edge_start,
         },
     );
-    prop::collection::vec(op, 1..12).prop_map(build_phase_log)
+    prop::collection::vec(op, 1..=12).prop_map(build_phase_log)
 }
 
 fn build_phase_log(ops: Vec<PhaseOp>) -> Vec<Event> {
