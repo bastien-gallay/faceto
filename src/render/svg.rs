@@ -1,258 +1,11 @@
-//! Render a board model into a static SVG and an interactive HTML page.
-//!
-//! Deterministic, pure std. The colour grammar (one type → one colour → one lane) and the
-//! whole visual language are ported faithfully from the original Python harness.
-
-use crate::model::{is_pivotal, Edge, Element, Model};
+//! SVG generation: the `View` lens, `render_svg`, and its per-stage draw helpers.
+use super::geometry::*;
+use super::style::*;
+use super::text::*;
+use crate::model::{is_pivotal, Element, Model};
 use std::collections::{HashMap, HashSet};
 
-// Canonical lane order (top → bottom). `command` and `hotspot` are deepened from their classic
-// event-storming swatches so white label text clears WCAG 4.5:1.
-const LANES: [&str; 8] = [
-    "actor",
-    "command",
-    "aggregate",
-    "event",
-    "policy",
-    "readmodel",
-    "external",
-    "hotspot",
-];
-
-/// Each lane's id-mint prefix, index-aligned with `LANES`. `actor`/`aggregate` both start with
-/// 'a', so actor takes 'X' and external takes 'G'. This is the single source of truth for
-/// prefixes — `serve::id_prefix` reads it rather than re-listing the grammar.
-const LANE_PREFIXES: [char; 8] = ['X', 'C', 'A', 'E', 'P', 'R', 'G', 'H'];
-
-/// The id prefix for a lane `type`, or `None` if it is not one of the 8 lanes.
-pub fn lane_prefix(kind: &str) -> Option<char> {
-    LANES
-        .iter()
-        .position(|&l| l == kind)
-        .map(|i| LANE_PREFIXES[i])
-}
-
-/// A lane's vertical rank in the fixed 8-lane grammar (`actor` = 0 … `hotspot` = 7). Used as the
-/// y-band when ordering a crowded cell's members by their edge neighbours (F-edge-routing Lever A).
-/// An unknown kind is never one of the 8 lanes, so it sorts to the top — harmless, never panics.
-fn lane_index(kind: &str) -> usize {
-    LANES.iter().position(|&l| l == kind).unwrap_or(0)
-}
-
-fn colour(kind: &str) -> &'static str {
-    match kind {
-        "actor" => "#FCEFA1",
-        "command" => "#1A6FAE",
-        "aggregate" => "#FFD23F",
-        "event" => "#FF9F1C",
-        "policy" => "#C39BD3",
-        "readmodel" => "#6FCF97",
-        "external" => "#F2A0C9",
-        "hotspot" => "#C0392B",
-        _ => "#cccccc",
-    }
-}
-
-fn text_dark(kind: &str) -> bool {
-    matches!(
-        kind,
-        "actor" | "aggregate" | "event" | "policy" | "readmodel" | "external"
-    )
-}
-
-const RESOLVED_FILL: &str = "#D9DEE3";
-const EDGE_FLOW: &str = "#9AA7B0";
-const EDGE_HOTSPOT: &str = "#C39086";
-// Muted axis + phase-band labels. Darkened from the old #90a4ae (≈2.6:1, fails AA) to clear WCAG
-// 4.5:1 on the #fbfbfd board (≈5.3:1). These labels *name* the lane grammar — they are structure,
-// not decoration, so they must be readable.
-const AXIS_LABEL: &str = "#5b6b75";
-
-fn diff_colour(s: &str) -> &'static str {
-    match s {
-        "added" => "#27ae60",
-        "removed" => "#EB5757",
-        "changed" | "moved" => "#E59500",
-        _ => "#999999",
-    }
-}
-
-fn diff_badge(s: &str) -> Option<&'static str> {
-    match s {
-        "added" => Some("+"),
-        "removed" => Some("\u{2013}"), // en dash
-        "changed" => Some("\u{2260}"), // ≠
-        "moved" => Some("\u{2192}"),   // →
-        _ => None,
-    }
-}
-
-/// Map a region's diff verdict (added / removed / renamed / resized) onto the element-diff colour +
-/// badge vocabulary, so a changed region speaks the same visual language as a changed sticky: a
-/// rename reads like a relabel (`≠`), a resize like a relocation (`→`). `None` ⇒ no diff styling.
-fn phase_diff_kind(diff: Option<&str>) -> Option<&'static str> {
-    match diff {
-        Some("added") => Some("added"),
-        Some("removed") => Some("removed"),
-        Some("renamed") => Some("changed"),
-        Some("resized") => Some("moved"),
-        _ => None,
-    }
-}
-
-const COL_W: f64 = 210.0;
-// F-region-collapse: a folded region's whole column span compresses to one thin summary slot of
-// this width (its stickies hidden behind a count chip on the tab); columns to its right shift left
-// so a wide board actually shortens. Narrow enough to read as "quieted", wide enough to seat the
-// band's tonal wash and frontier lines.
-const COLLAPSE_W: f64 = 60.0;
-// When a (lane, col) cell holds several simultaneous stickies they auto-stack into sub-rows, each
-// adding ROW_PITCH of height (a stored `y` places its element freely in the same band instead).
-// LANE_VPAD keeps a single-row lane at the classic 108px (92 + 16), so uncrowded boards look
-// exactly as before.
-const ROW_PITCH: f64 = 92.0;
-const LANE_VPAD: f64 = 16.0;
-const MARGIN_L: f64 = 150.0;
-const MARGIN_T: f64 = 116.0;
-const STICKY_W: f64 = 176.0;
-const STICKY_H: f64 = 74.0;
-// A region's label tab: fixed height, width grows with the label (a per-char pitch + fixed
-// padding). The client's region-add editor mirrors `REGION_TAB_H` via `__CONFIG__` rather than
-// inventing its own box size (CUPID-Composable: render.rs is the single source of truth for a
-// layout decision the client also needs — CODING_STANDARDS.md §Composable).
-const REGION_TAB_H: f64 = 19.0;
-const REGION_TAB_CHAR_W: f64 = 6.6;
-const REGION_TAB_PAD: f64 = 18.0;
-// How far apart sibling connectors fan when several meet a box on the same face (F-edge-routing
-// Lever B). Deliberately small — the calm-instrument register wants a gentle spread, not a starburst.
-// `fan_offsets` caps the per-slot step below this when a face is crowded, so the extreme anchor
-// always stays on the box (a high-degree node packs tighter rather than spilling off the edge).
-const FAN_SPREAD: f64 = 12.0;
-
-fn is_upper(c: char) -> bool {
-    c.is_ascii_uppercase()
-}
-fn is_lower_or_digit(c: char) -> bool {
-    c.is_ascii_lowercase() || c.is_ascii_digit()
-}
-
-/// Break a long CamelCase / Pascal token before a capital that follows a lower/digit, and
-/// before the last capital of an acronym run — no space inserted.
-fn hump_split(word: &str) -> Vec<String> {
-    let chars: Vec<char> = word.chars().collect();
-    let n = chars.len();
-    let mut cuts = vec![0usize];
-    for i in 1..n {
-        let prev = chars[i - 1];
-        let cur = chars[i];
-        let cond1 = is_lower_or_digit(prev) && is_upper(cur);
-        let cond2 =
-            is_upper(prev) && is_upper(cur) && i + 1 < n && chars[i + 1].is_ascii_lowercase();
-        if cond1 || cond2 {
-            cuts.push(i);
-        }
-    }
-    cuts.push(n);
-    cuts.windows(2)
-        .map(|w| chars[w[0]..w[1]].iter().collect())
-        .collect()
-}
-
-/// Break one over-long token into wrap-able pieces: CamelCase humps first, then hard char-split.
-fn atoms(word: &str, width: usize) -> Vec<String> {
-    let pieces = if word.chars().count() > width {
-        hump_split(word)
-    } else {
-        vec![word.to_string()]
-    };
-    let mut out = Vec::new();
-    for p in pieces {
-        let mut chars: Vec<char> = p.chars().collect();
-        while chars.len() > width {
-            out.push(chars[..width].iter().collect());
-            chars = chars[width..].to_vec();
-        }
-        out.push(chars.iter().collect());
-    }
-    out
-}
-
-/// CamelCase-aware greedy wrap. Pieces of one broken token rejoin with no space (`glued`).
-fn wrap(label: &str, width: usize, max_lines: usize) -> Vec<String> {
-    let mut toks: Vec<(String, bool)> = Vec::new();
-    for word in label.split_whitespace() {
-        for (j, piece) in atoms(word, width).into_iter().enumerate() {
-            toks.push((piece, j > 0));
-        }
-    }
-    let mut lines: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    for (text, glued) in toks {
-        let sep = if glued || cur.is_empty() { "" } else { " " };
-        if !cur.is_empty()
-            && cur.chars().count() + sep.chars().count() + text.chars().count() > width
-        {
-            lines.push(cur);
-            cur = text;
-        } else {
-            cur = format!("{}{}{}", cur, sep, text);
-        }
-    }
-    if !cur.is_empty() {
-        lines.push(cur);
-    }
-    if lines.len() > max_lines {
-        lines.truncate(max_lines);
-        let last = lines.last().unwrap().clone();
-        let trimmed: String = last
-            .chars()
-            .take(width.saturating_sub(1))
-            .collect::<String>()
-            .trim_end()
-            .to_string();
-        *lines.last_mut().unwrap() = format!("{}\u{2026}", trimmed); // …
-    }
-    if lines.is_empty() {
-        vec![String::new()]
-    } else {
-        lines
-    }
-}
-
-fn esc(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#x27;")
-}
-
-/// A sticky reads as a hero line + optional smaller detail. An explicit `detail` wins;
-/// otherwise a trailing parenthetical becomes the detail.
-fn split_label(label: &str, detail: Option<&str>) -> (String, String) {
-    if let Some(d) = detail {
-        if !d.is_empty() {
-            return (label.trim().to_string(), d.trim().to_string());
-        }
-    }
-    if let Some(i) = label.find('(') {
-        let rstripped = label.trim_end();
-        if i > 0 && rstripped.ends_with(')') {
-            let close = rstripped.rfind(')').unwrap();
-            return (
-                label[..i].trim().to_string(),
-                label[i + 1..close].trim().to_string(),
-            );
-        }
-    }
-    (label.trim().to_string(), String::new())
-}
-
-fn opt_col(c: Option<i64>) -> String {
-    c.map(|v| v.to_string()).unwrap_or_else(|| "None".into())
-}
-
-fn diff_tooltip(e: &Element, meta: &(String, String)) -> String {
+pub(crate) fn diff_tooltip(e: &Element, meta: &(String, String)) -> String {
     let (a, b) = (&meta.0, &meta.1);
     match e.diff.as_deref() {
         Some("added") => format!("added in {}", b),
@@ -282,175 +35,6 @@ fn diff_tooltip(e: &Element, meta: &(String, String)) -> String {
         ),
         _ => String::new(),
     }
-}
-
-/// One edge-endpoint queued on a box's face for fan-out: `(edge index, is-src, far-end cross pos)`.
-type FaceMember = (usize, bool, f64);
-
-/// A smooth connector between two box centres, anchored on the facing edges. `off1`/`off2` slide
-/// each anchor along its facing edge (Lever B fan-out, F-edge-routing): the offset rides the *free*
-/// axis of the chosen facing — Y for a left/right face, X for a top/bottom face — so several
-/// connectors meeting one box on the same side spread out instead of collapsing onto one point.
-/// Both offsets `0.0` reproduces the classic centre-to-centre path byte-for-byte.
-fn edge_path(p1: (f64, f64), p2: (f64, f64), off1: f64, off2: f64) -> String {
-    let (x1, y1) = p1;
-    let (x2, y2) = p2;
-    if (x2 - x1).abs() < STICKY_W {
-        // Vertical facing: anchors ride the top/bottom faces, so the fan offset slides them in X.
-        let sgn = if y2 >= y1 { 1.0 } else { -1.0 };
-        let (ax1, ax2) = (x1 + off1, x2 + off2);
-        let ay1 = y1 + sgn * STICKY_H / 2.0;
-        let ay2 = y2 - sgn * STICKY_H / 2.0;
-        let my = (ay1 + ay2) / 2.0;
-        format!(
-            "M{:.1},{:.1} C{:.1},{:.1} {:.1},{:.1} {:.1},{:.1}",
-            ax1, ay1, ax1, my, ax2, my, ax2, ay2
-        )
-    } else {
-        // Horizontal facing: anchors ride the left/right faces, so the fan offset slides them in Y.
-        let sgn = if x2 >= x1 { 1.0 } else { -1.0 };
-        let ax1 = x1 + sgn * STICKY_W / 2.0;
-        let ax2 = x2 - sgn * STICKY_W / 2.0;
-        let (ay1, ay2) = (y1 + off1, y2 + off2);
-        let mx = (ax1 + ax2) / 2.0;
-        format!(
-            "M{:.1},{:.1} C{:.1},{:.1} {:.1},{:.1} {:.1},{:.1}",
-            ax1, ay1, mx, ay1, mx, ay2, ax2, ay2
-        )
-    }
-}
-
-/// Order each `(lane, col)` cell's simultaneous members and return `(sub_ord, cell_total)`.
-/// The primary key is the **stored `y`** (F-2d-placement): a dropped-on-top element (small
-/// fraction) takes an upper slot, dropped-below (large fraction) a lower one; an unplaced member
-/// keeps the neutral 0.5. Within equal keys, the edge-neighbour barycenter orders the stack
-/// (Lever A, F-edge-routing — a neighbour's lane is fixed, so one deterministic pass), and a
-/// member with no edges falls back to its own (shared) lane, so an edge-free cell keeps file
-/// order through the stable sort. Output is independent of `HashMap` iteration order (each cell
-/// writes disjoint `sub_ord` indices), so the render stays deterministic.
-fn cell_sub_order(
-    elements: &[Element],
-    edges: &[Edge],
-    idx_of: &HashMap<&str, usize>,
-) -> (Vec<i64>, HashMap<(String, i64), i64>) {
-    let band = |j: usize| lane_index(&elements[j].kind) as f64;
-    // Running barycenter: a sum of neighbour bands and a count per node — no per-node Vec allocated.
-    let mut bsum = vec![0.0_f64; elements.len()];
-    let mut bcnt = vec![0u32; elements.len()];
-    for e in edges {
-        if let (Some(&s), Some(&d)) = (idx_of.get(e.src.as_str()), idx_of.get(e.dst.as_str())) {
-            bsum[s] += band(d);
-            bcnt[s] += 1;
-            bsum[d] += band(s);
-            bcnt[d] += 1;
-        }
-    }
-    let bary = |i: usize| {
-        if bcnt[i] == 0 {
-            band(i)
-        } else {
-            bsum[i] / bcnt[i] as f64
-        }
-    };
-
-    let mut cell_members: HashMap<(String, i64), Vec<usize>> = HashMap::new();
-    for (i, e) in elements.iter().enumerate() {
-        cell_members
-            .entry((e.kind.clone(), e.col.unwrap()))
-            .or_default()
-            .push(i);
-    }
-    // A member's placement key — `model::y_key`, the single home of the ordering-key rule.
-    let key = |j: usize| crate::model::y_key(elements[j].y);
-    let mut sub_ord = vec![0i64; elements.len()];
-    for members in cell_members.values_mut() {
-        // Members enter in file order; the stable sort keeps that order for equal keys.
-        members.sort_by(|&a, &b| {
-            key(a)
-                .partial_cmp(&key(b))
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(
-                    bary(a)
-                        .partial_cmp(&bary(b))
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
-        });
-        for (rank, &i) in members.iter().enumerate() {
-            sub_ord[i] = rank as i64;
-        }
-    }
-    // `cell_total` is just each cell's count — derive it by consuming `cell_members` (no key clones).
-    let cell_total = cell_members
-        .into_iter()
-        .map(|(k, v)| (k, v.len() as i64))
-        .collect();
-    (sub_ord, cell_total)
-}
-
-/// Lever B (F-edge-routing): per-edge fan offsets `(off_src, off_dst)` so several connectors meeting
-/// one box on the same face spread along it instead of collapsing onto one anchor. `ends[ei]` is
-/// edge `ei`'s `(src, dst)` element indices (`None` if an endpoint is unplaced); `centers` are the
-/// resolved box centres. The face test mirrors `edge_path`'s facing rule, so the offset always rides
-/// the free axis. A lone edge on a face keeps offset 0 (the classic centre anchor). Order-independent
-/// (each endpoint writes its own `off_*[ei]` exactly once), so the render stays deterministic.
-fn fan_offsets(ends: &[Option<(usize, usize)>], centers: &[(f64, f64)]) -> (Vec<f64>, Vec<f64>) {
-    // face: 0 right / 1 left (horizontal facing, fan in Y) · 2 bottom / 3 top (vertical, fan in X).
-    // A face's members are `(edge index, is the box this edge's src?, far-end cross position)`.
-    let mut face_groups: HashMap<(usize, u8), Vec<FaceMember>> = HashMap::new();
-    for (ei, end) in ends.iter().enumerate() {
-        let (s, d) = match end {
-            Some(p) => *p,
-            None => continue,
-        };
-        let (cs, cd) = (centers[s], centers[d]);
-        let horizontal = (cd.0 - cs.0).abs() >= STICKY_W;
-        let (face_s, cross_s, face_d, cross_d) = if horizontal {
-            let fs = if cd.0 > cs.0 { 0 } else { 1 };
-            let fd = if cs.0 > cd.0 { 0 } else { 1 };
-            (fs, cd.1, fd, cs.1)
-        } else {
-            let fs = if cd.1 > cs.1 { 2 } else { 3 };
-            let fd = if cs.1 > cd.1 { 2 } else { 3 };
-            (fs, cd.0, fd, cs.0)
-        };
-        face_groups
-            .entry((s, face_s))
-            .or_default()
-            .push((ei, true, cross_s));
-        face_groups
-            .entry((d, face_d))
-            .or_default()
-            .push((ei, false, cross_d));
-    }
-    let mut off_src = vec![0.0_f64; ends.len()];
-    let mut off_dst = vec![0.0_f64; ends.len()];
-    for (&(_, face), members) in face_groups.iter_mut() {
-        let k = members.len();
-        if k < 2 {
-            continue;
-        }
-        // Sort by the far end's cross position; tie-break on edge index so the fan is deterministic.
-        members.sort_by(|a, b| {
-            a.2.partial_cmp(&b.2)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.0.cmp(&b.0))
-        });
-        // Clamp the per-slot step so the extreme anchor stays on the box face: a horizontal face
-        // (0/1) fans in Y across STICKY_H, a vertical face (2/3) in X across STICKY_W. The extreme
-        // slot rides step·(k−1)/2, so step ≤ half-extent·2/(k−1) keeps it on the box. For a small
-        // k the cap exceeds FAN_SPREAD, so the common case is unchanged (byte-identical).
-        let half = if face <= 1 { STICKY_H } else { STICKY_W } / 2.0;
-        let step = FAN_SPREAD.min(2.0 * half / (k as f64 - 1.0));
-        for (slot, &(ei, is_src, _)) in members.iter().enumerate() {
-            let off = step * (slot as f64 - (k as f64 - 1.0) / 2.0);
-            if is_src {
-                off_src[ei] = off;
-            } else {
-                off_dst[ei] = off;
-            }
-        }
-    }
-    (off_src, off_dst)
 }
 
 /// A per-viewer *reading lens* applied at render time — never persisted, never in the log. Today it
@@ -599,7 +183,7 @@ pub fn render_svg(model: &Model, view: &View) -> String {
     let mut lane_top: HashMap<String, f64> = HashMap::new();
     let mut lane_h: HashMap<String, f64> = HashMap::new();
     let mut y = MARGIN_T;
-    for t in &present {
+    for t in present.iter() {
         let h = lane_rows[*t] as f64 * ROW_PITCH + LANE_VPAD;
         lane_top.insert((*t).to_string(), y);
         lane_h.insert((*t).to_string(), h);
@@ -632,63 +216,7 @@ pub fn render_svg(model: &Model, view: &View) -> String {
 
     let diff_meta = model.diff_meta.clone();
     let mut p: Vec<String> = Vec::new();
-    p.push(format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" \
-         viewBox=\"0 0 {w} {h}\" font-family=\"-apple-system,Segoe UI,Roboto,sans-serif\">",
-        w = width,
-        h = height
-    ));
-    // Arrow fill = context-stroke, so each arrowhead takes its own edge's colour.
-    p.push(
-        "<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" \
-         markerHeight=\"7\" orient=\"auto\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"context-stroke\"/>\
-         </marker></defs>"
-            .to_string(),
-    );
-    p.push(format!(
-        "<rect width=\"{}\" height=\"{}\" fill=\"#fbfbfd\"/>",
-        width, height
-    ));
-    // The board title is the instrument's engraved nameplate: a refined system serif, the one
-    // place a second font family appears (see DESIGN.md §3). Everything else stays the SVG sans.
-    p.push(format!(
-        "<text x=\"20\" y=\"34\" font-size=\"20\" font-weight=\"700\" fill=\"#222\" \
-         font-family=\"'Iowan Old Style','Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif\">{}</text>",
-        esc(&model.title)
-    ));
-
-    // Diff subtitle: rev labels + per-status counts with dashed swatches.
-    if let Some((a, b)) = &diff_meta {
-        p.push(format!(
-            "<text x=\"20\" y=\"56\" font-size=\"12\" fill=\"#777\">{} \u{2192} {}</text>",
-            esc(a),
-            esc(b)
-        ));
-        let mut lx2 = 40.0 + 7.0 * ((a.chars().count() + b.chars().count() + 3) as f64);
-        for k in ["added", "removed", "changed", "moved"] {
-            let n = elements
-                .iter()
-                .filter(|e| e.diff.as_deref() == Some(k))
-                .count();
-            if n == 0 {
-                continue;
-            }
-            p.push(format!(
-                "<rect x=\"{}\" y=\"46\" width=\"12\" height=\"12\" rx=\"3\" fill=\"none\" \
-                 stroke=\"{}\" stroke-width=\"2.5\" stroke-dasharray=\"3 2\"/>",
-                lx2,
-                diff_colour(k)
-            ));
-            p.push(format!(
-                "<text x=\"{}\" y=\"56\" font-size=\"12\" fill=\"#555\">{} {}</text>",
-                lx2 + 17.0,
-                n,
-                k
-            ));
-            lx2 += 17.0 + 8.0 * ((k.len() + n.to_string().len() + 1) as f64) + 16.0;
-        }
-    }
-
+    draw_header(&mut p, model, width, height, &diff_meta, &elements);
     // Regions (a.k.a. phases) — a region is a *thin labelled outline*, never a filled block
     // (DESIGN.md calm-instrument register; anti-reference: Miro maximalism). It reads as an open
     // "⊓": a top rule + two grabbable vertical edges, plus the faintest tonal wash (the only fill
@@ -986,6 +514,92 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         }
     }
 
+    draw_lanes(&mut p, &present, &lane_top, &lane_h, width);
+    draw_edges(&mut p, model, &elements, &idx_of, &centers, &hidden_el);
+    draw_stickies(&mut p, &elements, &centers, &hidden_el, &diff_meta);
+    draw_legend(&mut p, &present, height);
+    p.push("</svg>".to_string());
+    p.join(
+        "
+",
+    )
+}
+
+/// Board frame: SVG open, arrow marker, background, the serif nameplate, and the diff subtitle.
+fn draw_header(
+    p: &mut Vec<String>,
+    model: &Model,
+    width: i64,
+    height: i64,
+    diff_meta: &Option<(String, String)>,
+    elements: &[Element],
+) {
+    p.push(format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" \
+         viewBox=\"0 0 {w} {h}\" font-family=\"-apple-system,Segoe UI,Roboto,sans-serif\">",
+        w = width,
+        h = height
+    ));
+    // Arrow fill = context-stroke, so each arrowhead takes its own edge's colour.
+    p.push(
+        "<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" \
+         markerHeight=\"7\" orient=\"auto\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"context-stroke\"/>\
+         </marker></defs>"
+            .to_string(),
+    );
+    p.push(format!(
+        "<rect width=\"{}\" height=\"{}\" fill=\"#fbfbfd\"/>",
+        width, height
+    ));
+    // The board title is the instrument's engraved nameplate: a refined system serif, the one
+    // place a second font family appears (see DESIGN.md §3). Everything else stays the SVG sans.
+    p.push(format!(
+        "<text x=\"20\" y=\"34\" font-size=\"20\" font-weight=\"700\" fill=\"#222\" \
+         font-family=\"'Iowan Old Style','Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif\">{}</text>",
+        esc(&model.title)
+    ));
+
+    // Diff subtitle: rev labels + per-status counts with dashed swatches.
+    if let Some((a, b)) = diff_meta {
+        p.push(format!(
+            "<text x=\"20\" y=\"56\" font-size=\"12\" fill=\"#777\">{} \u{2192} {}</text>",
+            esc(a),
+            esc(b)
+        ));
+        let mut lx2 = 40.0 + 7.0 * ((a.chars().count() + b.chars().count() + 3) as f64);
+        for k in ["added", "removed", "changed", "moved"] {
+            let n = elements
+                .iter()
+                .filter(|e| e.diff.as_deref() == Some(k))
+                .count();
+            if n == 0 {
+                continue;
+            }
+            p.push(format!(
+                "<rect x=\"{}\" y=\"46\" width=\"12\" height=\"12\" rx=\"3\" fill=\"none\" \
+                 stroke=\"{}\" stroke-width=\"2.5\" stroke-dasharray=\"3 2\"/>",
+                lx2,
+                diff_colour(k)
+            ));
+            p.push(format!(
+                "<text x=\"{}\" y=\"56\" font-size=\"12\" fill=\"#555\">{} {}</text>",
+                lx2 + 17.0,
+                n,
+                k
+            ));
+            lx2 += 17.0 + 8.0 * ((k.len() + n.to_string().len() + 1) as f64) + 16.0;
+        }
+    }
+}
+
+/// Faint lane rules and the centred lane labels (which expose the band interior geometry).
+fn draw_lanes(
+    p: &mut Vec<String>,
+    present: &[&str],
+    lane_top: &HashMap<String, f64>,
+    lane_h: &HashMap<String, f64>,
+    width: i64,
+) {
     // Faint horizontal lane rules — graph-paper bench lines that delimit lanes now that a busy
     // lane can span several rows.
     for t in present.iter().skip(1) {
@@ -1001,7 +615,7 @@ pub fn render_svg(model: &Model, view: &View) -> String {
     // `data-band-h` expose the band *interior* (the `y` fraction's frame of reference) so the
     // client's vertical drag converts a pixel drop into a stored fraction without re-deriving
     // the lane geometry — render.rs stays the single source of truth for it (Composable).
-    for t in &present {
+    for t in present.iter() {
         let y = lane_top[*t] + lane_h[*t] / 2.0;
         // `class`/`data-lane` let the client hang the lane-title `+` (inline-add prepend) on each
         // label; the rendered text content is unchanged.
@@ -1017,7 +631,17 @@ pub fn render_svg(model: &Model, view: &View) -> String {
             esc(t)
         ));
     }
+}
 
+/// Flow / hotspot edges under the stickies (fanned at shared faces; folded endpoints skipped).
+fn draw_edges(
+    p: &mut Vec<String>,
+    model: &Model,
+    elements: &[Element],
+    idx_of: &HashMap<&str, usize>,
+    centers: &[(f64, f64)],
+    hidden_el: &[bool],
+) {
     // Lever B (F-edge-routing): fan connectors that share a box face apart so they don't collapse
     // onto one anchor — see `fan_offsets`. `ends[ei]` resolves each edge's endpoints once (reusing
     // `idx_of`); the edge loop below reuses it to skip edges with an unplaced endpoint.
@@ -1031,7 +655,7 @@ pub fn render_svg(model: &Model, view: &View) -> String {
             },
         )
         .collect();
-    let (off_src, off_dst) = fan_offsets(&ends, &centers);
+    let (off_src, off_dst) = fan_offsets(&ends, centers);
 
     // Edges (under the stickies). A hotspot connector is a concern, not a flow: dotted, arrow-less.
     for (ei, edge) in model.edges.iter().enumerate() {
@@ -1084,7 +708,16 @@ pub fn render_svg(model: &Model, view: &View) -> String {
             )),
         }
     }
+}
 
+/// The stickies themselves — each a focusable, id-keyed group the sidecar targets.
+fn draw_stickies(
+    p: &mut Vec<String>,
+    elements: &[Element],
+    centers: &[(f64, f64)],
+    hidden_el: &[bool],
+    diff_meta: &Option<(String, String)>,
+) {
     // Stickies — each a clickable <g id="..."> the sidecar targets by id.
     for (i, e) in elements.iter().enumerate() {
         // Folded into a collapsed band — its count lives on the band chip, no sticky drawn.
@@ -1158,7 +791,7 @@ pub fn render_svg(model: &Model, view: &View) -> String {
             data_y,
             g_op
         ));
-        if let (Some(_), Some(meta)) = (status, &diff_meta) {
+        if let (Some(_), Some(meta)) = (status, diff_meta) {
             let tip = diff_tooltip(e, meta);
             if !tip.is_empty() {
                 p.push(format!("<title>{}</title>", esc(&tip)));
@@ -1257,11 +890,14 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         }
         p.push("</g>".to_string());
     }
+}
 
+/// Legend: the lane colour swatches and the connector key.
+fn draw_legend(p: &mut Vec<String>, present: &[&str], height: i64) {
     // Legend: type swatches, then a connector key (flow vs hotspot-concern).
     let ly = height - 28;
     let mut lx: i64 = 20;
-    for t in &present {
+    for t in present.iter() {
         p.push(format!(
             "<rect x=\"{}\" y=\"{}\" width=\"14\" height=\"14\" rx=\"3\" fill=\"{}\" stroke=\"#0003\"/>",
             lx,
@@ -1307,101 +943,17 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         lx + 33,
         ly + 11
     ));
-
-    p.push("</svg>".to_string());
-    p.join("\n")
 }
-
-pub fn render_html(svg: &str, title: &str) -> String {
-    // The client reuses these geometry constants to re-place a moved sticky and redraw its edges
-    // in the browser — keep render.rs the single source of truth for them. `regionTabH`/
-    // `regionTabCharW` do the same for the region-add editor's box (Composable — the client must
-    // not invent its own tab size).
-    // `rowPitch`/`laneVpad` let the drag preview place the lane-growth guide exactly one row
-    // below the lane's current bottom rule — the same numbers this renderer will use on commit.
-    let cfg = format!(
-        "{{\"colW\":{},\"stickyW\":{},\"stickyH\":{},\"rowPitch\":{},\"laneVpad\":{},\"regionTabH\":{},\"regionTabCharW\":{},\"regionTabPad\":{}}}",
-        COL_W, STICKY_W, STICKY_H, ROW_PITCH, LANE_VPAD, REGION_TAB_H, REGION_TAB_CHAR_W, REGION_TAB_PAD
-    );
-    // Fill the placeholders in a single left-to-right pass, so a *value* that happens to contain
-    // another placeholder token (a sticky or region labelled `__CONFIG__`, a title of `__SVG__`)
-    // is inserted verbatim and never re-scanned. A naive chain of `.replace` inserts the SVG first
-    // and then lets the later `__CONFIG__` pass rewrite that label's text into the config JSON.
-    fill_template(
-        HTML_TEMPLATE,
-        &[
-            ("__TITLE__", &esc(title)),
-            ("__SVG__", svg),
-            ("__CONFIG__", &cfg),
-        ],
-    )
-}
-
-/// Substitute `subs` (token → value) into `template` in one pass: at each step the earliest
-/// remaining token is replaced with its value, and inserted values are never re-scanned. This is
-/// the difference from chained `.replace` — a value carrying a later token can't be clobbered.
-fn fill_template(template: &str, subs: &[(&str, &str)]) -> String {
-    let mut out = String::with_capacity(template.len());
-    let mut rest = template;
-    loop {
-        // The earliest occurrence of any token in the unconsumed tail.
-        let next = subs
-            .iter()
-            .filter_map(|(tok, val)| rest.find(tok).map(|pos| (pos, *tok, *val)))
-            .min_by_key(|(pos, _, _)| *pos);
-        match next {
-            Some((pos, tok, val)) => {
-                out.push_str(&rest[..pos]);
-                out.push_str(val);
-                rest = &rest[pos + tok.len()..];
-            }
-            None => {
-                out.push_str(rest);
-                return out;
-            }
-        }
-    }
-}
-
-const HTML_TEMPLATE: &str = include_str!("template.html");
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Level, Phase};
+    use crate::model::{Edge, Level, Phase};
 
     /// Render with the identity lens (nothing collapsed) — the default for every test that isn't
     /// exercising F-region-collapse itself, so the `View` argument stays out of the assertions.
     fn rsvg(model: &Model) -> String {
         render_svg(model, &View::none())
-    }
-
-    #[test]
-    fn hump_split_breaks_camelcase_and_acronym_runs() {
-        assert_eq!(hump_split("ItemAdded"), vec!["Item", "Added"]);
-        assert_eq!(hump_split("HTTPServer"), vec!["HTTP", "Server"]);
-        assert_eq!(hump_split("plain"), vec!["plain"]);
-    }
-
-    #[test]
-    fn esc_encodes_the_five_xml_special_chars() {
-        assert_eq!(esc("&<>\"'"), "&amp;&lt;&gt;&quot;&#x27;");
-    }
-
-    #[test]
-    fn split_label_prefers_detail_then_trailing_parenthetical() {
-        assert_eq!(
-            split_label("Title", Some("a detail")),
-            ("Title".to_string(), "a detail".to_string())
-        );
-        assert_eq!(
-            split_label("ItemAdded (when cart open)", None),
-            ("ItemAdded".to_string(), "when cart open".to_string())
-        );
-        assert_eq!(
-            split_label("Plain", None),
-            ("Plain".to_string(), String::new())
-        );
     }
 
     // The client's instant-move replay reads col / lane / centre off the sticky group; if these
@@ -1425,16 +977,6 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         }
-    }
-
-    #[test]
-    fn lane_prefix_is_aligned_with_lanes_and_total() {
-        assert_eq!(LANES.len(), LANE_PREFIXES.len());
-        assert!(LANES.iter().all(|l| lane_prefix(l).is_some()));
-        assert_eq!(lane_prefix("actor"), Some('X')); // not 'A' — aggregate owns that
-        assert_eq!(lane_prefix("aggregate"), Some('A'));
-        assert_eq!(lane_prefix("hotspot"), Some('H'));
-        assert_eq!(lane_prefix("not-a-lane"), None);
     }
 
     fn empty_board() -> Model {
@@ -1959,16 +1501,6 @@ mod tests {
         assert_eq!(rsvg(&mixed), rsvg(&valid));
     }
 
-    #[test]
-    fn a_label_equal_to_a_template_token_is_not_clobbered() {
-        // A sticky labelled `__CONFIG__` reaches the SVG verbatim (esc leaves underscores). The
-        // single-pass fill must insert it as-is, not let the later `__CONFIG__` substitution
-        // rewrite it into the geometry JSON.
-        let html = render_html("<text>__CONFIG__</text>", "t");
-        assert!(html.contains("<text>__CONFIG__</text>")); // label survived
-        assert!(html.contains("\"colW\":")); // real config JSON still landed
-    }
-
     fn el(id: &str, kind: &str, col: i64) -> Element {
         Element {
             id: id.into(),
@@ -2031,25 +1563,6 @@ mod tests {
         assert!(
             cys.windows(2).all(|w| w[0] < w[1]),
             "edge-free cell reordered: {cys:?}"
-        );
-    }
-
-    // Lever B (F-edge-routing): the fan-out offset must be a pure addition — offset 0 reproduces
-    // the classic centre-to-centre path byte-for-byte (no regression on the lone-edge common case),
-    // and a non-zero offset slides only the anchor along its facing edge (Y for a horizontal facing),
-    // never the opposite axis. p1→p2 is horizontal facing (dx = 400 ≥ STICKY_W).
-    #[test]
-    fn edge_path_offset_zero_is_classic_and_offset_slides_the_anchor() {
-        let p1 = (100.0, 200.0);
-        let p2 = (500.0, 260.0);
-        assert_eq!(
-            edge_path(p1, p2, 0.0, 0.0),
-            "M188.0,200.0 C300.0,200.0 300.0,260.0 412.0,260.0"
-        );
-        // +12 at the source slides that anchor (and its control point) down 12px in Y only.
-        assert_eq!(
-            edge_path(p1, p2, 12.0, 0.0),
-            "M188.0,212.0 C300.0,212.0 300.0,260.0 412.0,260.0"
         );
     }
 
@@ -2139,26 +1652,5 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 9, "expected 9 fanned connectors");
-    }
-
-    #[test]
-    fn render_html_injects_the_geometry_config() {
-        let html = render_html("<svg></svg>", "t");
-        assert!(!html.contains("__CONFIG__"));
-        assert!(html.contains("\"colW\":210"));
-        assert!(html.contains("\"stickyW\":176"));
-    }
-
-    #[test]
-    fn wrap_fits_short_labels_and_ellipsises_overflow() {
-        assert_eq!(
-            wrap("Order Placed", 20, 2),
-            vec!["Order Placed".to_string()]
-        );
-        // Three 4-char tokens, width 4, capped at one line -> truncated with an ellipsis.
-        assert_eq!(
-            wrap("aaaa bbbb cccc", 4, 1),
-            vec!["aaa\u{2026}".to_string()]
-        );
     }
 }
