@@ -25,8 +25,44 @@ env:
 # Third-party actions are pinned to commit SHAs (version in the trailing
 # comment). Bump the SHA and the comment together; never use a mutable tag.
 jobs:
+  # Which kinds of file changed, so each check runs only when it's relevant.
+  # A docs-only PR skips the Rust jobs; a Rust-only PR skips markdownlint;
+  # etc. Skipped required checks report as "skipped", which the branch ruleset
+  # counts as passing — so gating here never leaves a PR stuck waiting.
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      markdown: ${{ steps.filter.outputs.markdown }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - '**/*.rs'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              # template.html is include_str!'d into the binary, so a change to
+              # it rebuilds and can break tests — treat it as a Rust change.
+              - 'src/template.html'
+            markdown:
+              - '**/*.md'
+              - '.markdownlint-cli2.jsonc'
+            workflows:
+              - '.github/workflows/**'
+
   fmt:
     name: rustfmt
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -40,11 +76,16 @@ jobs:
 
   clippy:
     name: clippy (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        # PRs run ubuntu only (fast, and the required gate). Pushes to main
+        # (and manual dispatch) also cover macOS. Windows was dropped: no user
+        # runs it and it's the slowest runner.
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest"]') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
@@ -56,13 +97,16 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.os }}
-    # The std-only HTTP server and threading are platform-sensitive, so the
-    # matrix earns its keep even though most logic is pure.
+    # The std-only HTTP server and threading are platform-sensitive, so macOS
+    # earns its keep on main even though most logic is pure.
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        # PRs run ubuntu only; pushes to main (and manual dispatch) add macOS.
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest"]') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
@@ -73,6 +117,8 @@ jobs:
 
   zero-deps:
     name: zero dependencies
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     # faceto's headline promise is "no crates, ever". This is the firewall:
     # the resolved dependency tree must contain exactly one package (faceto
@@ -93,6 +139,8 @@ jobs:
 
   markdown:
     name: markdownlint
+    needs: changes
+    if: needs.changes.outputs.markdown == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -103,6 +151,8 @@ jobs:
 
   actionlint:
     name: actionlint
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
