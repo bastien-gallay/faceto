@@ -550,20 +550,27 @@ submodules. **Pure refactor, no behaviour change** — the gate (`fmt`, `clippy 
 test suite, a smoke render) stayed green at every step, and no `Cargo.toml` change (zero-deps
 intact). Recorded so the *seams* — the deliberate part — survive.
 
-- **`render/`** (PR #31): `style` (colour grammar + `lane_prefix`) · `text` (label wrapping/esc) ·
-  `geometry` (constants + layout math) · `svg` (`render_svg`, decomposed 840→468 via
-  `draw_header`/`draw_lanes`/`draw_edges`/`draw_stickies`/`draw_legend`) · `html` (`render_html` +
-  single-pass `fill_template`) · `mod` re-exports.
-- **`events/`** (PR #33): `codec` (JSON ⟷ Event) · `log` (IO/framing) · `replay` (the projection) ·
-  `genesis` (`from_model`/`compact`) · `comments` (comment→event) · `mod` holds the `Event` enum +
-  re-exports the external `events::*` API unchanged.
+- **`events/`** (PR #33): `codec` (JSON ⟷ Event, plus the single `KNOWN_KINDS` vocabulary) · `log`
+  (IO/framing) · `replay` (the projection; the F-region-frontiers arms extracted to `add_phase` /
+  `remove_phase` / `move_frontier` / `split_phase` helpers) · `genesis` (`from_model`/`compact`) ·
+  `comments` (comment→event) · `mod` holds the `Event` enum + re-exports the external `events::*`
+  API unchanged.
 - **`serve/`** (PR #33): `mod` (server core: `Cache`, `Ctx` + the append critical section, `serve`)
-  · `http` (wire layer + routing) · `ids` (mint) · `comment` (`POST /comment`→event) · `sidebar`
-  (`/comments` + lint merge) · `hash` (FNV-1a). `Ctx` is the `pub(crate)` hub the wire/comment/
-  sidebar layers share; only the methods/constants they reach are elevated.
+  · `http` (wire layer; `handle` routes to one `route_*` fn per endpoint) · `ids` (mint) · `comment`
+  (`POST /comment`→event) · `sidebar` (`/comments` + lint merge) · `hash` (FNV-1a). `Ctx` is the
+  `pub(crate)` hub the wire/comment/sidebar layers share; only the methods/constants they reach are
+  elevated.
+- **`render/`** (PR #31, *separate branch — not yet on `main`*): `style` (colour grammar +
+  `lane_prefix`) · `text` (label wrapping/esc) · `geometry` (constants + layout math) · `svg`
+  (`render_svg`, decomposed 840→468 via `draw_header`/`draw_lanes`/`draw_edges`/`draw_stickies`/
+  `draw_legend`) · `html` (`render_html` + single-pass `fill_template`) · `mod` re-exports. Those
+  numbers describe #31's branch; they land on `main` only when #31 does.
 
-**One judgement worth keeping:** each split kept its **test suite as a single co-located
-`tests.rs`** rather than scattering cases per submodule — both suites are genuinely
-crate-transversal (shared PBT / temp-log+`Ctx` harnesses, cases that span the whole
-comment→event→replay→render pipeline), which is the "except if really crate transversal" carve-out.
-Production modules are all ≤~300 lines; the transversal test files stay whole.
+**Tests co-located with their code.** Each submodule carries its own `#[cfg(test)] mod tests`; the
+shared property-based / temp-log+`Ctx` harnesses live in a `#[cfg(test)] mod testutil` per crate
+module (`ev`/`Lcg`/`gen_comment`/`genesis` for events, `added`/`region_added`/`model_of` for serve).
+An earlier pass had parked each suite in one `tests.rs`; review feedback ("tests must be kept with
+their file") moved them home — which also let three helpers (`parse_collapse`, `comments_from_log`,
+`lint_items`) drop back from `pub(crate)` to private, since their tests no longer reach across a
+module boundary. Production code per module stays small; a file reads longer only because its tests
+now sit beside it.
