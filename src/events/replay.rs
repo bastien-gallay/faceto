@@ -250,6 +250,7 @@ mod tests {
     use super::*;
     use crate::events::testutil::*;
     use crate::events::*;
+    use proptest::prelude::*;
 
     #[test]
     fn duplicate_phase_added_id_replays_to_a_single_region() {
@@ -566,115 +567,60 @@ mod tests {
         assert_eq!(e1.y, Some(0.8), "a col-only nudge must not reset the Y");
     }
 
-    #[test]
-    fn pbt_comments_never_invent_an_element_and_only_drop_removes() {
-        // Non-regression over the adjacent move/rename/annotate/resolve arms: none of them may
-        // create or destroy an element — only `drop` removes, and nothing adds. Guards the move
-        // path this feature sits next to.
-        for seed in 0..500u64 {
-            let mut rng = Lcg(seed.wrapping_mul(40_503).wrapping_add(7));
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(500))]
+
+        /// None of the move/rename/annotate/resolve arms creates or destroys an element — only
+        /// `drop` removes, and nothing adds. Exactly the non-dropped genesis ids survive.
+        #[test]
+        fn pbt_comments_never_invent_an_element_and_only_drop_removes(
+            comments in prop::collection::vec(comment_strategy(), 1..8),
+        ) {
             let (mut log, ids) = genesis();
             let mut dropped = std::collections::HashSet::new();
-            let n = 1 + rng.below(8);
-            for _ in 0..n {
-                let (v, _) = gen_comment(&mut rng, &ids);
+            for v in &comments {
                 if v.get_str("kind") == Some("drop") {
                     if let Some(id) = v.get_str("elemId") {
                         dropped.insert(id.to_string());
                     }
                 }
-                log.extend(comment_to_events(&v));
+                log.extend(comment_to_events(v));
             }
             let model = replay(&log);
             let present: std::collections::HashSet<&str> =
                 model.elements.iter().map(|e| e.id.as_str()).collect();
             // No phantom creation: every surviving id was a genesis id.
             for id in &present {
-                assert!(ids.contains(id), "seed {seed}: invented element {id}");
+                prop_assert!(ids.contains(id), "invented element {id}");
             }
             // Exactly the non-dropped genesis ids survive.
             for id in &ids {
-                let want = !dropped.contains(*id);
-                assert_eq!(
+                prop_assert_eq!(
                     present.contains(id),
-                    want,
-                    "seed {seed}: element {id} present={} but dropped={}",
-                    present.contains(id),
-                    dropped.contains(*id)
+                    !dropped.contains(*id),
+                    "element {} survival wrong",
+                    id
                 );
             }
         }
     }
 
-    #[test]
-    fn pbt_phase_events_never_replay_to_a_hole_or_overlap() {
-        // Property (F-region-frontiers): fold any interleaving of phase events — legacy independent
-        // spans (`PhaseAdded`/`PhaseResized`, which alone could gap or overlap), atomic frontier
-        // moves, splits, and removes — and the replayed phases are always a *contiguous partition*:
-        // sorted, gap-free, overlap-free, each ≥1 column wide. And `normalize` is its own fixed
-        // point (a second pass changes nothing).
-        for seed in 0..800u64 {
-            let mut rng = Lcg(seed.wrapping_mul(2_246_822_519).wrapping_add(3));
-            let mut log: Vec<Event> = Vec::new();
-            let mut minted = 0u32; // client-minted ids for add/split, distinct from replay's own
-            let n = 1 + rng.below(12);
-            let mut trace = Vec::new();
-            for _ in 0..n {
-                // Ids that could exist so far (K1..=K{minted}); ops on absent ids are valid no-ops.
-                let target = format!("K{}", 1 + rng.below((minted.max(1)) as usize));
-                let (a, b) = (rng.below(9) as i64 - 2, rng.below(9) as i64 - 2);
-                let ev = match rng.below(5) {
-                    0 => {
-                        minted += 1;
-                        Event::PhaseAdded {
-                            id: Some(format!("K{minted}")),
-                            label: format!("p{minted}"),
-                            from_col: a.min(b),
-                            to_col: a.max(b),
-                        }
-                    }
-                    1 => Event::PhaseResized {
-                        id: target,
-                        from_col: a.min(b),
-                        to_col: a.max(b),
-                    },
-                    2 => Event::FrontierMoved {
-                        id: target,
-                        edge: if rng.below(2) == 0 { "start" } else { "end" }.into(),
-                        col: a,
-                    },
-                    3 => {
-                        minted += 1;
-                        Event::PhaseSplit {
-                            id: target,
-                            at_col: a,
-                            new_id: format!("K{minted}"),
-                            new_label: format!("s{minted}"),
-                        }
-                    }
-                    _ => Event::PhaseRemoved { id: target },
-                };
-                trace.push(line(&ev));
-                log.push(ev);
-            }
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(800))]
+
+        /// F-region-frontiers: fold any interleaving of phase events — legacy independent spans
+        /// (`PhaseAdded`/`PhaseResized`, which alone could gap or overlap), atomic frontier moves,
+        /// splits, and removes — and the replayed phases are always a *contiguous partition*:
+        /// sorted, gap-free, overlap-free, each ≥1 column wide; and `normalize` is its own fixed
+        /// point. On failure proptest shrinks to the fewest events that still break it.
+        #[test]
+        fn pbt_phase_events_never_replay_to_a_hole_or_overlap(log in phase_log_strategy()) {
             let mut phases = replay(&log).phases;
             for w in phases.windows(2) {
-                assert!(
-                    w[0].to_col + 1 == w[1].from_col,
-                    "seed {seed}: not contiguous ({}..{} then {}..{}) after:\n  {}",
-                    w[0].from_col,
-                    w[0].to_col,
-                    w[1].from_col,
-                    w[1].to_col,
-                    trace.join("\n  ")
-                );
+                prop_assert_eq!(w[0].to_col + 1, w[1].from_col, "not a contiguous partition");
             }
             for p in &phases {
-                assert!(
-                    p.from_col <= p.to_col,
-                    "seed {seed}: phase {} inverted",
-                    p.id
-                );
+                prop_assert!(p.from_col <= p.to_col, "phase {} inverted", p.id);
             }
             // Idempotence: normalizing the already-normalized result changes nothing.
             let before: Vec<_> = phases
@@ -686,7 +632,7 @@ mod tests {
                 .iter()
                 .map(|p| (p.id.clone(), p.from_col, p.to_col))
                 .collect();
-            assert_eq!(before, after, "seed {seed}: normalize not idempotent");
+            prop_assert_eq!(before, after, "normalize not idempotent");
         }
     }
 }

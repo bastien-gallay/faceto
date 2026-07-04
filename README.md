@@ -149,8 +149,10 @@ the overlay and re-baselines.
 `faceto` is a working instrument you reach for mid-thought, so install has to be trivial and
 offline. The shipped binary carries **zero runtime dependencies** — pure Rust std: JSON is parsed
 by a small hand-written module (`src/json.rs`), the server is `std::net` only. Nothing to download,
-nothing to audit at install time; a CI job guards it. *(The rule is being sharpened to runtime-only
-plus a binary-size budget, so test-only dev-dependencies don't count — see [ROADMAP.md](ROADMAP.md).)*
+nothing to audit at install time. Two CI jobs guard it: a `zero dependencies` firewall on the
+runtime (`cargo tree -e normal`) dependency tree, and a **binary-size budget** on the shipped
+binary. Test-only **dev-dependencies don't count** — they never enter the binary or the install, so
+`proptest` (which powers the property-based tests) is free.
 
 ## Development
 
@@ -170,5 +172,6 @@ Extracted from the daily-ops inception event-storm harness. The event-sourced sp
 shape: the log is truth, the model is a projection, comments are events. Next: more board formats, a
 `reorder` affordance (per-sticky nudge + backward-edge contradiction styling), and a short animated
 capture of the live click→note→diff loop (slot reserved under [Reload shows what changed](#reload-shows-what-changed)).
-Also planned: a `model.json` **export** (project the log back to a source file) and a
-**runtime-only** dependency policy with a binary-size budget — see [ROADMAP.md](ROADMAP.md).
+Also planned: a `model.json` **export** (project the log back to a source file) — see
+[ROADMAP.md](ROADMAP.md). The **runtime-only** dependency policy (dev-deps free + a binary-size
+budget) has since landed.

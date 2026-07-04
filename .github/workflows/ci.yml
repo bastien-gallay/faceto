@@ -146,22 +146,56 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    # faceto's headline promise is "no crates, ever". This is the firewall:
-    # the resolved dependency tree must contain exactly one package (faceto
-    # itself). Any added crate shows up as a second `name =` in Cargo.lock and
-    # fails the build here, loudly, before it can land.
+    # faceto's headline promise is "no *runtime* crates, ever": the shipped binary is
+    # pure std. This is the firewall — the *normal* dependency tree (what links into the
+    # binary; excludes dev/build edges) must contain exactly one package, faceto itself.
+    # Dev-dependencies (test-only, e.g. proptest) are allowed: they never enter the binary
+    # or the offline install. `cargo tree -e normal` draws that line — `Cargo.lock` alone
+    # can't, since it lists dev-dependency packages too.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Assert the dependency tree stays empty
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+      - name: Assert the shipped binary stays zero-dependency
         shell: bash
         run: |
-          count=$(grep -c '^name = ' Cargo.lock)
-          if [ "$count" -ne 1 ]; then
-            echo "::error::faceto must stay zero-dependency, but Cargo.lock lists $count packages:"
-            grep '^name = ' Cargo.lock
+          deps=$(cargo tree -e normal --prefix none | awk 'NF{print $1}' | sort -u)
+          if [ "$deps" != "faceto" ]; then
+            echo "::error::faceto's runtime dependency tree must be std-only, but found:"
+            echo "$deps"
             exit 1
           fi
-          echo "Cargo.lock contains exactly one package (faceto). Zero dependencies preserved."
+          echo "Runtime dependency tree is faceto-only. Shipped binary stays zero-dependency."
+
+  binary-size:
+    name: binary size budget
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    # The other half of the dependency policy: dev-dependencies are free, so the guard against
+    # *runtime* bloat is the shipped binary's size, not a dep count. Anchor ~905K; a 2 MiB ceiling
+    # leaves generous headroom while still catching a real regression (a runtime crate, a large
+    # embedded asset). Bump the ceiling deliberately if a genuine growth lands.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+      - name: Build release and check the size budget
+        shell: bash
+        run: |
+          cargo build --release
+          size=$(stat -c%s target/release/faceto)
+          ceiling=$((2 * 1024 * 1024))
+          printf 'faceto release binary: %d bytes (ceiling %d)\n' "$size" "$ceiling"
+          if [ "$size" -gt "$ceiling" ]; then
+            echo "::error::faceto binary $size B exceeds the $ceiling B budget — a runtime dep or large embedded asset likely crept in."
+            exit 1
+          fi
+          echo "Release binary is within the size budget."
 
   markdown:
     name: markdownlint

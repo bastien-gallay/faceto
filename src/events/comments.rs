@@ -161,6 +161,7 @@ mod tests {
     use crate::events::testutil::*;
     use crate::events::*;
     use crate::json::{self};
+    use proptest::prelude::*;
 
     #[test]
     fn frontier_move_maps_from_a_comment_with_guards() {
@@ -259,29 +260,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn pbt_no_comment_sequence_ever_leaves_a_blank_label() {
-        // Property: folding any sequence of comment objects through `comment_to_events` and
-        // replaying never yields an element whose label is blank. RED today — a blank rename
-        // overwrites the label with "".
-        for seed in 0..500u64 {
-            let mut rng = Lcg(seed.wrapping_mul(2_654_435_761).wrapping_add(1));
-            let (mut log, ids) = genesis();
-            let n = 1 + rng.below(8);
-            let mut trace = Vec::new();
-            for _ in 0..n {
-                let (v, shown) = gen_comment(&mut rng, &ids);
-                trace.push(shown);
-                log.extend(comment_to_events(&v));
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(500))]
+
+        /// Folding any sequence of comment objects through `comment_to_events` and replaying
+        /// never yields an element with a blank label — a blank rename must persist nothing (the
+        /// `nonblank` guard). On failure proptest shrinks to the minimal comment sequence.
+        #[test]
+        fn pbt_no_comment_sequence_ever_leaves_a_blank_label(
+            comments in prop::collection::vec(comment_strategy(), 1..8),
+        ) {
+            let (mut log, _ids) = genesis();
+            for v in &comments {
+                log.extend(comment_to_events(v));
             }
-            let model = replay(&log);
-            for e in &model.elements {
-                assert!(
-                    !e.label.trim().is_empty(),
-                    "seed {seed}: element {} got a blank label after:\n  {}",
-                    e.id,
-                    trace.join("\n  ")
-                );
+            for e in &replay(&log).elements {
+                prop_assert!(!e.label.trim().is_empty(), "element {} got a blank label", e.id);
             }
         }
     }
