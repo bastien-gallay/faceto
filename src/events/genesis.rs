@@ -82,6 +82,7 @@ mod tests {
     use crate::events::testutil::*;
     use crate::events::*;
     use crate::json::{self};
+    use proptest::prelude::*;
 
     #[test]
     fn from_model_emits_region_ids_so_genesis_round_trips() {
@@ -215,5 +216,42 @@ mod tests {
         let folded = compact(&log);
         let reparsed = parse_log(&to_jsonl(&folded)).unwrap();
         assert_eq!(replay(&reparsed).elements[0].y, Some(0.25));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(500))]
+
+        /// The load-bearing `compact` invariant: replaying a compacted log projects the *same*
+        /// `Model` as replaying the original — `replay(compact(x)) == replay(x)`. Rendering is a
+        /// pure function of the `Model`, so equal projections render identically; this is what
+        /// lets `compact` fold history without changing the board.
+        ///
+        /// Compared on the `Model` directly (not through `from_model` → jsonl): the left side never
+        /// passes through `from_model`, so a field the genesis emitter *forgets* to carry makes the
+        /// two projections diverge and fails here — the exact escape a canonical-form comparison
+        /// would share the blind spot on. `a_placed_elements_y_survives_compact` is the worked
+        /// example of that failure mode; this generalises it over arbitrary comment histories.
+        #[test]
+        fn pbt_compact_preserves_the_projection_over_comment_logs(
+            comments in prop::collection::vec(comment_strategy(), 1..=8),
+        ) {
+            let (mut log, _ids) = genesis();
+            for v in &comments {
+                log.extend(comment_to_events(v));
+            }
+            prop_assert_eq!(replay(&compact(&log)), replay(&log));
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(800))]
+
+        /// The same `replay(compact(x)) == replay(x)` invariant over phase/region logs — the genesis
+        /// path most prone to dropping state (region ids, span geometry). Complements the comment
+        /// coverage above, which never mints a phase.
+        #[test]
+        fn pbt_compact_preserves_the_projection_over_phase_logs(log in phase_log_strategy()) {
+            prop_assert_eq!(replay(&compact(&log)), replay(&log));
+        }
     }
 }
