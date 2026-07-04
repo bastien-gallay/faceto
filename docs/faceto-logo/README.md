@@ -15,6 +15,7 @@ Fonte du wordmark vectorisée (Space Grotesk Bold, tracés) → aucune dépendan
 | `faceto-wordmark-eventstorming.svg` | Exemple accent orange |
 | `faceto-wordmark-{ink,white}.svg` | Bannière README, `<picture>` clair / sombre (octogone orange, texte encre / blanc) |
 | `faceto-avatar-512-*.png` | Avatar GitHub 512 px (ink / white) |
+| `faceto-social-card.{svg,png}` | Carte social preview GitHub 1280×640 (Open Graph) — `.png` à téléverser, `.svg` = source |
 
 ## Couleur
 
