@@ -299,11 +299,58 @@ fn query_get(query: &str, key: &str) -> Option<String> {
     for pair in query.split('&') {
         if let Some((k, v)) = pair.split_once('=') {
             if k == key {
-                return Some(v.to_string());
+                return Some(url_decode(v));
             }
         }
     }
     None
+}
+
+/// Percent-decode a URL query value (`%XX` → byte, `+` → space) — std-only, no crate. The client
+/// builds board fetches with `URLSearchParams`, which percent-encodes reserved characters: the
+/// comma separating `?collapse=` ids becomes `%2C`, so without decoding a multi-region fold would
+/// arrive as a single unmatchable id. A malformed escape (`%` not followed by two hex digits) is
+/// left verbatim rather than dropped, so a stray `%` never eats following bytes.
+fn url_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' => match (
+                i.checked_add(1)
+                    .and_then(|j| bytes.get(j))
+                    .map(|b| *b as char),
+                i.checked_add(2)
+                    .and_then(|j| bytes.get(j))
+                    .map(|b| *b as char),
+            ) {
+                (Some(hi), Some(lo)) => match (hi.to_digit(16), lo.to_digit(16)) {
+                    (Some(h), Some(l)) => {
+                        out.push((h * 16 + l) as u8);
+                        i += 3;
+                    }
+                    _ => {
+                        out.push(b'%');
+                        i += 1;
+                    }
+                },
+                _ => {
+                    out.push(b'%');
+                    i += 1;
+                }
+            },
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
@@ -318,5 +365,23 @@ mod tests {
         assert!(parse_collapse("base=abc").is_empty());
         assert!(parse_collapse("collapse=").is_empty());
         assert_eq!(parse_collapse("collapse=,K2,"), vec!["K2"]);
+        // The browser builds the query with `URLSearchParams`, which percent-encodes the comma
+        // that separates ids (`,` → `%2C`). The server must decode it, or a two-region fold
+        // arrives as one bogus id (`K2%2CK5`) that matches no phase and the whole lens silently
+        // un-folds (regression: multi-region collapse was broken end-to-end).
+        assert_eq!(parse_collapse("collapse=K2%2CK5"), vec!["K2", "K5"]);
+        assert_eq!(
+            parse_collapse("base=abc&collapse=K2%2CK5%2CK9"),
+            vec!["K2", "K5", "K9"]
+        );
+    }
+
+    #[test]
+    fn query_get_percent_decodes_the_value() {
+        assert_eq!(query_get("k=a%2Cb", "k").as_deref(), Some("a,b"));
+        assert_eq!(query_get("k=a+b", "k").as_deref(), Some("a b"));
+        // A malformed escape is left verbatim rather than dropped.
+        assert_eq!(query_get("k=100%", "k").as_deref(), Some("100%"));
+        assert_eq!(query_get("k=%zz", "k").as_deref(), Some("%zz"));
     }
 }

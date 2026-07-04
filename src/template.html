@@ -933,19 +933,27 @@ let frontierDrag = null;   // { regionId, edge, baseCol, svgLeft, pointerId, b? 
 // including pointerup off-window — is delivered to the line, so the drag can never leak.
 function startFrontierDrag(e) {
   if (e.button !== 0 || gestureBusy()) return;
-  // A collapsed region leaves the rail sparse (folded columns emit no `.region-rail`), so the
-  // boundary-snap math (boundaryAtSvgX/boundaryX, built from railCols) can no longer resolve a
-  // folded boundary — a drag near a folded band would fail the no-change guard and POST a resize
-  // the viewer never intended, turning the read-only collapse lens into a destructive model edit.
-  // Require expanding first; resizing a partition whose columns are hidden is ambiguous anyway.
-  if (collapsedSet().size) { note("expand collapsed regions (z) to resize a frontier"); return; }
-  e.preventDefault();
   const line = e.currentTarget;
+  const region = line.dataset.region, edge = line.dataset.edge, rb = regionBounds[region];
+  // A folded band emits no `.region-rail` for its columns, so the boundary-snap math
+  // (boundaryAtSvgX/boundaryX, built from railCols) can't resolve a frontier that *touches* one —
+  // a commit there would POST a resize the viewer never intended, turning the read-only collapse
+  // lens into a destructive model edit. But *only* the touching frontiers are ambiguous: a frontier
+  // between two expanded regions stays fully addressable while some *other* region is folded, so it
+  // must keep working (the fold is a per-viewer lens, not a board-wide edit lock). An internal
+  // boundary is owned by the left region's "end"; the leftmost "start" touches only its own region.
+  // So block iff this frontier's own region or its right neighbour is collapsed.
+  const collapsed = collapsedSet();
+  const rightId = rb && Object.keys(regionBounds).find((k) => regionBounds[k].from === rb.to + 1);
+  if (collapsed.has(region) || (edge !== "start" && rightId && collapsed.has(rightId))) {
+    note("expand this region (z) to resize its frontier");
+    return;
+  }
+  e.preventDefault();
   const svgLeft = svgLeftPx();
   // Capture before any state — a throw here must not leave a frontierDrag flag (or the guide)
   // behind to gate every other gesture.
   try { line.setPointerCapture(e.pointerId); } catch { return; }
-  const region = line.dataset.region, edge = line.dataset.edge, rb = regionBounds[region];
   // Clamp the drag so a frontier can never cross its neighbours (the guard the old region-edge drag
   // enforced): dragging past a neighbour would otherwise crush that phase to one column, or — for
   // the leftmost "start" — reorder the whole partition. An "end" frontier stays within (its own
