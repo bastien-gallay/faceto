@@ -574,7 +574,7 @@ mod tests {
         /// `drop` removes, and nothing adds. Exactly the non-dropped genesis ids survive.
         #[test]
         fn pbt_comments_never_invent_an_element_and_only_drop_removes(
-            comments in prop::collection::vec(comment_strategy(), 1..8),
+            comments in prop::collection::vec(comment_strategy(), 1..=8),
         ) {
             let (mut log, ids) = genesis();
             let mut dropped = std::collections::HashSet::new();

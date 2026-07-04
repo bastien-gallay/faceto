@@ -1,4 +1,11 @@
-<!-- markdownlint-disable MD013 MD033 -->
+<!-- markdownlint-disable MD013 MD033 MD041 -->
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/faceto-logo/faceto-wordmark-white.svg">
+    <img src="docs/faceto-logo/faceto-wordmark-ink.svg" alt="faceto" width="220">
+  </picture>
+</p>
 
 # faceto
 
