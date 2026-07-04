@@ -74,8 +74,8 @@ the log). Seven source files, each one stage:
   `get`/`as_str`/`as_f64`/`as_bool`/`as_array`). Everything else builds on this.
 - **`src/events.rs`** — the event-sourced spine. The `Event` enum (one JSON object per log line),
   `parse_log`/`read_log`, `replay(&[Event]) -> Model` (the projection), `from_model` (genesis/
-  migration), `from_comments`/`comment_to_events` (fold a legacy `comments.jsonl` into events; the
-  latter is the single source of truth shared with `serve.rs`'s `POST /comment`), and `compact`
+  migration), `comment_to_events` (map one posted comment to the events it implies — the single
+  source of truth shared with `serve.rs`'s `POST /comment`), and `compact`
   (fold a log to a `LogCompacted` marker + genesis snapshot). Schema evolves additively — unknown
   event kinds are skipped and unknown fields ignored on read (forward compatibility) — and a
   renamed event *kind* is migrated forward at the `upcast` read-path seam (backward compatibility;

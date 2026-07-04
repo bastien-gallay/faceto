@@ -29,9 +29,8 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, String> {
 }
 
 /// Iterate the meaningful records of JSONL text: each non-blank line, trimmed, paired with its
-/// 1-based line number. The single place the line grammar (skip blanks, trim) lives, shared by
-/// the log reader ([`parse_log`]) and the comments fold ([`from_comments`](crate::events::from_comments))
-/// so the two never drift.
+/// 1-based line number. The single place the log's line grammar (skip blanks, trim) lives, used by
+/// the log reader ([`parse_log`]).
 pub(crate) fn jsonl_records(text: &str) -> impl Iterator<Item = (usize, &str)> {
     text.lines()
         .enumerate()
