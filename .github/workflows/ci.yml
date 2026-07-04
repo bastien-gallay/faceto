@@ -42,6 +42,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       markdown: ${{ steps.filter.outputs.markdown }}
       workflows: ${{ steps.filter.outputs.workflows }}
+      just: ${{ steps.filter.outputs.just }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
@@ -61,6 +62,8 @@ jobs:
               - '.markdownlint-cli2.jsonc'
             workflows:
               - '.github/workflows/**'
+            just:
+              - 'justfile'
 
   fmt:
     name: rustfmt
@@ -196,3 +199,22 @@ jobs:
           echo "path=$(pwd)/actionlint" >> "$GITHUB_OUTPUT"
       - name: Run actionlint
         run: ${{ steps.install.outputs.path }} -color
+
+  justfile:
+    name: justfile
+    needs: changes
+    if: needs.changes.outputs.just == 'true'
+    runs-on: ubuntu-latest
+    # The justfile is the local mirror of these gates (see docs/ci.md). It never
+    # ships and CI never runs it, so this only guards against rot: `--fmt --check`
+    # catches formatting drift and `--summary` fails on a parse error. `just` is a
+    # dev tool, not a crate, so the zero-dependency promise is untouched.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: "1.55.1"   # pin so a new formatter release can't surprise CI
+      - name: Check formatting and parsing
+        run: |
+          just --fmt --check --unstable
+          just --summary > /dev/null

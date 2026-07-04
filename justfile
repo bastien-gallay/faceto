@@ -11,8 +11,8 @@ export RUSTFLAGS := "-D warnings"
 default:
     @just --list
 
-# Run every CI gate in order (format → lint → test → docs → firewall → workflows).
-ci: fmt clippy test md zero-deps actionlint
+# Run every CI gate in order (format → lint → test → docs → firewall → workflows → justfile).
+ci: fmt clippy test md zero-deps actionlint lint-justfile
     @echo "✓ all local CI gates passed"
 
 # Formatting is law: cargo fmt --all --check.
@@ -46,3 +46,8 @@ zero-deps:
 # Lint the GitHub Actions workflow files.
 actionlint:
     actionlint
+
+# Guard this justfile against rot: check formatting and that it parses.
+lint-justfile:
+    just --fmt --check --unstable
+    just --summary > /dev/null
