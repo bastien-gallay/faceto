@@ -19,7 +19,14 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | F-narrative-skill | AI · participant | ☐ | **Now** | *(was F-mcp-narrative — reshaped by feature-torture 2026-07-02.)* Reverse-narrative / discovery skill: an LLM agent reads `event-log.jsonl` directly and proposes events through the existing `POST /comment` seam (server-side minting + guards + append mutex, all shipped). Prompt-ware only — **no new Rust**; the participation seams already exist (`serve.rs` re-reads the log per request, so agent appends show live). The on-thesis answer to "solo & stuck". Spec: [`docs/F-narrative-skill-spec.md`](docs/F-narrative-skill-spec.md); torture report: `.personal/feature-torture/reports/F-mcp-narrative.md`. |
 | F-auto-genesis | CLI · migration | ✅ | **Now** | **Kill legacy mode.** `faceto serve model.json` **auto-runs genesis** — creates `event-log.jsonl` beside the model (folding a sibling `comments.jsonl`, counts reported: the shipped genesis path, `main.rs`) — then serves in **log mode only**; if the sibling log already exists, the log wins (it is truth, the model is derived) and the `.json` argument just redirects to it. Removes `serve.rs`'s entire legacy branch (`log_mode = false`: `comments.jsonl` appends, structural gestures stored as dead comments) — the "gesture lies" defect dies **by construction**, not behind a warning. `model.json` stays as a **read-only retrieval / bootstrap format**: `render` and `genesis` keep reading it purely; only serving (mutation) forces the log. Supersedes the legacy-mode-guard idea (F-region-frontiers torture + working note, 2026-07-03). Sequenced **before** F-region-frontiers so the frontier client work never grows a legacy branch. Tracked: #20. Shipped 2026-07-03 (`main.rs` `serve_log_path` + `write_genesis`; `serve.rs` reduced to event-log-only). |
 | F-mcp-server | AI · interop | ☐ | Parked | std-only stdio JSON-RPC MCP server exposing read-log / propose-event tools. Spawned from the F-mcp-narrative torture (2026-07-02): redundant while the dogfood agent has file + shell tools. Revisit when a shell-less client (claude.ai, Claude Desktop) becomes a real usage context, or a second agent platform needs typed tool discovery. |
-| F-multiplayer | collab · network | ☐ | Parked | Multi-collaborator over network + event reconciliation + user naming. Heaviest std-only lift; fixes *crowded*, not *solo* — out of slice until a real multi-user need appears. |
+| F-multiplayer | collab · network | ☐ | Parked | *(shaped by feature-torture 2026-07-03 → 🧬 split; umbrella row.)* Multi-collaborator over network + event reconciliation + user naming. The **live-collab loop** was un-parked once a real multi-user need appeared (a cloudflared tunnel proved the log already propagates edges both ways) and split into ship-now children **F-collab-sse** + **F-event-author** (Next) and the reshaped **F-live-statepreserve** (Later), with heavier reconciliation pieces in the backlog rows below. This umbrella stays Parked as the collective name; the felt work lives in the children. Torture report: `.personal/feature-torture/reports/F-collab-live.md`. |
+| F-collab-sse | collab · network | ☐ | Next | *(spawned by F-collab-live torture 2026-07-03 — the lead child, ship.)* Replace the `/model-version` **polling** (`template.html:276` `liveVersion`) with a `GET /events` **SSE** stream (`text/event-stream`, zero-dep — just HTTP lines): the server broadcasts one line per append at the single locked write point (`serve.rs:81` `append_line`, the H4 mutex), the client swaps the poll for an `EventSource` and refetches the plain board on ping. *The* leverage — polling→push is the change that makes the board feel live. ~80–120 LOC, no client model. Edges: reconnect/backfill after a dropped stream; a mid-session `compact` forces a full reload. |
+| F-event-author | collab · identity | ☐ | Next | *(spawned by F-collab-live torture 2026-07-03 — smallest change, highest social value/LOC, ship.)* Additive **`author`** field on events (`events.rs` `Event`, threaded through `parse_event`/`to_json`/`replay` — old logs replay identically) + a **name-on-connect** prompt, surfaced on diff/sidebar entries. Independent of SSE (attribution works even under polling). Shares the sidebar/identity seam with **F-comment-lifecycle** — sequence together. Note: no auth (public tunnel) → the name is unverified courtesy, not identity; say so in UI copy. |
+| F-live-statepreserve | UI · legibility | ☐ | Later | *(spawned by F-collab-live torture 2026-07-03 — the reshaped priority #3.)* Preserve **scroll / selection / in-progress edit** across the existing SVG swap, so a co-author's update no longer blows away local state. Explicitly **not** a JS port of `replay` — the torture killed the full client-side-model port (~400 LOC duplicating `render.rs`, a permanent drift tax against the log-is-truth spine). Revisit the port only if this cheap preservation proves insufficient in real N≥2 dogfood *and* per-element live patching becomes the felt pain. |
+| F-collab-concurrency | collab · network | ☐ | Parked | *(backlog from the F-collab-live design chat 2026-07-03.)* **Semantic** concurrency: client posts carry a `base=<version>` (optimistic concurrency, mirroring the read-side `?base=` diff seam) so the server can reject / flag a write against a stale field, instead of silent last-write-wins on a same-element edit. The append mutex (H4) already prevents *storage* races; this closes the *semantic* gap. Two commuting `ElementMoved` on distinct elements already merge cleanly — this is only for same-element concurrent edits. Depends on F-event-author (needs a version/actor to reason about). |
+| F-presence | collab · awareness | ☐ | Parked | *(backlog from the F-collab-live design chat 2026-07-03.)* **Ephemeral** presence — who's online, whose selection/cursor is where, soft-locks ("someone is editing this element"). Not truth: it must **not** go in the log; it piggybacks on the F-collab-sse stream as a separate channel. The "it feels collaborative" delight layer (Figma-style) and a cheap way to cut the F-collab-concurrency conflict surface. Depends on F-collab-sse. |
+| F-offline-sync | collab · reconciliation | ☐ | Parked | *(backlog from the F-collab-live design chat 2026-07-03.)* True offline-first reconciliation: today offline ops stash in `localStorage` and are **local-only, not resynced**. The structural blocker is **server-minted ids** (`mint_id` in `serve.rs`, under the appends lock) — an offline `add` can't get a real id. Needs client-generated tentative ids reconciled on reconnect (CRDT/GUID-style), a real design lift. Heaviest std-only piece; open only when offline editing is a felt need. |
+| F-compact-live | collab · reconciliation | ☐ | Parked | *(backlog from the F-collab-live design chat 2026-07-03.)* Handle `faceto compact` (history rewrite → snapshot) while clients are **live-subscribed**: a client syncing "events since version N" can have N vanish under compaction. Needs a "your base was compacted → full resync" signal on the F-collab-sse stream. Small but real once SSE ships. Depends on F-collab-sse. |
 | F-format-interop | interop | ☐ | Parked | Import/export to known event-storming formats and visual tools (Excalidraw, Miro). Not felt pain today. |
 | F-es-vocabulary | modelling fidelity | ☐ | Parked | Deeper pure event-storming vocabulary — parallel / recurrent events, out-of-lane elements, and two sticky types a real board reached for: **`timer` / `temporal`** (time-triggered policies) and **`process`** (stateful, longer-running workflows). Each is an additive lane in `LANES` + `colour` + `lane_prefix`. Open when the model can't express something a real session needs. Field feedback #13 §2. |
 | F-ddd-process | DDD process | ☐ | Parked | Adjacent capabilities from the ddd-crew starter modelling process. Depends on F-container; open after it lands. |
@@ -27,7 +34,7 @@ real sessions surface the next felt pain. Source: `.personal/brainstorm/20260620
 | F-model-smells | linting | ☐ | Parked | Detect model smells — orphans, loops, heavy bounded-contexts. Needs the F-container primitive and a graph pass; open once grouping exists. |
 | F-board-gestures | UI · direct edit | ✅ | **Now** | Richer on-element gestures layered over F-inline-add: **chromeless** bare ghost glyphs (`+` add · `×` remove · comment), not a floating toolbar (DESIGN §6); single-click focuses only (select-then-edit), double-click / F2 rename, drag left/right moves, `c` / comment glyph opens the modal. The modal then carries only prose actions, and `resolve` shows only on hotspots / open questions. Working note below; shipped 2026-07-01. |
 | F-region-frontiers | model · grouping | ✅ | Next | *(reshaped by feature-torture 2026-07-03 — frontier core only; shipped 2026-07-03.)* Regions are now a **contiguous partition defined by shared *frontiers***, not independent `[fromCol, toCol]` spans. `model::normalize` — one pure, deterministic, idempotent sweep — projects **any** phase list (new frontier events *and* legacy spans with holes/overlaps) onto a gap-free, overlap-free partition, in **both** `replay` and `from_json`, so every `Model` obeys the invariant. Resize = drag a `.frontier` (`FrontierMoved {id, edge, col}`; normalize re-borders the neighbour atomically), add = **split** a phase (`PhaseSplit`, server-minted right-half id), remove = **merge** (`PhaseRemoved` + normalize absorbs the columns — no hole), the outermost frontiers resize the **whole board**. Kills by construction the hole / overlap / unreachable-edge confusions. **As-built deltas from the shaping** (see working note): `PhaseMerged` **deferred** (YAGNI — no v1 gesture picks merge direction; `PhaseRemoved`+normalize already merges); `FrontierMoved` carries an `edge` discriminator (moves *both* board ends); render draws **one** grabbable frontier per boundary (dedup), not two per-region edges. **Cut from v1 (unchanged):** the pivot / interstice column (co-owned with F-lane-flow (c) / F-floating-hotspots — frontier draws on the column boundary meanwhile) and move-region-as-reorder (→ candidate F-region-reorder). Model-spine change across all five files. Working note below; torture report: `.personal/feature-torture/reports/F-region-frontiers.md`. |
-| F-region-collapse | UI · legibility | ☐ | Later | *(reshaped by feature-torture 2026-07-03 — ✂️ column-fold only; edge-fold spun out to F-region-edge-fold.)* Collapse / hide a region to concentrate readability: fold its stickies into a summarised band so a wide board gets **shorter**. Pure **view-state** — no model / event change — via the proven `?base=` seam extended to `GET /board.svg?collapse=<id,id>` (client holds the collapsed-set in `localStorage`, server re-lays-out a `col → x` remap). Orthogonal to F-region-frontiers; reads the normalized partition. v1 **drops** the crossing-edge summarisation (the risky endpoint-in-span / adjacent-band correctness surface) → that is **F-region-edge-fold**. Pairs with F-frozen-headers (same wide-board legibility push). Plan: [`docs/F-region-collapse-plan.md`](docs/F-region-collapse-plan.md); torture report: `.personal/feature-torture/reports/F-region-collapse.md`. |
+| F-region-collapse | UI · legibility | ✅ | Later | *(reshaped by feature-torture 2026-07-03 — ✂️ column-fold only; edge-fold spun out to F-region-edge-fold. Shipped 2026-07-03.)* Collapse / hide a region to concentrate readability: fold its stickies into a summarised band so a wide board gets **shorter**. Pure **view-state** — no model / event change — via the proven `?base=` seam extended to `GET /board.svg?collapse=<id,id>` (client holds the collapsed-set in `localStorage`, server re-lays-out a `col → x` remap). Orthogonal to F-region-frontiers; reads the normalized partition. v1 **drops** the crossing-edge summarisation (the risky endpoint-in-span / adjacent-band correctness surface) → that is **F-region-edge-fold**. Pairs with F-frozen-headers (same wide-board legibility push). Working note below; plan: [`docs/F-region-collapse-plan.md`](docs/F-region-collapse-plan.md); torture report: `.personal/feature-torture/reports/F-region-collapse.md`. |
 | F-region-edge-fold | UI · legibility | ☐ | Later | *(spawned by F-region-collapse torture 2026-07-03.)* The deferred v1 tier of F-region-collapse: once a region folds to a band, **reroute the edges that cross it** to the band's two frontiers with a count badge, instead of dropping them. The risky 30% held out of collapse v1 — endpoint-in-span math (which edges cross a `[from_col, to_col]` span in `col` space, before remap) plus adjacent-collapsed-band composition, each needing a pure red-first test. Depends on F-region-collapse; ships with **zero rework** of it. Revisit-trigger: first dogfood session where a hidden crossing-edge causes a misread. |
 | F-2d-placement | model · layout | ✅ | **Now** | Replace the rows / columns / grid **packing** (and its dark grey group box — a poor 2D representation) with a **stored 2D sub-position**: keep `x = col` (global timeline) and `type = lane` — both invariants — but give each element a free **Y within its lane band** instead of auto-packing. Removes the packing control entirely and fixes two dogfood bugs: moving within a stacked group force-**swaps** (can't re-insert without displacing the survivor), and moving from / into a group **superposes**. Model change — `ElementMoved` gains the sub-position. Absorbs feedback #1 / #3 / #4 / #10. Shipped 2026-07-02 (PR #17); as-built note below. |
 | F-lane-flow | UI · legibility | ☐ | Next | Reorder the 8 lanes to the **canonical event-storming flow** (actor → command → aggregate / system → event → policy → … → read-model → UI → actor) so system and policy sit *near* events / commands, not at the bottom. Forks to shape: (a) reorder `LANES`; (b) **merge** adjacent lanes (aggregate+external, readmodel+policy) as an expandable *display grouping* — `type` still selects a pure lane, so the 8-colour grammar invariant holds; (c) alternate event / non-event **column cadence** — recoups the pivot / interstice column of F-region-frontiers, so shape together. Also shares the `LANES` / `colour` / `lane_prefix` seam with **F-floating-hotspots** (removes the hotspot lane) and **F-es-vocabulary** (adds `timer` / `process` lanes) — touch the lane set once, not three times. Feedback #2. |
@@ -337,6 +344,51 @@ rethink of Export (a power-user escape hatch, not a primary action), not a new p
   bare-argument meaning, so keep `render` / `genesis` / `compact` explicit. **Reconciled** into the
   CLI cluster → tracked on **F-cli-help** (with `--help` / F-output-naming, one `main.rs` pass).
 
+## Working note — F-region-collapse (2026-07-03, branch `feat/F-region-collapse`, as built)
+
+**Scope built = the reshaped v1 exactly:** column-fold only, no crossing-edge reroute (that stays
+**F-region-edge-fold**). A folded region's clamped column span compresses to one thin `COLLAPSE_W`
+(60px) summary slot; its stickies hide behind a `▸ Label · N` count chip on the tab, and every
+column to its right shifts left so the board actually shortens. **Pure view-state** — no `Model`,
+event, `replay`, or `from_json` change; the whole delta is `render.rs`, one `serve.rs` query seam,
+and `template.html`.
+
+**As built.**
+
+- **`render.rs` — the fold is one pure `col → x` remap.** New `pub struct View { collapsed }`
+  threaded as `render_svg(&Model, &View)`. Before the draw loop, each collapsed phase's clamped
+  inclusive span `[lo,hi]` marks `is_band_rep[lo]` + `hidden[lo..=hi]`; a cumulative `xs[i]` gives
+  each column-index its post-fold left x (`COLLAPSE_W` at a band's leftmost column, `0` for its
+  interior, `COL_W` otherwise), and `col_left(c) = xs[c]`. In-band stickies and any edge with an
+  in-band endpoint are skipped; a *crossing* edge (both ends visible) stays a straight passthrough.
+  Empty / unknown-id set = identity remap, so `render`/`genesis`/`GET /` keep their pre-feature
+  *column geometry* (`View::none()`) — not byte-identical output, since every region tab now also
+  emits an inert `▾` disclosure glyph. The region right-edge became `xs[hi+1]` (was
+  `col_left(hi)+COL_W`, only correct unfolded); the rightmost frontier likewise.
+- **`serve.rs` — `?collapse=K2,K5`** parsed by `parse_collapse` (empty segments dropped, absent =
+  identity) into the `View`; composes with `?base=` by folding the *baseline* model with the same
+  view so the diff overlay lines up.
+- **`template.html` — the reader's lens.** Collapsed-set in its own `localStorage` key
+  (`facetoCollapsed`, never the comment stash / log); `boardSrc` appends `collapse=` to *every*
+  board fetch so a fold survives each swap. Toggle: **`z`** on a focused region tab or click the
+  **▸/▾** disclosure glyph (a `.region-collapse` hit target inside the tab, `stopPropagation` keeps
+  it off the rename click). Reload re-applies the stored lens to the plain server render.
+
+**Deltas from the plan.** (1) The count chip is **element-count only** (`· N`) — no crossing-edge
+count, since edge-fold is deferred. (2) A crossing edge is left as a **full straight passthrough**,
+not the plan's "faint" one — dropping a real edge whose both nodes are on-screen would be a worse
+lie than drawing it. (3) Added a permanent **▾ disclosure triangle on every live region tab** (▸
+when folded) as the click affordance — the discoverable half of the `z`/click pair; kept subtle
+(grey, darkens on hover) for the calm register.
+
+**Tests to done (all green).** Pure UT (via rendered SVG, the observable contract): fold shortens
+the board + hides in-band stickies + emits the `· N` chip; empty/unknown set = identity; fold is
+order-independent + idempotent; adjacent folds stay independent (two chips); an in-band edge drops
+while a crossing edge passes through. `serve`: `parse_collapse` splitting + identity. Live-verified
+on `serve` (curl): plain 1240px → `?collapse=K2` 670px, `work · 7` chip, cols 2–4 hidden, identity
+holds, `?collapse=&base=` still returns `X-Diff-Base`. Browser click not driven (extension offline)
+— client JS syntax-checked; wiring is the standard region-tab glyph pattern.
+
 ## Working note — F-2d-placement (2026-07-02, branch `feat/F-2d-placement`, as built)
 
 **The stored form.** `y` is an optional **fraction of the lane-band interior in `[0, 1]`** —
@@ -456,3 +508,36 @@ overlaps are cross-referenced, not merged away:
 - **Lint stays split:** **F-es-lint** (graph-only) is distinct from **F-model-smells** (needs
   F-container).
 - **No #13 sibling:** dogfood #9 (duplicate title) stays a standalone quick fix.
+
+## Working note — code-review hardening pass (2026-07-03, branch `fix/harden-render-events-serve`)
+
+Not a catalog feature — a review of the three largest source files (`render.rs`, `events.rs`,
+`serve.rs`, all ~1200–2100 lines) surfaced eight issues; all fixed on this branch (PR #29), with
+regression tests for the five correctness ones. Recorded here so the reasoning and the one
+behaviour change survive.
+
+**Correctness.** (1) `render_svg` panicked on any element whose `type` isn't one of the 8 lanes
+(the per-lane `lane_rows`/`lane_top` lookups), though `colour`/`lane_index` already tolerate
+unknown kinds — now off-grammar stickies drop from the view before geometry (edges skipped by the
+`idx_of` guard); the log stays truth. (2) A panic in the `append_minted` critical section poisoned
+the `appends` mutex, permanently bricking every future `POST /comment` — all lock sites now recover
+via `unwrap_or_else(|p| p.into_inner())`. (3) `parse_log` silently dropped a **known**-kind event
+with a missing/mis-typed field exactly like an unknown kind — now a hard error (only unknown kinds
+skip, per the forward-compat contract). (4) `render_html`'s chained `.replace` let a label equal to
+a template token (`__CONFIG__`) get clobbered — replaced with a single-pass `fill_template`. (5)
+`replay`'s `PhaseAdded` is now idempotent by id like `ElementAdded`, so a duplicate never strands a
+ghost region.
+
+**Efficiency / cleanup.** The read path re-parsed + replayed the whole log every request (the cache
+was only an insertion guard) — `current()` gained a fast-path and `/model-version` (the ~1 Hz poll)
+a replay-free `version()`. `mint_region_id` re-implemented replay's fold in `serve.rs` — extracted
+`events::region_watermark`, the namespace rule now lives once in the spine. Request line + headers
+read unbounded (`MAX_BODY` guards only the body) — added `read_line_capped` + `MAX_HEADER_LINE` /
+`MAX_HEADERS` (→ `431`).
+
+**Dropped after verification** (guarded by `normalize()`, which runs in both `replay` and
+`from_json`): the "unsorted phases" and "overlapping-band miscount" candidates.
+
+**Behaviour change (intended).** `parse_log` now **rejects** a known event with a bad field it
+previously tolerated — a hand-authored / externally-generated log relying on silent-skip will now
+error on load.
