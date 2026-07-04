@@ -174,3 +174,26 @@ pub(crate) fn fan_offsets(
     }
     (off_src, off_dst)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Lever B (F-edge-routing): the fan-out offset must be a pure addition — offset 0 reproduces
+    // the classic centre-to-centre path byte-for-byte, and a non-zero offset slides only the anchor
+    // along its facing edge (Y for a horizontal facing). p1→p2 is horizontal (dx = 400 ≥ STICKY_W).
+    #[test]
+    fn edge_path_offset_zero_is_classic_and_offset_slides_the_anchor() {
+        let p1 = (100.0, 200.0);
+        let p2 = (500.0, 260.0);
+        assert_eq!(
+            edge_path(p1, p2, 0.0, 0.0),
+            "M188.0,200.0 C300.0,200.0 300.0,260.0 412.0,260.0"
+        );
+        // +12 at the source slides that anchor (and its control point) down 12px in Y only.
+        assert_eq!(
+            edge_path(p1, p2, 12.0, 0.0),
+            "M188.0,212.0 C300.0,212.0 300.0,260.0 412.0,260.0"
+        );
+    }
+}

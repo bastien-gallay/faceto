@@ -55,3 +55,25 @@ pub(crate) fn fill_template(template: &str, subs: &[(&str, &str)]) -> String {
 }
 
 pub(crate) const HTML_TEMPLATE: &str = include_str!("../template.html");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_html_injects_the_geometry_config() {
+        let html = render_html("<svg></svg>", "t");
+        assert!(!html.contains("__CONFIG__"));
+        assert!(html.contains("\"colW\":210"));
+        assert!(html.contains("\"stickyW\":176"));
+    }
+
+    #[test]
+    fn a_label_equal_to_a_template_token_is_not_clobbered() {
+        // A sticky labelled `__CONFIG__` reaches the SVG verbatim (esc leaves underscores). The
+        // single-pass fill must insert it as-is, not rewrite it into the geometry JSON.
+        let html = render_html("<text>__CONFIG__</text>", "t");
+        assert!(html.contains("<text>__CONFIG__</text>")); // label survived
+        assert!(html.contains("\"colW\":")); // real config JSON still landed
+    }
+}

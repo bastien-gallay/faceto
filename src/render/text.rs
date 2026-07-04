@@ -122,3 +122,49 @@ pub(crate) fn split_label(label: &str, detail: Option<&str>) -> (String, String)
 pub(crate) fn opt_col(c: Option<i64>) -> String {
     c.map(|v| v.to_string()).unwrap_or_else(|| "None".into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hump_split_breaks_camelcase_and_acronym_runs() {
+        assert_eq!(hump_split("ItemAdded"), vec!["Item", "Added"]);
+        assert_eq!(hump_split("HTTPServer"), vec!["HTTP", "Server"]);
+        assert_eq!(hump_split("plain"), vec!["plain"]);
+    }
+
+    #[test]
+    fn esc_encodes_the_five_xml_special_chars() {
+        assert_eq!(esc("&<>\"'"), "&amp;&lt;&gt;&quot;&#x27;");
+    }
+
+    #[test]
+    fn split_label_prefers_detail_then_trailing_parenthetical() {
+        assert_eq!(
+            split_label("Title", Some("a detail")),
+            ("Title".to_string(), "a detail".to_string())
+        );
+        assert_eq!(
+            split_label("ItemAdded (when cart open)", None),
+            ("ItemAdded".to_string(), "when cart open".to_string())
+        );
+        assert_eq!(
+            split_label("Plain", None),
+            ("Plain".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn wrap_fits_short_labels_and_ellipsises_overflow() {
+        assert_eq!(
+            wrap("Order Placed", 20, 2),
+            vec!["Order Placed".to_string()]
+        );
+        // Three 4-char tokens, width 4, capped at one line -> truncated with an ellipsis.
+        assert_eq!(
+            wrap("aaaa bbbb cccc", 4, 1),
+            vec!["aaa\u{2026}".to_string()]
+        );
+    }
+}

@@ -122,3 +122,18 @@ pub(crate) const REGION_TAB_PAD: f64 = 18.0;
 // `fan_offsets` caps the per-slot step below this when a face is crowded, so the extreme anchor
 // always stays on the box (a high-degree node packs tighter rather than spilling off the edge).
 pub(crate) const FAN_SPREAD: f64 = 12.0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lane_prefix_is_aligned_with_lanes_and_total() {
+        assert_eq!(LANES.len(), LANE_PREFIXES.len());
+        assert!(LANES.iter().all(|l| lane_prefix(l).is_some()));
+        assert_eq!(lane_prefix("actor"), Some('X')); // not 'A' — aggregate owns that
+        assert_eq!(lane_prefix("aggregate"), Some('A'));
+        assert_eq!(lane_prefix("hotspot"), Some('H'));
+        assert_eq!(lane_prefix("not-a-lane"), None);
+    }
+}

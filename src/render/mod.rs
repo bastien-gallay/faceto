@@ -7,8 +7,6 @@ mod geometry;
 mod html;
 mod style;
 mod svg;
-#[cfg(test)]
-mod tests;
 mod text;
 
 pub use html::render_html;
