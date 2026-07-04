@@ -25,8 +25,47 @@ env:
 # Third-party actions are pinned to commit SHAs (version in the trailing
 # comment). Bump the SHA and the comment together; never use a mutable tag.
 jobs:
+  # Which kinds of file changed, so each check runs only when it's relevant.
+  # A docs-only change skips the Rust jobs; a Rust-only change skips
+  # markdownlint; etc. Skipped required jobs report a "skipped" check, which
+  # the branch ruleset counts as passing — so gating never leaves a PR stuck
+  # waiting. This only works because the required jobs have STATIC names: a
+  # skipped *matrix* job reports its literal `${{ matrix.os }}` name and would
+  # never satisfy a required check, so macOS is its own job below, not a matrix.
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      markdown: ${{ steps.filter.outputs.markdown }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - '**/*.rs'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              # template.html is include_str!'d into the binary, so a change to
+              # it rebuilds and can break tests — treat it as a Rust change.
+              - 'src/template.html'
+            markdown:
+              - '**/*.md'
+              - '.markdownlint-cli2.jsonc'
+            workflows:
+              - '.github/workflows/**'
+
   fmt:
     name: rustfmt
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -38,13 +77,12 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
+  # Required check `clippy (ubuntu-latest)`. Runs on every Rust change.
   clippy:
-    name: clippy (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+    name: clippy (ubuntu-latest)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
@@ -54,15 +92,44 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
       - run: cargo clippy --all-targets -- -D warnings
 
+  # macOS clippy is main-only (and manual dispatch): not a required check, just
+  # extra coverage on the default branch. Skipped on PRs to keep them fast.
+  clippy-macos:
+    name: clippy (macos-latest)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+      - run: cargo clippy --all-targets -- -D warnings
+
+  # Required check `test (ubuntu-latest)`. Runs on every Rust change.
   test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    # The std-only HTTP server and threading are platform-sensitive, so the
-    # matrix earns its keep even though most logic is pure.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+    name: test (ubuntu-latest)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+      - run: cargo test --all-targets
+
+  # macOS tests are main-only: the std-only HTTP server and threading are
+  # platform-sensitive, so macOS earns its keep on the default branch. Not a
+  # required check; skipped on PRs to keep them fast.
+  test-macos:
+    name: test (macos-latest)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'pull_request'
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
@@ -73,6 +140,8 @@ jobs:
 
   zero-deps:
     name: zero dependencies
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     # faceto's headline promise is "no crates, ever". This is the firewall:
     # the resolved dependency tree must contain exactly one package (faceto
@@ -93,6 +162,8 @@ jobs:
 
   markdown:
     name: markdownlint
+    needs: changes
+    if: needs.changes.outputs.markdown == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -103,6 +174,8 @@ jobs:
 
   actionlint:
     name: actionlint
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
