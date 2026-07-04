@@ -3,7 +3,7 @@
 # faceto
 
 [![CI](https://github.com/bastien-gallay/faceto/actions/workflows/ci.yml/badge.svg)](https://github.com/bastien-gallay/faceto/actions/workflows/ci.yml)
-[![dependencies: 0](https://img.shields.io/badge/dependencies-0-1A6FAE)](#why-zero-dependencies)
+[![runtime deps: 0](https://img.shields.io/badge/runtime%20deps-0-1A6FAE)](#why-zero-dependencies)
 
 **A simple typed file → a visual workshop board you think through with an LLM.**
 
@@ -68,9 +68,18 @@ You author a board as one typed JSON file — a slice of [`examples/sample.model
 
 ## The event log is the source of truth
 
-A `model.json` is just the **bootstrap** form. The durable record is an **append-only event log**
-(`event-log.jsonl`); the board you see is a *projection* replayed from that log, and comments are
-**first-class events**, not a side file. `faceto genesis` migrates a model into its founding log:
+```mermaid
+flowchart LR
+  H([author / LLM]) -->|writes & edits| A[model.json<br/>source]
+  A -->|genesis| B[(event-log.jsonl<br/>the one truth)]
+  B -->|replay| C[render / serve]
+  B -.->|export · planned| A
+```
+
+`model.json` is the **source** you author — by hand or with an LLM. The durable record is a
+separate, **append-only event log** (`event-log.jsonl`); the board you see is a *projection*
+replayed from that log, and comments are **first-class events**. `faceto genesis` imports a source
+model into its founding log:
 
 ```bash
 faceto genesis examples/sample.model.json   # → examples/event-log.jsonl (one-time)
@@ -138,9 +147,10 @@ the overlay and re-baselines.
 ## Why zero dependencies
 
 `faceto` is a working instrument you reach for mid-thought, so install has to be trivial and
-offline. JSON is parsed by a small hand-written module (`src/json.rs`) — fitting, since the whole
-premise is *a simple typed file*. The server is `std::net` only. A CI job (`zero dependencies`)
-fails the build if a crate ever sneaks into the dependency tree.
+offline. The shipped binary carries **zero runtime dependencies** — pure Rust std: JSON is parsed
+by a small hand-written module (`src/json.rs`), the server is `std::net` only. Nothing to download,
+nothing to audit at install time; a CI job guards it. *(The rule is being sharpened to runtime-only
+plus a binary-size budget, so test-only dev-dependencies don't count — see [ROADMAP.md](ROADMAP.md).)*
 
 ## Development
 
@@ -160,3 +170,5 @@ Extracted from the daily-ops inception event-storm harness. The event-sourced sp
 shape: the log is truth, the model is a projection, comments are events. Next: more board formats, a
 `reorder` affordance (per-sticky nudge + backward-edge contradiction styling), and a short animated
 capture of the live click→note→diff loop (slot reserved under [Reload shows what changed](#reload-shows-what-changed)).
+Also planned: a `model.json` **export** (project the log back to a source file) and a
+**runtime-only** dependency policy with a binary-size budget — see [ROADMAP.md](ROADMAP.md).
