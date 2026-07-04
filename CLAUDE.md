@@ -74,8 +74,8 @@ the log). Seven source files, each one stage:
   `get`/`as_str`/`as_f64`/`as_bool`/`as_array`). Everything else builds on this.
 - **`src/events.rs`** — the event-sourced spine. The `Event` enum (one JSON object per log line),
   `parse_log`/`read_log`, `replay(&[Event]) -> Model` (the projection), `from_model` (genesis/
-  migration), `from_comments`/`comment_to_events` (fold a legacy `comments.jsonl` into events; the
-  latter is the single source of truth shared with `serve.rs`'s `POST /comment`), and `compact`
+  migration), `comment_to_events` (map one posted comment to the events it implies — the single
+  source of truth shared with `serve.rs`'s `POST /comment`), and `compact`
   (fold a log to a `LogCompacted` marker + genesis snapshot). Schema evolves additively — unknown
   event kinds are skipped and unknown fields ignored on read (forward compatibility) — and a
   renamed event *kind* is migrated forward at the `upcast` read-path seam (backward compatibility;
@@ -133,7 +133,7 @@ the new side.
 - **The log is append-only truth.** Append events; never rewrite history in place. The one
   exception is `faceto compact`, which folds the log to an equivalent shorter snapshot (and backs
   up the prior log to `<log>.bak`). `event-log.jsonl` is **tracked** in git; `board.svg` /
-  `index.html` / `comments.jsonl` stay ignored (derived).
+  `index.html` stay ignored (derived).
 - **`replay` is pure and deterministic** — same log → same `Model`. Keep it free of clocks/IO. New
   `Event` variants must extend `parse_event`/`to_json`/`replay` together (the compiler enforces the
   match), and unknown kinds must keep being skipped on read. **Evolve the schema additively**
