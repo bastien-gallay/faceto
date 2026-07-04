@@ -163,7 +163,7 @@ cargo clippy --all-targets -- -D warnings         # lints
 ```
 
 These mirror CI, which also runs the test + clippy matrix on macOS, Windows, and Linux. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the (one) hard rule and [CLAUDE.md](CLAUDE.md) for the
+[CONTRIBUTING.md](CONTRIBUTING.md) for the (one) hard rule and [AGENTS.md](AGENTS.md) for the
 architecture and domain invariants.
 
 ## Status
