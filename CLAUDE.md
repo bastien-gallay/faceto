@@ -133,7 +133,7 @@ the new side.
 - **The log is append-only truth.** Append events; never rewrite history in place. The one
   exception is `faceto compact`, which folds the log to an equivalent shorter snapshot (and backs
   up the prior log to `<log>.bak`). `event-log.jsonl` is **tracked** in git; `board.svg` /
-  `index.html` / `comments.jsonl` stay ignored (derived).
+  `index.html` stay ignored (derived).
 - **`replay` is pure and deterministic** — same log → same `Model`. Keep it free of clocks/IO. New
   `Event` variants must extend `parse_event`/`to_json`/`replay` together (the compiler enforces the
   match), and unknown kinds must keep being skipped on read. **Evolve the schema additively**

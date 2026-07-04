@@ -1,5 +1,6 @@
-//! Map one posted/stored comment to the events it implies ([`comment_to_events`]) — the single
-//! source of truth for the comment→event translation, shared with `serve.rs`'s `POST /comment`.
+//! The comment→event seam: [`comment_to_events`] maps one posted/stored comment to the events it
+//! implies (the single source of truth shared with `serve.rs`'s `POST /comment`), plus the small
+//! write-seam guards it shares with the server (`nonblank`, `valid_span`, `clamp_y`).
 
 use super::Event;
 use crate::json::Json;
@@ -34,8 +35,7 @@ pub fn clamp_y(y: f64) -> f64 {
 
 /// Map one posted/stored comment object to the event(s) it persists — the single source of
 /// truth for the comment→event translation, used by the live server (`POST /comment`).
-/// `move`/`resolve`/`rename`/`drop`
-/// carry structural intent and fold straight into the projection; `split`/`question`/`comment`
+/// `move`/`resolve`/`rename`/`drop` carry structural intent and fold straight into the projection; `split`/`question`/`comment`
 /// stay advisory annotations. A `move` that displaces an occupant — the client sends
 /// `swapId`/`swapCol` — yields **two** `ElementMoved`s so the swap round-trips. Returns an empty
 /// vec when the comment names no element, when a `move` carries no target col, or when a `rename`
@@ -117,9 +117,9 @@ fn region_comment_to_events(v: &Json, kind: &str) -> Vec<Event> {
         return Vec::new();
     };
     match kind {
-        // Legacy independent-span resize (old clients / stashed offline / `comments.jsonl`
-        // migration). The live client posts `frontier-move` instead; either way `normalize`
-        // projects the result onto a contiguous partition.
+        // Legacy independent-span resize (old clients / stashed offline). The live client posts
+        // `frontier-move` instead; either way `normalize` projects the result onto a contiguous
+        // partition.
         "region-resize" => match (v.get_i64("fromCol"), v.get_i64("toCol")) {
             (Some(from_col), Some(to_col)) if valid_span(from_col, to_col) => {
                 vec![Event::PhaseResized {

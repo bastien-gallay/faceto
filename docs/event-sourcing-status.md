@@ -125,34 +125,22 @@ The schema is allowed to evolve, and an old log must still replay. The contract,
 This subsumes the earlier "partial answer to H3" (unknown kinds skipped): forward *and* backward
 compatibility now have a defined rule and a test.
 
-### H5 — fold the existing `comments.jsonl` into the log → **done.**
+### H5 — fold the existing `comments.jsonl` into the log → **cut** (was done, then removed)
 
-`faceto genesis` now completes the migration story. Alongside the model's genesis batch it folds
-a *sibling* `comments.jsonl` (the legacy feedback inbox) into events, appended **after** the
-batch — so the ids the comments reference are already minted when those events replay, and the
-inbox lands on the board instead of being stranded. The mapping is the same one the live server
-uses: `events::comment_to_events` (one JSON comment → its event(s)) is now the single source of
-truth, shared by `POST /comment` in log mode and `events::from_comments` (the inbox folder).
-`comment`/`question`/`split` → `ElementAnnotated`, `resolve` → `HotspotResolved`, `rename` →
-`ElementRenamed`, `move` (+ optional `swapId`/`swapCol`) → one or two `ElementMoved`, `drop` →
-`ElementRemoved`. The inbox was always a best-effort sidecar, so `from_comments` **skips** a line it
-cannot migrate (unparseable, not an object, `elemId`-less — including a legacy `add`, which in
-non-log mode was only ever an inbox note) rather than aborting the migration (the log proper still
-treats malformed JSON as a hard error). It **returns the count of skipped lines** so `genesis`
-reports them (`… N not migrated from comments.jsonl`) instead of dropping them silently. Missing
-`comments.jsonl` is the common no-op case. Covered by
-`from_comments_folds_a_legacy_inbox_onto_the_genesis_batch` and
-`from_comments_skips_blank_malformed_and_element_less_lines`. Verified live: a
-`genesis sample.model.json` next to a 4-line inbox seeded `24 genesis + 2 folded` (the garbage and
-orphan lines dropped), with `ElementAnnotated`/`ElementRenamed` for `E1` appended after the batch.
+`comments.jsonl` was the pre-event-sourcing feedback inbox. `faceto genesis` originally folded a
+*sibling* `comments.jsonl` into the founding log (one-shot, then renamed to `.migrated`), so a
+legacy inbox migrated onto the board instead of being stranded. That fold was **removed** in
+F-model-export: `faceto` no longer carries any `comments.jsonl` code path — any stray inbox is
+handled outside the tool. What survives is `events::comment_to_events` (one JSON comment → its
+event(s)), the single source of truth for the comment→event mapping, still used by the live
+`POST /comment`: `comment`/`question`/`split` → `ElementAnnotated`, `resolve` → `HotspotResolved`,
+`rename` → `ElementRenamed`, `move` (+ optional `swapId`/`swapCol`) → one or two `ElementMoved`,
+`drop` → `ElementRemoved`.
 
-The migration is **one-shot**: once folded, the inbox is renamed to `comments.jsonl.migrated`, so
-re-running genesis (e.g. after deleting the log, or via serve-time auto-genesis) cannot re-fold —
-and resurrect — feedback already resolved on the board. The genesis write itself is an **exclusive
-create** (`create_new`): it refuses to overwrite an existing `event-log.jsonl` rather than truncate
-the append-only truth log, so no check-then-write race can clobber a live log. Covered by
-`write_genesis_refuses_to_clobber_an_existing_log` and
-`write_genesis_folds_then_archives_the_inbox_one_shot`.
+The genesis write itself is unchanged and is an **exclusive create** (`create_new`): it refuses to
+overwrite an existing `event-log.jsonl` rather than truncate the append-only truth log, so no
+check-then-write race can clobber a live log. Covered by
+`write_genesis_refuses_to_clobber_an_existing_log`.
 
 ### `faceto compact` — fold the log to a snapshot → **done.**
 

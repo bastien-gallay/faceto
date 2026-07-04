@@ -157,38 +157,16 @@ fn cmd_lint(model_path: &str) {
     }
 }
 
-/// What a genesis migration produced, enough to report it. `write_genesis` returns this so both
-/// the explicit `genesis` command and the implicit serve-time migration print the same line.
-struct GenesisReport {
-    /// The event log written (`event-log.jsonl` beside the model).
-    out: PathBuf,
-    /// The model migrated from.
-    source: PathBuf,
-    /// Total events written (the genesis batch).
-    total: usize,
-}
-
-impl GenesisReport {
-    /// One line: how many events the model seeded, and where.
-    fn summary(&self) -> String {
-        format!(
-            "seeded {} events from {} → {}",
-            self.total,
-            self.source.display(),
-            self.out.display()
-        )
-    }
-}
-
 /// Migrate a `model.json` into the genesis batch of an `event-log.jsonl` written alongside it —
-/// the bootstrap path into the event-sourced world.
+/// the bootstrap path into the event-sourced world. Returns the log path and a one-line summary
+/// (both the explicit `genesis` command and serve-time auto-genesis print the same line).
 ///
 /// The write is an **exclusive create** (`create_new`): if a log already exists it fails rather
 /// than truncate it, so the "log is append-only truth" invariant is enforced by the write itself —
 /// no caller-side guard to forget, and no check-then-write race can clobber a live log. The model
 /// is loaded *before* the write, so a malformed model surfaces its own error even when a log is
 /// also present.
-fn write_genesis(model_path: &Path) -> Result<GenesisReport, String> {
+fn write_genesis(model_path: &Path) -> Result<(PathBuf, String), String> {
     let model = model::load(model_path)?;
     let out = log_beside(model_path);
     let batch = events::from_model(&model);
@@ -207,11 +185,13 @@ fn write_genesis(model_path: &Path) -> Result<GenesisReport, String> {
     f.write_all(events::to_jsonl(&batch).as_bytes())
         .map_err(|e| format!("writing {}: {e}", out.display()))?;
 
-    Ok(GenesisReport {
-        out,
-        source: model_path.to_path_buf(),
-        total: batch.len(),
-    })
+    let summary = format!(
+        "seeded {} events from {} → {}",
+        batch.len(),
+        model_path.display(),
+        out.display()
+    );
+    Ok((out, summary))
 }
 
 fn cmd_genesis(model_path: &str) {
@@ -219,7 +199,7 @@ fn cmd_genesis(model_path: &str) {
     // separate exists-check to keep in sync — and loading the model first means a broken model
     // reports *its* error, not "already exists".
     match write_genesis(Path::new(model_path)) {
-        Ok(report) => println!("{}", report.summary()),
+        Ok((_, summary)) => println!("{summary}"),
         Err(e) => {
             eprintln!("error: {e}");
             exit(1);
@@ -251,9 +231,9 @@ fn serve_log_path(source: &Path) -> Result<std::path::PathBuf, String> {
         );
         return Ok(log);
     }
-    let report = write_genesis(source)?;
-    println!("{}", report.summary());
-    Ok(report.out)
+    let (out, summary) = write_genesis(source)?;
+    println!("{summary}");
+    Ok(out)
 }
 
 /// Fold an event log to a minimal snapshot — a `LogCompacted` marker plus the genesis batch of

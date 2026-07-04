@@ -55,11 +55,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Event-sourced spine** (`src/events.rs`): an append-only `event-log.jsonl` is the
   durable record; the `Model` is a projection replayed from it. `render` and `serve`
   accept a log by extension. Comments become first-class events.
-- `faceto genesis [MODEL]` — migrate a legacy `model.json` into the genesis batch of
-  an `event-log.jsonl` (the bootstrap path into the event-sourced world). A sibling
-  `comments.jsonl` (the legacy feedback inbox) is folded in too, appended after the
-  batch, so its annotations/resolutions/renames/moves land on the board instead of
-  being stranded.
+- `faceto genesis [MODEL]` — migrate a `model.json` into the genesis batch of an
+  `event-log.jsonl` (the bootstrap path into the event-sourced world). `model.json` is
+  the source/authoring format; the log is the durable truth.
 - `faceto compact [LOG]` — fold a log to a `LogCompacted` marker plus the genesis
   batch of the current projection, bounding replay length. Projection-preserving
   (history collapses; the prior log is saved to `<log>.bak`).
