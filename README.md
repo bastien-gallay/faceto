@@ -3,6 +3,7 @@
 # faceto
 
 [![CI](https://github.com/bastien-gallay/faceto/actions/workflows/ci.yml/badge.svg)](https://github.com/bastien-gallay/faceto/actions/workflows/ci.yml)
+[![runtime deps: 0](https://img.shields.io/badge/runtime%20deps-0-1A6FAE)](#why-zero-dependencies)
 
 **A simple typed file → a visual workshop board you think through with an LLM.**
 
@@ -18,6 +19,8 @@ the direction. Pure Rust standard library — **zero dependencies, offline, one 
 The name reads two ways, both true: **face-to**(-face — the thing you discuss *with* the model)
 and **facet-o** (many facets cut from one typed source).
 
+*Jump to* — [install](#install) · [the model file](#the-model-file) · [event log](#the-event-log-is-the-source-of-truth) · [the eight lanes](#the-eight-lanes) · [why zero deps](#why-zero-dependencies)
+
 ## Install
 
 ```bash
@@ -29,10 +32,12 @@ No network, no crates to download — it builds from the standard library alone.
 ## 30-second tour
 
 ```bash
-faceto render examples/sample.model.json   # board.svg + index.html next to the model
-open examples/index.html                   # the board above
+faceto render examples/sample.model.json   # writes board.svg + index.html next to the model
+open examples/index.html                   # the board above, straight from that render
 
-faceto serve  examples/sample.model.json   # live board → http://127.0.0.1:8753
+faceto lint  examples/sample.model.json    # event-storming grammar findings (warn-only, exits 0)
+
+faceto serve examples/sample.model.json    # live board → http://127.0.0.1:8753
 # click a sticky → modal → pick a kind → type a note → Save
 ```
 
@@ -63,9 +68,18 @@ You author a board as one typed JSON file — a slice of [`examples/sample.model
 
 ## The event log is the source of truth
 
-A `model.json` is just the **bootstrap** form. The durable record is an **append-only event log**
-(`event-log.jsonl`); the board you see is a *projection* replayed from that log, and comments are
-**first-class events**, not a side file. `faceto genesis` migrates a model into its founding log:
+```mermaid
+flowchart LR
+  H([author / LLM]) -->|writes & edits| A[model.json<br/>source]
+  A -->|genesis| B[(event-log.jsonl<br/>the one truth)]
+  B -->|replay| C[render / serve]
+  B -.->|export · planned| A
+```
+
+`model.json` is the **source** you author — by hand or with an LLM. The durable record is a
+separate, **append-only event log** (`event-log.jsonl`); the board you see is a *projection*
+replayed from that log, and comments are **first-class events**. `faceto genesis` imports a source
+model into its founding log:
 
 ```bash
 faceto genesis examples/sample.model.json   # → examples/event-log.jsonl (one-time)
@@ -86,26 +100,34 @@ Each line is one event — a slice of the generated [`examples/event-log.jsonl`]
 
 `replay` is pure and deterministic: same log → same board. The schema evolves *additively* (new
 optional fields, new event kinds) so old and new logs stay mutually replayable. `event-log.jsonl`
-is **tracked** in git; the rendered `board.svg` / `index.html` are derived and ignored.
+is **tracked** in git; the rendered `board.svg` / `index.html` are derived and ignored. The full
+rationale — compaction, forward/backward compatibility, the locked decisions — lives in
+[`docs/event-sourcing-status.md`](docs/event-sourcing-status.md).
 
 ## Click → note → event
 
 With `serve` running, click a sticky → a modal opens → pick a kind (`comment` / `add` / `split` /
 `rename` / `drop` / `move` / `question` / `resolve`) → type a short note → **Save**.
 
-In **log mode** (you served an `event-log.jsonl`) the note is appended to the log as the matching
-event — `add` mints a server-side, type-prefixed id (`E5`, `C3`, …), one past the highest ever used
-under that lane, computed under a lock so concurrent adds can't collide. In **legacy mode** (you
-served a `model.json`) it appends to a sibling `comments.jsonl` instead. Either way the page also
-works offline (localStorage + **Export comments**).
+The note is appended to the log as the matching event — `add` mints a server-side, type-prefixed
+id (`E5`, `C3`, …), one past the highest ever used under that lane, computed under a lock so
+concurrent adds can't collide. (Point `serve` at a bare `model.json` and it auto-migrates to a
+sibling `event-log.jsonl` first, so the server only ever writes the log.) The page also works
+offline — comments queue in `localStorage`, and **Export comments** keeps anything not yet applied.
 
 ## Reload shows what changed
+
+<!--
+  TODO(diff-loop capture): the hero above proves faceto *renders* a board; this is the section that
+  needs a second visual to prove it *shows what changed*. Capture a GIF of annotate → Reload → diff
+  overlay and drop it in here. Once docs/diff-loop.gif exists, uncomment:
+  <p align="center"><img src="docs/diff-loop.gif" alt="Annotating a sticky, then hitting Reload to see the diff overlay highlight the added, changed and moved stickies." width="100%"></p>
+-->
 
 **Reload** re-pulls the log and, when it has grown under you, redraws the board with a **diff
 overlay against the version you were just looking at** — no git, no page reload. Joined on `id`: a
 reworded or relocated sticky reads as **changed** / **moved**, not drop-plus-add. **Plain** clears
-the overlay and re-baselines. The server keeps a small ring of recently-served models keyed by
-content hash; if a baseline has aged out it falls back to the plain current board.
+the overlay and re-baselines.
 
 ## The eight lanes
 
@@ -125,9 +147,10 @@ content hash; if a baseline has aged out it falls back to the plain current boar
 ## Why zero dependencies
 
 `faceto` is a working instrument you reach for mid-thought, so install has to be trivial and
-offline. JSON is parsed by a small hand-written module (`src/json.rs`) — fitting, since the whole
-premise is *a simple typed file*. The server is `std::net` only. A CI job (`zero dependencies`)
-fails the build if a crate ever sneaks into the dependency tree.
+offline. The shipped binary carries **zero runtime dependencies** — pure Rust std: JSON is parsed
+by a small hand-written module (`src/json.rs`), the server is `std::net` only. Nothing to download,
+nothing to audit at install time; a CI job guards it. *(The rule is being sharpened to runtime-only
+plus a binary-size budget, so test-only dev-dependencies don't count — see [ROADMAP.md](ROADMAP.md).)*
 
 ## Development
 
@@ -146,4 +169,6 @@ architecture and domain invariants.
 Extracted from the daily-ops inception event-storm harness. The event-sourced spine is the current
 shape: the log is truth, the model is a projection, comments are events. Next: more board formats, a
 `reorder` affordance (per-sticky nudge + backward-edge contradiction styling), and a short animated
-capture of the live click→note→diff loop.
+capture of the live click→note→diff loop (slot reserved under [Reload shows what changed](#reload-shows-what-changed)).
+Also planned: a `model.json` **export** (project the log back to a source file) and a
+**runtime-only** dependency policy with a binary-size budget — see [ROADMAP.md](ROADMAP.md).
