@@ -26,9 +26,12 @@ env:
 # comment). Bump the SHA and the comment together; never use a mutable tag.
 jobs:
   # Which kinds of file changed, so each check runs only when it's relevant.
-  # A docs-only PR skips the Rust jobs; a Rust-only PR skips markdownlint;
-  # etc. Skipped required checks report as "skipped", which the branch ruleset
-  # counts as passing — so gating here never leaves a PR stuck waiting.
+  # A docs-only change skips the Rust jobs; a Rust-only change skips
+  # markdownlint; etc. Skipped required jobs report a "skipped" check, which
+  # the branch ruleset counts as passing — so gating never leaves a PR stuck
+  # waiting. This only works because the required jobs have STATIC names: a
+  # skipped *matrix* job reports its literal `${{ matrix.os }}` name and would
+  # never satisfy a required check, so macOS is its own job below, not a matrix.
   changes:
     name: detect changes
     runs-on: ubuntu-latest
@@ -74,18 +77,12 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
+  # Required check `clippy (ubuntu-latest)`. Runs on every Rust change.
   clippy:
-    name: clippy (${{ matrix.os }})
+    name: clippy (ubuntu-latest)
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # PRs run ubuntu only (fast, and the required gate). Pushes to main
-        # (and manual dispatch) also cover macOS. Windows was dropped: no user
-        # runs it and it's the slowest runner.
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest"]') }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
@@ -95,18 +92,44 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
       - run: cargo clippy --all-targets -- -D warnings
 
+  # macOS clippy is main-only (and manual dispatch): not a required check, just
+  # extra coverage on the default branch. Skipped on PRs to keep them fast.
+  clippy-macos:
+    name: clippy (macos-latest)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+      - run: cargo clippy --all-targets -- -D warnings
+
+  # Required check `test (ubuntu-latest)`. Runs on every Rust change.
   test:
-    name: test (${{ matrix.os }})
+    name: test (ubuntu-latest)
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ${{ matrix.os }}
-    # The std-only HTTP server and threading are platform-sensitive, so macOS
-    # earns its keep on main even though most logic is pure.
-    strategy:
-      fail-fast: false
-      matrix:
-        # PRs run ubuntu only; pushes to main (and manual dispatch) add macOS.
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest"]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+      - run: cargo test --all-targets
+
+  # macOS tests are main-only: the std-only HTTP server and threading are
+  # platform-sensitive, so macOS earns its keep on the default branch. Not a
+  # required check; skipped on PRs to keep them fast.
+  test-macos:
+    name: test (macos-latest)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'pull_request'
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
