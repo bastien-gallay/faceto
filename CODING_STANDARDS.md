@@ -13,9 +13,10 @@ apply them — on top of one hard constraint that frames all of them:
 4. **Clean Code** — local taste rules that survive automation.
 
 Repo-specific rules take precedence when they collide. The authoritative
-sources, in order, are [`AGENTS.md`](AGENTS.md), [`CLAUDE.md`](CLAUDE.md), and
-[`DESIGN.md`](DESIGN.md) / [`PRODUCT.md`](PRODUCT.md) for UI work. This file
-expands on the *how*; those define the *what* and *why*.
+sources, in order, are [`AGENTS.md`](AGENTS.md) (the canonical guide — Claude Code
+reads it via `@AGENTS.md` in `CLAUDE.md`) and [`DESIGN.md`](DESIGN.md) /
+[`PRODUCT.md`](PRODUCT.md) for UI work. This file expands on the *how*; those
+define the *what* and *why*.
 
 ---
 
