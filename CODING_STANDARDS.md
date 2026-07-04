@@ -382,6 +382,11 @@ markdownlint-cli2                      # prose ≤100 cols; see .markdownlint-cl
 # plus, in CI: actionlint, and the `zero dependencies` firewall job
 ```
 
+These are the local mirrors of the CI checks. For the full pipeline — triggers,
+path-based job gating, the per-OS coverage trade-off (ubuntu-only on PRs, macOS
+on `main`, no Windows), the required-checks ruleset, and why required job names
+must stay static — see [`docs/ci.md`](docs/ci.md).
+
 Markdown prose wraps at **100 columns** (tables and code blocks are exempt).
 This file obeys that rule; keep it that way when you edit. The local
 [`.pre-commit-config.yaml`](.pre-commit-config.yaml) runs fmt, clippy,
