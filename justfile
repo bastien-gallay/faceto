@@ -11,8 +11,8 @@ export RUSTFLAGS := "-D warnings"
 default:
     @just --list
 
-# Run every CI gate in order (format → lint → test → docs → firewall → workflows → justfile).
-ci: fmt clippy test md zero-deps actionlint lint-justfile
+# Run every CI gate in order (format → lint → test → docs → firewall → size → workflows → justfile).
+ci: fmt clippy test md zero-deps binary-size actionlint lint-justfile
     @echo "✓ all local CI gates passed"
 
 # Formatting is law: cargo fmt --all --check.
@@ -31,17 +31,33 @@ test:
 md:
     markdownlint-cli2 "**/*.md"
 
-# Zero-dependency firewall: Cargo.lock must list exactly one package (faceto).
+# Runtime zero-dependency firewall: the normal dep tree must be faceto-only (dev-deps are free).
 zero-deps:
     #!/usr/bin/env bash
     set -euo pipefail
-    count=$(grep -c '^name = ' Cargo.lock)
-    if [ "$count" -ne 1 ]; then
-      echo "zero-deps FAIL: Cargo.lock lists $count packages:"
-      grep '^name = ' Cargo.lock
+    # Runtime (normal) dep tree only — dev-dependencies (e.g. proptest) are excluded by
+    # `-e normal` and allowed, since they never enter the shipped binary or the install.
+    deps=$(cargo tree -e normal --prefix none | awk 'NF{print $1}' | sort -u)
+    if [ "$deps" != "faceto" ]; then
+      echo "zero-deps FAIL: runtime dependency tree must be std-only, but found:"
+      echo "$deps"
       exit 1
     fi
-    echo "zero-deps OK: exactly one package (faceto)"
+    echo "zero-deps OK: runtime dependency tree is faceto-only"
+
+# Runtime-bloat guard: the shipped release binary must stay under the size budget (2 MiB).
+binary-size:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release
+    size=$(stat -f%z target/release/faceto 2>/dev/null || stat -c%s target/release/faceto)
+    ceiling=$((2 * 1024 * 1024))
+    printf 'faceto release binary: %d bytes (ceiling %d)\n' "$size" "$ceiling"
+    if [ "$size" -gt "$ceiling" ]; then
+      echo "binary-size FAIL: $size B exceeds the $ceiling B budget"
+      exit 1
+    fi
+    echo "binary-size OK: under the ${ceiling}-byte budget"
 
 # Lint the GitHub Actions workflow files.
 actionlint:

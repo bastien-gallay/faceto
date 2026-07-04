@@ -28,6 +28,14 @@ panic = "warn"
 todo = "warn"
 unimplemented = "warn"
 
-# faceto is deliberately zero-dependency: pure std, offline, fast to install.
-# The model is parsed by a small hand-written JSON module (src/json.rs) — the whole
-# point of the tool is "a simple typed file", so we type it ourselves.
+# faceto ships **zero runtime dependencies**: the binary is pure std — offline, fast to
+# install — and a CI job (`zero dependencies`) fails if any crate enters the *normal*
+# dependency tree. The model is parsed by a small hand-written JSON module (src/json.rs);
+# the whole point of the tool is "a simple typed file", so we type it ourselves.
+#
+# Dev-dependencies are the one exception: test-only crates never enter the shipped binary
+# or the offline install, so they don't touch the promise. `proptest` powers the
+# property-based tests (shrinking to a minimal failing case is worth more than a
+# hand-rolled PRNG loop). Runtime code stays std-only.
+[dev-dependencies]
+proptest = "1"

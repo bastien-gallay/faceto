@@ -4,7 +4,8 @@ This file is the working agreement for code in this repo. It is meant to be
 re-read on a slow day, not skimmed once. Four pillars, in the order you usually
 apply them — on top of one hard constraint that frames all of them:
 
-0. **Zero dependencies** — pure Rust standard library, no crates, ever.
+0. **Zero runtime dependencies** — the shipped binary is pure Rust std, no runtime crates ever
+   (test-only dev-dependencies are the one exception).
 1. **Tidy First** — separate behaviour changes from clean-ups.
 2. **CUPID & YAGNI** — properties to aim for in design and refactoring.
 3. **TDD (Red → Green → Refactor → Reflect)** — the loop that keeps the above
@@ -23,10 +24,13 @@ expands on the *how*; those define the *what* and *why*.
 > *A simple typed file you think through with an LLM — and a tool that installs
 > offline in one `cargo install`.*
 
-faceto is **pure Rust standard library — no crates, ever.** This is a product
-decision (trivial, offline install), not an accident, and it is enforced by the
-`zero dependencies` CI job (it fails if any crate enters `Cargo.lock`). The same
-applies to dev-dependencies: tests use `std` too.
+faceto's shipped binary is **pure Rust standard library — no runtime crates,
+ever.** This is a product decision (trivial, offline install), not an accident,
+and it is enforced by the `zero dependencies` CI job (it fails if any crate
+enters the *normal* dependency tree, via `cargo tree -e normal`). **Dev-
+dependencies are the one exception** — test-only crates (`proptest`, for the
+property-based tests) never enter the binary or the install, so they're allowed;
+ask before adding one.
 
 Consequences you must respect:
 
@@ -400,7 +404,8 @@ markdownlint and `typos` before commit (tests on pre-push) — see
 When reviewing a change, ask:
 
 1. Does it meet the design principles above?
-2. Does it respect **zero dependencies** (nothing new in `Cargo.lock`)?
+2. Does it respect **zero runtime dependencies** (nothing new in the `cargo tree -e normal`
+   graph; a dev-dependency is fine)?
 3. Does it honour the three domain invariants — `id` is stable identity, `col`
    is a global timeline coordinate, `type` selects the lane and colour?
 4. Are there impossible states the types now allow?

@@ -20,17 +20,21 @@ For how to write code here — Tidy First, CUPID & YAGNI, TDD+Reflect, Clean Cod
 [`CODING_STANDARDS.md`](CODING_STANDARDS.md). [`AGENTS.md`](AGENTS.md) is the short cross-tool entry
 point that maps the rest of the docs.
 
-## Hard constraint: zero dependencies
+## Hard constraint: zero runtime dependencies
 
-`faceto` is **pure Rust standard library — no crates, ever.** This is a deliberate product
-decision (trivial offline install), not an accident. Do not add a dependency to `Cargo.toml`.
-Consequences you must respect:
+`faceto`'s shipped binary is **pure Rust standard library — no runtime crates, ever.** This is a
+deliberate product decision (trivial offline install), not an accident. Do not add a
+`[dependencies]` entry to `Cargo.toml`. Consequences you must respect:
 
 - JSON is parsed/serialized by the hand-written `src/json.rs` (not serde).
 - The HTTP server is `std::net::TcpListener` + threads (`src/serve.rs`), not a web framework.
 - Dates (`now_iso`) and content hashing (`fnv12`, FNV-1a) are implemented by hand in `src/serve.rs`.
 
-If a task seems to need a crate, implement it in std or push back.
+**Dev-dependencies are the one exception** — test-only crates never enter the binary or the offline
+install, so they don't touch the promise (`proptest` powers the property-based tests). The CI `zero
+dependencies` job enforces exactly this line: it checks the *normal* (runtime) dependency tree via
+`cargo tree -e normal`, which excludes dev-deps. If runtime code seems to need a crate, implement it
+in std or push back — and **ask before adding even a dev-dependency**.
 
 ## Commands
 

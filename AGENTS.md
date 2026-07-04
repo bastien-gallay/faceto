@@ -13,10 +13,12 @@ simple typed file you think through with an LLM."
 
 ## The one hard rule: zero dependencies
 
-`faceto` is **pure Rust standard library — no crates, ever** (dev-dependencies
-included). It's a product decision — trivial, offline install — enforced by the
-`zero dependencies` CI job, which fails if any crate enters `Cargo.lock`. If a
-task seems to need a crate, implement it in `std` or push back.
+`faceto` ships **zero runtime crates — pure Rust standard library**. It's a
+product decision — trivial, offline install — enforced by the `zero dependencies`
+CI job, which fails if any crate enters the *normal* (runtime) dependency tree.
+**Dev-dependencies are the one exception**: test-only crates (e.g. `proptest`)
+never enter the shipped binary or the install, so they're allowed — but ask
+first. If runtime code seems to need a crate, implement it in `std` or push back.
 
 ## Commands
 

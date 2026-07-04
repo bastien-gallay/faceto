@@ -68,17 +68,23 @@ job-level skips — see the [static-names gotcha](#the-static-names-gotcha).
 | `clippy (macos-latest)`   | macOS           | `rust` **and not** a PR          | Same clippy, macOS coverage on `main` only        |
 | `test (ubuntu-latest)`    | ubuntu          | `rust`                           | `cargo test --all-targets`                        |
 | `test (macos-latest)`     | macOS           | `rust` **and not** a PR          | Tests on macOS (platform-sensitive server)        |
-| `zero dependencies`       | ubuntu          | `rust`                           | Fail if `Cargo.lock` lists >1 package             |
+| `zero dependencies`       | ubuntu          | `rust`                           | Runtime dep tree faceto-only (`cargo tree -e normal`) |
+| `binary size budget`      | ubuntu          | `rust`                           | Release binary stays under the 2 MiB budget       |
 | `markdownlint`            | ubuntu          | `markdown`                       | Prose ≤100 cols; `.markdownlint-cli2.jsonc` rules |
 | `actionlint`              | ubuntu          | `workflows`                      | Lint the workflow files themselves                |
 | `justfile`                | ubuntu          | `just`                           | `just --fmt --check` + `--summary` (guard rot)   |
 
 Notes on the less-obvious ones:
 
-- **`zero dependencies`** is faceto's headline-promise firewall. `Cargo.lock` must contain exactly
-  one line starting `name =` (faceto itself). Any crate — even a dev-dependency — adds a second and
-  fails here, loudly, before it can land. See
-  [`CODING_STANDARDS.md` §0](../CODING_STANDARDS.md#0-zero-dependencies-the-hard-constraint).
+- **`zero dependencies`** and **`binary size budget`** are faceto's headline-promise firewall,
+  reshaped to *runtime-only* (see
+  [`CODING_STANDARDS.md` §0](../CODING_STANDARDS.md#0-zero-dependencies-the-hard-constraint)). The
+  first runs `cargo tree -e normal --prefix none` — the **normal** (runtime) dependency graph, what
+  links into the shipped binary — and fails unless it is faceto alone; **dev-dependencies are
+  excluded** by `-e normal`, so a test-only crate like `proptest` is allowed (`Cargo.lock` alone
+  can't draw that line, since it lists dev-deps as packages too). The second builds `--release` and
+  fails if the binary exceeds a **2 MiB** budget (anchor ~905K) — the guard against *runtime* bloat
+  now that dep count no longer is.
 - **`actionlint`** installs the linter via the upstream downloader script, pinned to a commit and
   **verified by sha256** before running — never an unverified `curl | bash`.
 - The macOS jobs (`clippy (macos-latest)`, `test (macos-latest)`) are **not required checks**; they
@@ -98,6 +104,7 @@ detect changes ─┬─► rustfmt
                 ├─► test (ubuntu-latest)
                 ├─► test (macos-latest)       [main / dispatch only]
                 ├─► zero dependencies
+                ├─► binary size budget
                 ├─► markdownlint
                 ├─► actionlint
                 └─► justfile
@@ -114,8 +121,9 @@ Merging to `main` is governed by the `main-protection` ruleset (GitHub → Setti
 in-repo config. Its rules:
 
 - **Required status checks** (must be green or skipped to merge):
-  `clippy (ubuntu-latest)`, `test (ubuntu-latest)`, `rustfmt`, `zero dependencies`, `actionlint`,
-  `justfile`.
+  `clippy (ubuntu-latest)`, `test (ubuntu-latest)`, `rustfmt`, `zero dependencies`,
+  `binary size budget`, `actionlint`, `justfile`. *(The `binary size budget` job ships with the
+  runtime-only dependency policy; add it to the ruleset so it actually gates.)*
 - **Pull request required** — no direct pushes to `main`.
 - **Required signatures** — every commit must be signed (GPG/SSH). Unsigned commits are rejected.
 - **Block force-pushes** (`non_fast_forward`) and **block deletion** of `main`.
@@ -179,7 +187,8 @@ Or run one gate at a time:
 | `just clippy`      | `clippy (…)`         | `cargo clippy --all-targets -- -D warnings` |
 | `just test`        | `test (…)`           | `cargo test --all-targets`                  |
 | `just md`          | `markdownlint`       | `markdownlint-cli2 "**/*.md"`               |
-| `just zero-deps`   | `zero dependencies`  | assert `Cargo.lock` lists exactly 1 package |
+| `just zero-deps`   | `zero dependencies`  | assert `cargo tree -e normal` is faceto-only |
+| `just binary-size` | `binary size budget` | assert the release binary is under 2 MiB    |
 | `just actionlint`  | `actionlint`         | `actionlint`                                |
 | `just lint-justfile` | `justfile`         | `just --fmt --check --unstable` + `--summary` |
 
