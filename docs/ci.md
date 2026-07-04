@@ -46,6 +46,7 @@ skips the Rust jobs, a Rust-only change skips markdownlint/actionlint, and so on
 | `rust`      | `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `src/template.html` |
 | `markdown`  | `**/*.md`, `.markdownlint-cli2.jsonc`                                           |
 | `workflows` | `.github/workflows/**`                                                          |
+| `just`      | `justfile`                                                                     |
 
 > **Why `src/template.html` counts as a Rust change.** It is `include_str!`'d into the binary by
 > `render.rs`, so editing it rebuilds the crate and can break tests — it must trigger the Rust jobs.
@@ -70,6 +71,7 @@ job-level skips — see the [static-names gotcha](#the-static-names-gotcha).
 | `zero dependencies`       | ubuntu          | `rust`                           | Fail if `Cargo.lock` lists >1 package             |
 | `markdownlint`            | ubuntu          | `markdown`                       | Prose ≤100 cols; `.markdownlint-cli2.jsonc` rules |
 | `actionlint`              | ubuntu          | `workflows`                      | Lint the workflow files themselves                |
+| `justfile`                | ubuntu          | `just`                           | `just --fmt --check` + `--summary` (guard rot)   |
 
 Notes on the less-obvious ones:
 
@@ -97,7 +99,8 @@ detect changes ─┬─► rustfmt
                 ├─► test (macos-latest)       [main / dispatch only]
                 ├─► zero dependencies
                 ├─► markdownlint
-                └─► actionlint
+                ├─► actionlint
+                └─► justfile
 ```
 
 There is intentionally **no aggregate "CI passed" gate job**. The required checks are the granular
@@ -111,7 +114,8 @@ Merging to `main` is governed by the `main-protection` ruleset (GitHub → Setti
 in-repo config. Its rules:
 
 - **Required status checks** (must be green or skipped to merge):
-  `clippy (ubuntu-latest)`, `test (ubuntu-latest)`, `rustfmt`, `zero dependencies`, `actionlint`.
+  `clippy (ubuntu-latest)`, `test (ubuntu-latest)`, `rustfmt`, `zero dependencies`, `actionlint`,
+  `justfile`.
 - **Pull request required** — no direct pushes to `main`.
 - **Required signatures** — every commit must be signed (GPG/SSH). Unsigned commits are rejected.
 - **Block force-pushes** (`non_fast_forward`) and **block deletion** of `main`.
@@ -164,7 +168,7 @@ Every gate has a local equivalent, wired up as [`just`](https://github.com/casey
 the repo's [`justfile`](../justfile). Run the whole set before pushing:
 
 ```bash
-just ci      # format → lint → test → docs → zero-deps → actionlint, in order
+just ci      # format → lint → test → docs → zero-deps → actionlint → justfile, in order
 ```
 
 Or run one gate at a time:
@@ -177,6 +181,7 @@ Or run one gate at a time:
 | `just md`          | `markdownlint`       | `markdownlint-cli2 "**/*.md"`               |
 | `just zero-deps`   | `zero dependencies`  | assert `Cargo.lock` lists exactly 1 package |
 | `just actionlint`  | `actionlint`         | `actionlint`                                |
+| `just lint-justfile` | `justfile`         | `just --fmt --check --unstable` + `--summary` |
 
 The justfile exports `RUSTFLAGS=-D warnings`, matching CI so rustc warnings fail locally too.
 `just` (`brew install just`), `markdownlint-cli2`, and `actionlint` are dev tools installed
@@ -201,6 +206,7 @@ trailing comment. Bump the SHA and the comment together; never use a mutable tag
 | `dorny/paths-filter`                   | v3.0.3  | detect changes             |
 | `DavidAnson/markdownlint-cli2-action`  | v23     | markdownlint               |
 | actionlint downloader (sha256-checked) | v1.7.7  | actionlint                 |
+| `extractions/setup-just`               | v4.0.0  | justfile                   |
 
 ---
 
