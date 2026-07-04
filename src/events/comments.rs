@@ -268,7 +268,7 @@ mod tests {
         /// `nonblank` guard). On failure proptest shrinks to the minimal comment sequence.
         #[test]
         fn pbt_no_comment_sequence_ever_leaves_a_blank_label(
-            comments in prop::collection::vec(comment_strategy(), 1..8),
+            comments in prop::collection::vec(comment_strategy(), 1..=8),
         ) {
             let (mut log, _ids) = genesis();
             for v in &comments {
