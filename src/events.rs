@@ -987,6 +987,107 @@ mod tests {
     // stable id, resize, rename, remove — plus legacy bands (no id) replaying deterministically.
 
     #[test]
+    fn is_known_kind_recognizes_every_current_event_variant() {
+        // Guards the hand-maintained `is_known_kind` list against drift with `parse_event`'s
+        // match: every kind `to_json` can emit must be recognized as *known*, so a malformed
+        // instance of it is a hard error (not silently skipped as a future/unknown kind — the
+        // exact data-loss bug the strict `parse_log` branch exists to prevent). One sample per
+        // variant; add one when you add a variant. (Full compile-time enforcement needs a
+        // variant-enumeration crate, which the zero-dep rule forbids — this guard plus the
+        // adjacency comment on `is_known_kind` are the coupling.)
+        let samples = vec![
+            Event::BoardTitled { title: "t".into() },
+            Event::BoardLeveled {
+                level: "design".into(),
+            },
+            Event::PhaseAdded {
+                id: Some("K1".into()),
+                label: "a".into(),
+                from_col: 0,
+                to_col: 1,
+            },
+            Event::PhaseResized {
+                id: "K1".into(),
+                from_col: 0,
+                to_col: 1,
+            },
+            Event::PhaseRenamed {
+                id: "K1".into(),
+                label: "a".into(),
+            },
+            Event::PhaseRemoved { id: "K1".into() },
+            Event::FrontierMoved {
+                id: "K1".into(),
+                edge: "end".into(),
+                col: 1,
+            },
+            Event::PhaseSplit {
+                id: "K1".into(),
+                at_col: 1,
+                new_id: "K2".into(),
+                new_label: "b".into(),
+            },
+            Event::ElementAdded {
+                id: "E1".into(),
+                kind: "event".into(),
+                label: "a".into(),
+                col: None,
+                detail: None,
+                y: None,
+            },
+            Event::ElementRenamed {
+                id: "E1".into(),
+                label: "a".into(),
+            },
+            Event::ElementMoved {
+                id: "E1".into(),
+                col: None,
+                kind: None,
+                y: None,
+            },
+            Event::ElementAnnotated {
+                id: "E1".into(),
+                text: "x".into(),
+            },
+            Event::HotspotResolved {
+                id: "H1".into(),
+                resolution: "r".into(),
+            },
+            Event::ElementRemoved { id: "E1".into() },
+            Event::EdgeAdded {
+                src: "E1".into(),
+                dst: "E2".into(),
+            },
+            Event::EdgeRemoved {
+                src: "E1".into(),
+                dst: "E2".into(),
+            },
+            Event::LogCompacted { folded: 3 },
+        ];
+        for ev in &samples {
+            let kind = to_json(ev)
+                .get("event")
+                .and_then(Json::as_str)
+                .expect("to_json emits an `event` kind")
+                .to_string();
+            assert!(
+                is_known_kind(&kind),
+                "`to_json` emits {kind:?} but `is_known_kind` rejects it — a malformed {kind} \
+                 would be silently skipped instead of erroring; add it to `is_known_kind`."
+            );
+            // And the round-trip must rebuild it (no phantom / mis-typed sample).
+            assert!(
+                parse_event(&to_json(ev)).is_some(),
+                "{kind} does not round-trip"
+            );
+        }
+        // The legacy aliases `upcast` rewrites forward are known too (they are not `Event`
+        // variants, so they can't appear in `samples`).
+        assert!(is_known_kind("CommentAdded"));
+        assert!(is_known_kind("Comment"));
+    }
+
+    #[test]
     fn parse_log_errors_on_a_malformed_known_event_but_skips_an_unknown_kind() {
         // An unknown/future kind is skipped for forward compatibility.
         assert_eq!(
