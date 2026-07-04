@@ -560,11 +560,10 @@ intact). Recorded so the *seams* — the deliberate part — survive.
   (`POST /comment`→event) · `sidebar` (`/comments` + lint merge) · `hash` (FNV-1a). `Ctx` is the
   `pub(crate)` hub the wire/comment/sidebar layers share; only the methods/constants they reach are
   elevated.
-- **`render/`** (PR #31, *separate branch — not yet on `main`*): `style` (colour grammar +
-  `lane_prefix`) · `text` (label wrapping/esc) · `geometry` (constants + layout math) · `svg`
-  (`render_svg`, decomposed 840→468 via `draw_header`/`draw_lanes`/`draw_edges`/`draw_stickies`/
-  `draw_legend`) · `html` (`render_html` + single-pass `fill_template`) · `mod` re-exports. Those
-  numbers describe #31's branch; they land on `main` only when #31 does.
+- **`render/`** (PR #31, landed on `main` first): `style` (colour grammar + `lane_prefix`) · `text`
+  (label wrapping/esc) · `geometry` (constants + layout math) · `svg` (`render_svg`, decomposed
+  840→468 via `draw_header`/`draw_lanes`/`draw_edges`/`draw_stickies`/`draw_legend`) · `html`
+  (`render_html` + single-pass `fill_template`) · `mod` re-exports.
 
 **Tests co-located with their code.** Each submodule carries its own `#[cfg(test)] mod tests`; the
 shared property-based / temp-log+`Ctx` harnesses live in a `#[cfg(test)] mod testutil` per crate
