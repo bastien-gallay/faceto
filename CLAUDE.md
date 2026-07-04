@@ -61,9 +61,10 @@ faceto compact examples/event-log.jsonl      # fold a log to a snapshot, boundin
 
 Tests are in-file under `#[cfg(test)] mod tests` (json parsing/roundtrip, the id-keyed
 `diff_models`, SVG label layout, the event log's replay / model round-trip / `compact`, server-side
-id minting, and the server's hash/date/concurrency helpers). CI (`.github/workflows/
-ci.yml`) runs fmt, the clippy + test matrix on macOS/Windows/Linux, markdownlint, actionlint, and a
-`zero dependencies` job that fails if a crate enters `Cargo.lock`. The toolchain is pinned in
+id minting, and the server's hash/date/concurrency helpers). CI (`.github/workflows/ci.yml`) runs fmt, clippy + test (ubuntu on PRs, macOS added on `main`),
+markdownlint, actionlint, a justfile lint, and the runtime-only dependency firewall — a `zero
+dependencies` job (`cargo tree -e normal` is faceto-only; dev-deps like `proptest` are allowed)
+and a `binary size budget` job; see [`docs/ci.md`](docs/ci.md). The toolchain is pinned in
 `rust-toolchain.toml`; keep it, `Cargo.toml`'s `rust-version`, and the CI `toolchain:` inputs in
 lockstep. For board behaviour not covered by tests, render `examples/sample.model.json` or run
 `serve` and interact.

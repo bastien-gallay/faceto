@@ -3,16 +3,21 @@
 Thanks for taking a look. faceto is small on purpose; the bar for changes is
 "keeps it simple and keeps it honest."
 
-## The one hard rule: zero dependencies
+## The one hard rule: zero runtime dependencies
 
-faceto builds from the Rust standard library alone — no crates, ever. This is a
-product decision (trivial, offline install), enforced by the `zero dependencies`
-CI job. If a change seems to need a crate, implement it in `std` or open an issue
-to discuss first. The same applies to dev-dependencies: tests use `std` too.
+faceto's shipped binary is pure Rust standard library — no *runtime* crates. This is a
+product decision (trivial, offline install), enforced by two CI jobs: `zero dependencies`
+(the *normal* dependency tree, via `cargo tree -e normal`, must be faceto alone) and
+`binary size budget` (the release binary stays under its ceiling). If runtime code seems to
+need a crate, implement it in `std` or open an issue first. **Dev-dependencies are the one
+exception** — test-only crates (`proptest` powers the property tests) never enter the binary
+or the offline install — but ask before adding one.
 
 ## Local checks (mirror of CI)
 
-Run these before pushing; CI runs the same gates on macOS, Windows, and Linux:
+Run `just ci` before pushing — it runs every CI gate in order (see
+[`docs/ci.md`](docs/ci.md)). CI runs these gates on Linux for every PR, and adds macOS on
+`main`. The individual commands, if you'd rather run them piecemeal:
 
 ```bash
 cargo fmt --all --check
