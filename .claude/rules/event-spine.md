@@ -13,8 +13,9 @@ rationale and locked decisions: [`docs/event-sourcing-status.md`](../../docs/eve
 
 - **The log is append-only truth.** Append events; never rewrite history in place. The one
   exception is `faceto compact`, which folds the log to an equivalent shorter snapshot (and backs
-  up the prior log to `<log>.bak`). `event-log.jsonl` is **tracked** in git; `board.svg` /
-  `index.html` stay ignored (derived).
+  up the prior log to `<log>.bak`). The `<name>.event-log.jsonl` (named after the model basename,
+  so sibling boards own separate logs) is **tracked** in git; the derived `<name>.svg` /
+  `<name>.html` stay ignored.
 - **`replay` is pure and deterministic** — same log → same `Model`. Keep it free of clocks/IO. New
   `Event` variants must extend `parse_event`/`to_json`/`replay` together (the compiler enforces the
   match), and unknown kinds must keep being skipped on read. **Evolve the schema additively**

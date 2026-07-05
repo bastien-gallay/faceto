@@ -60,8 +60,9 @@ inversion makes that plan obsolete while honouring the trap it guarded against:
   drop the inbox", except the prior log is preserved (git + `<log>.bak`), not discarded.
 - **The "missing schema state" corollary still holds**, restated for events: a half-decided
   `add` or a queued `rename` is just an unappended event, not a reason to keep a scratch inbox.
-- **The ignore split is unchanged in spirit, inverted in target.** `event-log.jsonl` is now
-  *tracked* (it is the truth); `board.svg` / `index.html` / `comments.jsonl` stay ignored
-  (derived / transient).
+- **The ignore split is unchanged in spirit, inverted in target.** The `<name>.event-log.jsonl`
+  is now *tracked* (it is the truth); the rendered `<name>.svg` / `<name>.html` / `comments.jsonl`
+  are derived / transient (gitignored under `examples/`, where this repo renders). Output and log
+  names are derived from the model basename so sibling boards in one directory don't collide.
 
 See [`event-sourcing-status.md`](event-sourcing-status.md) for the current design and decisions.
