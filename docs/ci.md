@@ -128,9 +128,9 @@ in-repo config. Its rules:
 
 - **Required status checks** (must be green or skipped to merge):
   `clippy (ubuntu-latest)`, `test (ubuntu-latest)`, `rustfmt`, `zero dependencies`,
-  `binary size budget`, `actionlint`, `justfile`, `client-logic (node)`. *(`binary size budget` and
-  `client-logic (node)` are newer jobs — add each to the ruleset in GitHub → Settings → Rules so it
-  actually gates; the in-repo workflow only defines the job, it can't make the check required.)*
+  `binary size budget`, `actionlint`, `justfile`, `client-logic (node)`. *(`client-logic (node)` is
+  the newest job — add it to the ruleset in GitHub → Settings → Rules so it actually gates; the
+  in-repo workflow only defines the job, it can't make the check required.)*
 - **Pull request required** — no direct pushes to `main`.
 - **Required signatures** — every commit must be signed (GPG/SSH). Unsigned commits are rejected.
 - **Block force-pushes** (`non_fast_forward`) and **block deletion** of `main`.
