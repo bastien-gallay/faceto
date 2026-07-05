@@ -1304,7 +1304,18 @@ function bindStickies() {
       const n = (adj[g.id] || new Set()).size;
       note(n ? `${n} connection${n === 1 ? "" : "s"}` : "no connections");
     };
-    g.onblur = () => { if (hoverId === g.id) { hoverId = null; hoverOff(); } };
+    g.onblur = () => {
+      // Focus left this box. The spotlight now belongs to whoever is focused-or-hovered
+      // (same precedence as getFocusTarget); if that's nobody, clear it. The old
+      // `hoverId === g.id` guard skipped this whenever the mouse had already drifted off
+      // the box, so clicking empty space left the spotlight stuck until you hovered
+      // another sticky (#45).
+      if (hoverId === g.id) hoverId = null;
+      hoverOff();
+      const f = document.activeElement;
+      if (f?.classList?.contains("sticky")) hoverOn(f.id);
+      else if (hoverId) hoverOn(hoverId);
+    };
     g.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openModal(g); }
     };
