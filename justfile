@@ -71,10 +71,11 @@ demo-serve port="8753":
     set -euo pipefail
     cargo build --release
     work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT INT TERM
     cp examples/sample.model.json "$work/board.model.json"
     echo "serving a throwaway board from $work on http://127.0.0.1:{{ port }}"
-    echo "(Ctrl-C to stop; the temp dir and its event log are discarded.)"
-    exec ./target/release/faceto serve "$work/board.model.json" -p {{ port }}
+    echo "(Ctrl-C to stop; the temp dir and its event log are removed on exit.)"
+    ./target/release/faceto serve "$work/board.model.json" -p {{ port }}
 
 # Lint the GitHub Actions workflow files.
 actionlint:

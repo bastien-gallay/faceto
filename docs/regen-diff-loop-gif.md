@@ -23,8 +23,11 @@ Never serve a tracked board — posting comments appends to its `*.event-log.jso
 which copies `examples/sample.model.json` into a temp dir and serves that:
 
 ```bash
-just demo-serve            # → http://127.0.0.1:8753, temp board, discarded on Ctrl-C
+just demo-serve            # → http://127.0.0.1:8753, temp board, removed on exit (Ctrl-C)
 ```
+
+To use a different port, pass it (`just demo-serve 9000`) and set `PORT` to match when you run the
+capture script below.
 
 ## 2. Capture one PNG per beat
 
@@ -35,10 +38,12 @@ clipped. The sequence (annotate `R1` → Save → inject a rename + a move + an 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-BASE="http://127.0.0.1:8753"
+BASE="http://127.0.0.1:${PORT:-8753}"   # must match the port demo-serve is on
 F="./frames"; rm -rf "$F"; mkdir -p "$F"
 ab() { agent-browser "$@"; }
-post() { curl -s -XPOST "$BASE/comment" -H 'content-type: application/json' -d "$1" -o /dev/null; }
+# -sf so a rejected POST (4xx/5xx) fails the run instead of silently producing a no-diff GIF.
+post() { curl -sf -XPOST "$BASE/comment" -H 'content-type: application/json' -d "$1" -o /dev/null \
+  || { echo "post failed: $1" >&2; exit 1; }; }
 
 # Frame the whole board (header + 8 lanes + the col the added sticky will occupy).
 ab set viewport 1500 1120 1 >/dev/null
@@ -68,8 +73,9 @@ post "{\"elemId\":\"R1\",\"kind\":\"rename\",\"text\":\"Today view (live)\",\"ts
 post "{\"elemId\":\"E3\",\"kind\":\"move\",\"col\":4,\"ts\":\"$TS\",\"status\":\"open\"}"
 post "{\"kind\":\"add\",\"type\":\"event\",\"text\":\"ReportGenerated\",\"col\":5,\"ts\":\"$TS\",\"status\":\"open\"}"
 
-# Wait past the 4 s own-edit window so Reload takes the diff branch, then Reload.
-ab wait 4500 >/dev/null
+# Reload → the diff overlay. (The Save's own load() already cleared `ownEdit`, so these later
+# posts read as "foreign" and Reload takes the diff branch — no timing window to beat here.)
+ab wait 300 >/dev/null
 ab click "#refresh" >/dev/null
 ab wait 800 >/dev/null
 ab screenshot "$F/f05_diff.png" >/dev/null
@@ -77,7 +83,9 @@ ab screenshot "$F/f05_diff.png" >/dev/null
 
 Why the two-source dance: the client shows **your own** just-posted edit *plain* (a settle pulse),
 never as a diff. The overlay only appears when the log grew from elsewhere — hence the `curl` posts,
-then Reload. See `load()` in `src/template.html`.
+then Reload. Mechanically, `load()` nulls `ownEdit` at the end of every call
+(`src/template.html`), so once the Save's redraw has completed, any later version bump is treated
+as someone else's change and Reload renders the diff.
 
 ## 3. Assemble the GIF
 
