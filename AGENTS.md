@@ -114,10 +114,17 @@ the log). Seven modules, each one stage (`json`/`model`/`lint` are single files;
   `ElementAdded`/`ElementMoved`/`ElementRenamed`/`HotspotResolved`/`ElementRemoved` (`drop`)/
   `ElementAnnotated`); `add` mints a server-side type-prefixed id. All appends serialize through
   one mutex so concurrent posts never interleave (H4).
-- **`src/template.html`** — the client, embedded into the binary via `include_str!` in
-  `src/render/html.rs`. `render_html` substitutes `__SVG__`, `__TITLE__`, and `__CONFIG__`. Client polls
-  `/model-version`, swaps in diff/plain SVGs, and posts comments/structural ops (falling back to
-  `localStorage` when offline — offline structural ops are local-only, not resynced).
+- **`src/template.html` + `src/client/*.js` + `src/client/style.css`** — the client. `template.html`
+  is a thin shell (head, static body DOM, four placeholders); the CSS and the ~1.3k lines of JS live
+  in sibling files, split into cohesive modules (`core` → `layout` → `drag` → `edit` → `region` →
+  `sync` → `graph` → `main`). `src/render/html.rs` `include_str!`s them all and `concat!`s the JS
+  modules — in that order — back into one classic `<script>` at build time (no bundler ships; the
+  concatenation is one shared scope, byte-identical to the former inline script). `render_html` then
+  does a two-stage fill: `__CONFIG__` into the script first (single-pass fill never re-scans an
+  inserted value), then `__STYLE__` / `__SCRIPT__` / `__SVG__` / `__TITLE__` into the shell. The
+  client polls `/model-version`, swaps in diff/plain SVGs, and posts comments/structural ops (falling
+  back to `localStorage` when offline — offline structural ops are local-only, not resynced).
+  Pure helpers are checked by `tests/js/board-logic.test.mjs` (plain node, no deps).
 
 `src/main.rs` is the CLI dispatch only (`render` / `lint` / `serve` / `genesis` / `compact` /
 `help` / `version`).
