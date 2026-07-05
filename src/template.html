@@ -1285,6 +1285,23 @@ function hoverOff() {
   document.querySelectorAll(".edge.hl").forEach((p) => p.classList.remove("hl"));
   document.querySelectorAll(".sticky.adj").forEach((g) => g.classList.remove("adj"));
 }
+// Which box the connector spotlight belongs to, in priority order: the box under the cursor, else
+// the focused sticky, else the box being renamed inline (its editor holds focus, but the box is
+// still the selection). null clears the spotlight. Pure so the precedence is testable and lives in
+// exactly one place — the four sticky handlers below all recompute the owner through it.
+function spotlightOwnerOf(hoverId, focusedStickyId, renamingId) {
+  return hoverId || focusedStickyId || renamingId || null;
+}
+// Recompute the spotlight from the current owner: clear, then light whoever owns it. Called on every
+// hover/focus transition so only one box is ever lit and an empty-space blur clears it (deselect).
+function relightSpotlight() {
+  hoverOff();
+  const ae = document.activeElement;
+  const focused = ae?.classList?.contains("sticky") ? ae.id : null;
+  const renamingSticky = renaming && !renaming.region ? renaming.id : null;
+  const id = spotlightOwnerOf(hoverId, focused, renamingSticky);
+  if (id) hoverOn(id);
+}
 function bindStickies() {
   // A board swap detaches every old node: the hovered box never fires its mouseleave and a
   // captured drag never delivers its pointerup — clear the stale hover/gesture state here or a
@@ -1303,7 +1320,7 @@ function bindStickies() {
     g.ondblclick = () => startRename(g);
     g.onpointerdown = startStickyDrag;
     g.onmouseenter = () => {
-      hoverId = g.id; hoverOn(g.id);
+      hoverId = g.id; relightSpotlight();
       if (gestureBusy()) return;   // an open edit / drag owns the board — no action glyphs meanwhile
       const r = g.getBoundingClientRect();
       showPlus(r.right + 4, r.top + r.height / 2 - 11,
@@ -1313,12 +1330,10 @@ function bindStickies() {
                                                       // left-face arrowhead of any incoming edge)
     };
     g.onmouseleave = () => {
+      // The spotlight follows the mouse, but a focused (or being-renamed) box keeps its claim:
+      // drifting off a clicked box must not read as losing it. relightSpotlight re-lights that owner.
       if (hoverId === g.id) hoverId = null;
-      hoverOff(); hidePlusSoon(); removeXBtn.hideSoon(); commentBtn.hideSoon();
-      // The spotlight follows the mouse, but a focused sticky keeps its claim visible: drifting
-      // off a clicked box must not read as losing it (the keyboard still answers to it).
-      const f = document.activeElement;
-      if (f?.classList?.contains("sticky")) hoverOn(f.id);
+      relightSpotlight(); hidePlusSoon(); removeXBtn.hideSoon(); commentBtn.hideSoon();
     };
     // Keyboard parity with the mouse: focusing a sticky makes it the ← / → move target (same as
     // hover) and spotlights its connectors; Enter / Space opens its comment dialog.
@@ -1326,12 +1341,18 @@ function bindStickies() {
     // dense board has a legend ("5 connections") instead of being impressive but unreadable. Once
     // per deliberate selection, never on hover, and skipped on swap-refocus (see swapBoard).
     g.onfocus = () => {
-      hoverId = g.id; hoverOn(g.id);
+      hoverId = g.id; relightSpotlight();
       if (suppressFocusNote) return;
       const n = (adj[g.id] || new Set()).size;
       note(n ? `${n} connection${n === 1 ? "" : "s"}` : "no connections");
     };
-    g.onblur = () => { if (hoverId === g.id) { hoverId = null; hoverOff(); } };
+    g.onblur = () => {
+      // Focus left this box. Recompute the spotlight owner: if nobody is hovering, focused, or
+      // renaming, it clears — so clicking empty space deselects (#45). The old `hoverId === g.id`
+      // guard skipped clearing whenever the mouse had already drifted off, leaving it stuck.
+      if (hoverId === g.id) hoverId = null;
+      relightSpotlight();
+    };
     g.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openModal(g); }
     };

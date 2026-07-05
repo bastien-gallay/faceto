@@ -56,5 +56,21 @@ check("box off both right and bottom reveals on both axes",
 check("box exactly flush with the right edge is still visible",
   revealScroll({ left: 700, top: 100, right: 800, bottom: 160 }, view) === null);
 
+// --- spotlightOwnerOf(hoverId, focusedStickyId, renamingId): which box the connector spotlight
+// belongs to, in priority order — the box under the cursor, else the focused sticky, else the box
+// being renamed inline; null clears it. The single precedence shared by onmouseenter/leave/focus/blur
+// (review findings #2/#3/#4), so hovering another box while one is focused shows exactly one, and a
+// blur onto empty space clears (deselect, #45). renaming keeps the edited box lit mid-rename (#5).
+const owner = lift("spotlightOwnerOf");
+
+check("cursor wins over focus and rename", owner("hover", "focused", "renaming") === "hover");
+check("focused sticky wins when nothing is hovered", owner(null, "focused", "renaming") === "focused");
+check("rename target lights when nothing hovered or focused (F2 mid-rename, #5)",
+  owner(null, null, "renaming") === "renaming");
+check("nothing hovered/focused/renaming clears the spotlight (deselect, #45)",
+  owner(null, null, null) === null);
+check("hover-only lights the hovered box", owner("hover", null, null) === "hover");
+check("focus-only lights the focused box", owner(null, "focused", null) === "focused");
+
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log("\nall board-logic checks passed");
