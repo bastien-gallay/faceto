@@ -128,6 +128,11 @@ function endStickyDrag(e) {
   } else {
     applyLayout();           // sub-threshold / no-op: snap the box back to where it started
     g.focus();               // the single click's promised focus, not left to browser defaults
+    // The click's default focus already fired onfocus during pointerdown — while stickyDrag was
+    // set, so placeConnectDot saw a busy board and hid the handle; the focus() above is then a
+    // no-op (the box is already focused) and never re-shows it. Place it now the gesture is over,
+    // so a plain click reveals the connect dot (F-edge-connect / #48 select-scoped affordance).
+    placeConnectDot(g);
   }
 }
 
