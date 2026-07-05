@@ -62,7 +62,7 @@ inversion makes that plan obsolete while honouring the trap it guarded against:
   `add` or a queued `rename` is just an unappended event, not a reason to keep a scratch inbox.
 - **The ignore split is unchanged in spirit, inverted in target.** The `<name>.event-log.jsonl`
   is now *tracked* (it is the truth); the rendered `<name>.svg` / `<name>.html` / `comments.jsonl`
-  stay ignored (derived / transient). Output and log names are derived from the model basename so
-  sibling boards in one directory don't collide.
+  are derived / transient (gitignored under `examples/`, where this repo renders). Output and log
+  names are derived from the model basename so sibling boards in one directory don't collide.
 
 See [`event-sourcing-status.md`](event-sourcing-status.md) for the current design and decisions.

@@ -33,7 +33,7 @@ No network, no crates to download — it builds from the standard library alone.
 
 ```bash
 faceto render examples/sample.model.json   # writes sample.svg + sample.html next to the model
-open examples/index.html                   # the board above, straight from that render
+open examples/sample.html                  # the board above, straight from that render
 
 faceto lint  examples/sample.model.json    # event-storming grammar findings (warn-only, exits 0)
 
@@ -101,7 +101,7 @@ Each line is one event — a slice of the generated [`examples/sample.event-log.
 `replay` is pure and deterministic: same log → same board. The schema evolves *additively* (new
 optional fields, new event kinds) so old and new logs stay mutually replayable. The
 `<name>.event-log.jsonl` is **tracked** in git; the rendered `<name>.svg` / `<name>.html` are
-derived and ignored. The full
+derived (and gitignored where this repo renders them, under `examples/`). The full
 rationale — compaction, forward/backward compatibility, the locked decisions — lives in
 [`docs/event-sourcing-status.md`](docs/event-sourcing-status.md).
 

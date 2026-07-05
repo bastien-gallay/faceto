@@ -52,8 +52,14 @@ fn main() {
             cmd_genesis(model);
         }
         "compact" => {
-            let log = args.get(2).map(String::as_str).unwrap_or("event-log.jsonl");
-            cmd_compact(log);
+            // No single canonical log name anymore: default to the log of the default model
+            // (`model.json` → `model.event-log.jsonl`), mirroring `genesis`'s default, rather than
+            // the retired bare `event-log.jsonl` that nothing produces.
+            let default_log = log_beside(Path::new("model.json"));
+            match args.get(2) {
+                Some(log) => cmd_compact(log),
+                None => cmd_compact(&default_log.to_string_lossy()),
+            }
         }
         "help" | "-h" | "--help" => print_help(),
         "version" | "-V" | "--version" => println!("faceto {}", env!("CARGO_PKG_VERSION")),
@@ -83,6 +89,11 @@ fn dir_of(path: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// The suffix that turns a board name into its event-log filename. `log_beside` *appends* it and
+/// `output_stem` *strips* it — the two halves of one round-trip (a model and its log must resolve
+/// to the same stem), so they share this single constant rather than two literals that could drift.
+const EVENT_LOG_SUFFIX: &str = ".event-log.jsonl";
+
 /// The event log for a source: `<stem>.event-log.jsonl` in the source's directory, where `<stem>`
 /// is the source's board name (`orders.model.json` → `orders.event-log.jsonl`). Deriving the log
 /// name from the basename is what lets sibling boards live in one directory: each model owns its
@@ -90,7 +101,7 @@ fn dir_of(path: &Path) -> PathBuf {
 /// make `serve b.json` silently serve a log genesis'd from `a.json`). The one place this convention
 /// lives, so the clobber-check path and the write path can never drift apart.
 fn log_beside(source: &Path) -> PathBuf {
-    dir_of(source).join(format!("{}.event-log.jsonl", output_stem(source)))
+    dir_of(source).join(format!("{}{EVENT_LOG_SUFFIX}", output_stem(source)))
 }
 
 /// Warn (never fail) when a source yields an empty board. `model::from_json` is lenient — it
@@ -112,10 +123,14 @@ fn warn_if_empty(model: &model::Model, source: &Path) {
 /// log resolve to the *same* stem, so `render` of either writes the same `<stem>.svg`/`.html`:
 /// `orders.model.json` → `orders`, `orders.event-log.jsonl` → `orders`, and a legacy bare
 /// `event-log.jsonl` → `event-log`; `foo.json` → `foo`. Falls back to `board` for a path with no
-/// usable stem. Order matters: the compound suffixes must be tried before the plain `.json`.
+/// usable stem.
+///
+/// Only the *compound* suffixes are peeled explicitly; a single trailing extension (`.json`,
+/// `.jsonl`, `.txt`, …) is left to `file_stem` below, which strips exactly one — so the two paths
+/// don't duplicate each other.
 fn output_stem(source: &Path) -> String {
     let name = source.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    for suffix in [".model.json", ".event-log.jsonl", ".jsonl", ".json"] {
+    for suffix in [".model.json", EVENT_LOG_SUFFIX] {
         if let Some(base) = name.strip_suffix(suffix) {
             if !base.is_empty() {
                 return base.to_string();
@@ -261,7 +276,9 @@ fn cmd_genesis(model_path: &str) {
 ///   * an event log is served as-is;
 ///   * a `model.json` beside its existing `<name>.event-log.jsonl` redirects to that log (the log
 ///     already won; the model is a derived/bootstrap form, so it is ignored once a log exists);
-///   * a `model.json` with no sibling log is migrated once (genesis) and the fresh log is served.
+///   * a `model.json` with no sibling log is migrated once (genesis) and the fresh log is served —
+///     but if a *legacy* bare `event-log.jsonl` (pre-F-output-naming name) sits beside it, warn
+///     first so the user can rename it rather than have its history silently stranded.
 ///
 /// This is what kills legacy mode: `serve` never opens a `model.json` for writing, so no mutation
 /// can ever land outside the log.
@@ -277,6 +294,19 @@ fn serve_log_path(source: &Path) -> Result<std::path::PathBuf, String> {
             source.display()
         );
         return Ok(log);
+    }
+    // Upgrade footgun: pre-F-output-naming logs were the bare `event-log.jsonl`. If one sits beside
+    // the model under that old name, it is *not* this model's derived log, so genesis below would
+    // mint a fresh empty-history log and silently strand the user's real one. Point them at the
+    // rename rather than skip it in silence.
+    let legacy = dir_of(source).join("event-log.jsonl");
+    if legacy != log && legacy.exists() {
+        eprintln!(
+            "warning: found a legacy {} that is not this model's log — rename it to {} to keep its \
+             history (genesis is creating a fresh log instead)",
+            legacy.display(),
+            log.display()
+        );
     }
     let (out, summary) = write_genesis(source)?;
     println!("{summary}");
@@ -382,7 +412,7 @@ fn print_help() {
          \x20 faceto lint    [SOURCE]            check the board against the ES-grammar rules (warn-only)\n\
          \x20 faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar (default :8753)\n\
          \x20 faceto genesis [MODEL]             migrate a model.json into a <name>.event-log.jsonl\n\
-         \x20 faceto compact [LOG]               fold a log to a snapshot, bounding replay (default event-log.jsonl)\n\
+         \x20 faceto compact [LOG]               fold a log to a snapshot, bounding replay (default model.event-log.jsonl)\n\
          \x20 faceto help | version\n\
          \n\
          SOURCE is a model.json or an event log (*.jsonl / *.log); it defaults to ./model.json.\n\
