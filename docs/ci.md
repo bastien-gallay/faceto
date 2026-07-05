@@ -47,6 +47,7 @@ skips the Rust jobs, a Rust-only change skips markdownlint/actionlint, and so on
 | `markdown`  | `**/*.md`, `.markdownlint-cli2.jsonc`                                           |
 | `workflows` | `.github/workflows/**`                                                          |
 | `just`      | `justfile`                                                                     |
+| `js`        | `tests/js/**`, `src/template.html`                                              |
 
 > **Why `src/template.html` counts as a Rust change.** It is `include_str!`'d into the binary by
 > `render.rs`, so editing it rebuilds the crate and can break tests — it must trigger the Rust jobs.
@@ -73,6 +74,7 @@ job-level skips — see the [static-names gotcha](#the-static-names-gotcha).
 | `markdownlint`            | ubuntu          | `markdown`                       | Prose ≤100 cols; `.markdownlint-cli2.jsonc` rules |
 | `actionlint`              | ubuntu          | `workflows`                      | Lint the workflow files themselves                |
 | `justfile`                | ubuntu          | `just`                           | `just --fmt --check` + `--summary` (guard rot)   |
+| `client-logic (node)`     | ubuntu          | `js`                             | `node tests/js/board-logic.test.mjs` — pure client helpers |
 
 Notes on the less-obvious ones:
 
@@ -87,6 +89,9 @@ Notes on the less-obvious ones:
   now that dep count no longer is.
 - **`actionlint`** installs the linter via the upstream downloader script, pinned to a commit and
   **verified by sha256** before running — never an unverified `curl | bash`.
+- **`client-logic (node)`** checks the board client's pure helpers (lifted out of `src/template.html`
+  by `tests/js/board-logic.test.mjs`) in plain node. Node is preinstalled on the runner and the
+  tests use only std node APIs — no npm, no dependency — so the zero-dependency promise is untouched.
 - The macOS jobs (`clippy (macos-latest)`, `test (macos-latest)`) are **not required checks**; they
   run only on `push`/`workflow_dispatch`, never on PRs.
 
@@ -107,7 +112,8 @@ detect changes ─┬─► rustfmt
                 ├─► binary size budget
                 ├─► markdownlint
                 ├─► actionlint
-                └─► justfile
+                ├─► justfile
+                └─► client-logic (node)
 ```
 
 There is intentionally **no aggregate "CI passed" gate job**. The required checks are the granular
@@ -122,8 +128,9 @@ in-repo config. Its rules:
 
 - **Required status checks** (must be green or skipped to merge):
   `clippy (ubuntu-latest)`, `test (ubuntu-latest)`, `rustfmt`, `zero dependencies`,
-  `binary size budget`, `actionlint`, `justfile`. *(The `binary size budget` job ships with the
-  runtime-only dependency policy; add it to the ruleset so it actually gates.)*
+  `binary size budget`, `actionlint`, `justfile`, `client-logic (node)`. *(`binary size budget` and
+  `client-logic (node)` are newer jobs — add each to the ruleset in GitHub → Settings → Rules so it
+  actually gates; the in-repo workflow only defines the job, it can't make the check required.)*
 - **Pull request required** — no direct pushes to `main`.
 - **Required signatures** — every commit must be signed (GPG/SSH). Unsigned commits are rejected.
 - **Block force-pushes** (`non_fast_forward`) and **block deletion** of `main`.
