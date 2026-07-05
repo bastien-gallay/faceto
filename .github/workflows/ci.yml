@@ -56,9 +56,10 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
-              # template.html is include_str!'d into the binary, so a change to
-              # it rebuilds and can break tests — treat it as a Rust change.
+              # template.html + the client modules are include_str!'d into the binary, so a change
+              # to any of them rebuilds and can break tests — treat them as a Rust change.
               - 'src/template.html'
+              - 'src/client/**'
             markdown:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
@@ -68,9 +69,9 @@ jobs:
               - 'justfile'
             js:
               # The board client's pure helpers are checked in plain node (tests/js/), and the
-              # tests lift those helpers out of template.html — so either changing re-runs them.
+              # tests lift those helpers out of the client modules — so either changing re-runs them.
               - 'tests/js/**'
-              - 'src/template.html'
+              - 'src/client/**'
             roadmap:
               - 'ROADMAP.md'
               - 'scripts/sync_roadmap.py'

@@ -1,6 +1,7 @@
 ---
 paths:
   - "src/template.html"
+  - "src/client/**"
   - "src/render/**"
 ---
 
@@ -8,7 +9,7 @@ paths:
 
 # UI / design context
 
-Loaded when editing the board's rendered surface (`src/template.html`, `src/render/`).
+Loaded when editing the board's rendered surface (`src/template.html`, `src/client/`, `src/render/`).
 
 `faceto` carries an impeccable design context. **Register: `product`** — the live HTML+SVG
 board is app UI that serves the event-storming workflow, not a brand/marketing surface.
