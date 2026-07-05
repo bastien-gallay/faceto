@@ -75,6 +75,17 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "Escape" && removeArm) { e.preventDefault(); disarmRemove(); return; }
   if (e.key === "Escape" && regionArm) { e.preventDefault(); disarmRegion(); return; }
+  if (e.key === "Escape" && connecting) { e.preventDefault(); cancelConnect(); return; }
+  // A live wire drag bails like the other drags: null the flag first so the pointer release's
+  // lostpointercapture is a no-op, then snap the preview away.
+  if (e.key === "Escape" && connectDrag) {
+    e.preventDefault();
+    const d = connectDrag;
+    try { connectDot.releasePointerCapture(d.pointerId); } catch {}
+    teardownConnectDrag();
+    note("");
+    return;
+  }
   // Escape bails out of a live drag before anything else: snap back, release the pointer,
   // nothing posted. Clearing the flag first makes the release's lostpointercapture a no-op.
   if (e.key === "Escape" && (stickyDrag || frontierDrag)) {
@@ -95,6 +106,16 @@ document.addEventListener("keydown", (e) => {
       const line = document.querySelector(`.frontier[data-region="${d.regionId}"][data-edge="${d.edge}"]`);
       try { line?.releasePointerCapture(d.pointerId); } catch {}
     }
+    return;
+  }
+  // Re-arm a keyboard connect from a different box without pressing Esc first: an armed `connecting`
+  // makes gestureBusy() true, which would otherwise swallow the `e` branch below. armConnect replaces
+  // the previous source. (This is above the gestureBusy guard precisely so the arm doesn't block it.)
+  if ((e.key === "e" || e.key === "E") && connecting) {
+    const armAe = document.activeElement;
+    if (armAe && /^(INPUT|TEXTAREA|SELECT)$/.test(armAe.tagName)) return;
+    const t = keyTarget();
+    if (t) { e.preventDefault(); armConnect(t); }
     return;
   }
   // gestureBusy: a drag captures the pointer but not the keyboard, so F2 or c could otherwise
@@ -124,6 +145,11 @@ document.addEventListener("keydown", (e) => {
     if (!g) return;   // a stale hoverId can name a box a board swap removed (parity with F2/c above)
     const r = g.getBoundingClientRect();
     startAdd({ type: g.dataset.kind, col: +g.dataset.col + 1, sx: r.right + 12, sy: r.top });
+  } else if (e.key === "e" || e.key === "E") {
+    // Arm "connect from this box" (F-edge-connect): the keyboard twin of dragging the connect dot.
+    // Focus a target and Enter completes (toggle: disconnect if already linked); Esc cancels.
+    e.preventDefault();
+    armConnect(target);
   }
 });
 

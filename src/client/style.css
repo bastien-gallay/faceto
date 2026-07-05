@@ -45,6 +45,19 @@
      last so it overrides the focus / has-note ring on the box that is about to be dropped. */
   .sticky.arming .card { stroke: #b4232a; stroke-width: 2.5; stroke-dasharray: 5 3;
     filter: drop-shadow(1px 0 0 #fff) drop-shadow(-1px 0 0 #fff) drop-shadow(0 1px 0 #fff) drop-shadow(0 -1px 0 #fff); }
+  /* Connect drag target (F-edge-connect): the box a wire will link to wears a solid accent keyline;
+     the box it will DISCONNECT from wears the red danger keyline (dashed, the same non-colour "cut"
+     tell as an armed remove) — the outcome reads on the target before release, colour or not.
+     White-cased like the rings above so it survives every lane fill, command blue included. */
+  .sticky.connect-target .card { stroke: #1A6FAE; stroke-width: 2.5;
+    filter: drop-shadow(1px 0 0 #fff) drop-shadow(-1px 0 0 #fff) drop-shadow(0 1px 0 #fff) drop-shadow(0 -1px 0 #fff); }
+  .sticky.connect-cut .card { stroke: #b4232a; stroke-width: 2.5; stroke-dasharray: 5 3;
+    filter: drop-shadow(1px 0 0 #fff) drop-shadow(-1px 0 0 #fff) drop-shadow(0 1px 0 #fff) drop-shadow(0 -1px 0 #fff); }
+  /* Keyboard-armed connect source: the box you are wiring FROM, marked while you pick a target
+     (the mouse path shows the live wire instead). A dotted accent ring, distinct from the target's
+     solid one. */
+  .sticky.connect-src .card { stroke: #1A6FAE; stroke-width: 2.5; stroke-dasharray: 2 3;
+    filter: drop-shadow(1px 0 0 #fff) drop-shadow(-1px 0 0 #fff) drop-shadow(0 1px 0 #fff) drop-shadow(0 -1px 0 #fff); }
   /* On box hover: spotlight its connectors + neighbours, recede the rest. */
   #board.dim .edge:not(.hl) { opacity: .07; }
   #board.dim .sticky:not(.adj) { opacity: .32; }
@@ -120,6 +133,24 @@
      the lane grows a row. Same live-pen accent, same instant tracking. */
   #lane-grow-guide { position: fixed; display: none; z-index: 18; height: 2px; background: #1A6FAE;
                      opacity: .8; pointer-events: none; }
+  /* F-edge-connect: the connect handle — a live-pen dot on the selected box's right border, the
+     grab point for a wire. Select-scoped (not the hover +/×/comment glyphs); the same accent as
+     every "where you act" mark. A white ring inside a thin accent ring lifts it off any lane fill,
+     command blue included; the crosshair cursor says "draw a connection". */
+  #connect-dot { position: fixed; display: none; z-index: 19; width: 12px; height: 12px;
+                 box-sizing: border-box; border-radius: 50%; background: #1A6FAE; border: 2px solid #fff;
+                 box-shadow: 0 0 0 1px #1A6FAE, 0 1px 3px #1a6fae55; cursor: crosshair; touch-action: none; }
+  #connect-dot.show { display: block; }
+  #connect-dot:hover { background: #12588c; }
+  /* The wire preview overlay: a viewport SVG the drag draws its connector into (screen px, 1 unit =
+     1px, no viewBox). Above the board, below the handle; never intercepts pointer events. The wire
+     is dashed (a tentative preview), blue to connect and red to cut — the same live-pen / danger
+     pair the rest of the board speaks. */
+  #connect-overlay { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 18;
+                     pointer-events: none; display: none; }
+  #connect-overlay.show { display: block; }
+  #connect-preview { fill: none; stroke: #1A6FAE; stroke-width: 2.4; stroke-linecap: round; stroke-dasharray: 6 5; }
+  #connect-preview.cut { stroke: #b4232a; }
   @media (prefers-reduced-motion: reduce) { .edge, .sticky, .hovglyph { transition: none; } }
   /* Narrow widths: let the header wrap instead of clipping. Without this the Reload button
      slides off-screen and becomes unreachable. */

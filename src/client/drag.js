@@ -15,7 +15,7 @@ let stickyDrag = null;      // { id, pointerId, startX, startY, startCy, fromCol
                             //   col, frac, moved } while dragging, else null
 // One predicate for "a gesture owns the board" (inline edit, add, either drag): every gesture
 // entry point checks it, so mutual exclusion is one flag added here — not an edit at five sites.
-function gestureBusy() { return !!(renaming || adding || frontierDrag || stickyDrag); }
+function gestureBusy() { return !!(renaming || adding || frontierDrag || stickyDrag || connectDrag || connecting); }
 function hideGlyphs() { document.querySelectorAll(".hovglyph.show").forEach((b) => b.classList.remove("show")); }
 // The column index whose centre is nearest an SVG-space x, searching the occupied span plus one
 // past each end (colCenter interpolates the empty ones at the default pitch) — snap-to-grid.
@@ -128,6 +128,11 @@ function endStickyDrag(e) {
   } else {
     applyLayout();           // sub-threshold / no-op: snap the box back to where it started
     g.focus();               // the single click's promised focus, not left to browser defaults
+    // The click's default focus already fired onfocus during pointerdown — while stickyDrag was
+    // set, so placeConnectDot saw a busy board and hid the handle; the focus() above is then a
+    // no-op (the box is already focused) and never re-shows it. Place it now the gesture is over,
+    // so a plain click reveals the connect dot (F-edge-connect / #48 select-scoped affordance).
+    placeConnectDot(g);
   }
 }
 

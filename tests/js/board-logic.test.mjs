@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 // The client modules, in the SAME order src/render/html.rs concatenates them — so the source we
 // lift from is exactly what ships. (Order is irrelevant for lifting a single named helper, but
 // mirroring the build keeps this file the one place a reader learns the module layout.)
-const MODULES = ["core", "layout", "drag", "edit", "region", "sync", "graph", "main"];
+const MODULES = ["core", "layout", "drag", "connect", "edit", "region", "sync", "graph", "main"];
 const source = MODULES
   .map((m) => readFileSync(new URL(`../../src/client/${m}.js`, import.meta.url), "utf8"))
   .join("\n");
@@ -101,6 +101,20 @@ const esc = liftLine("esc");
 check("esc turns </>& into entities", esc("a<b>&c") === "a&lt;b&gt;&amp;c");
 check("esc coerces non-strings", esc(42) === "42");
 check("esc leaves plain text untouched", esc("hotspot: order paid") === "hotspot: order paid");
+
+// --- connectDecision(edges, src, dst): which edge op a connect gesture commits (F-edge-connect).
+// "disconnect" if the directed pair src→dst already exists on the board, "connect" if not, null if
+// the pair is unusable (missing endpoint or a self-loop — the server guard rejects those too). The
+// toggle rule the drag and the keyboard path both read, in one testable place.
+const connectDecision = lift("connectDecision");
+const dirEdges = [{ src: "E1", dst: "E2" }, { src: "C1", dst: "A1" }];
+check("connectDecision links an unconnected pair", connectDecision(dirEdges, "E1", "A1") === "connect");
+check("connectDecision cuts an existing directed edge", connectDecision(dirEdges, "E1", "E2") === "disconnect");
+check("connectDecision is directed — the reverse pair is a fresh connect",
+  connectDecision(dirEdges, "E2", "E1") === "connect");
+check("connectDecision rejects a self-loop", connectDecision(dirEdges, "E1", "E1") === null);
+check("connectDecision rejects a missing endpoint",
+  connectDecision(dirEdges, "E1", null) === null && connectDecision(dirEdges, "", "E2") === null);
 
 // The geometry helpers read the shared CFG (from render.rs) and the DOM-measured column map; both
 // are module globals in the browser, so seed them on globalThis for the lifted functions to close
