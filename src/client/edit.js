@@ -61,13 +61,17 @@ function doRemove(id) {
   const g = document.getElementById(id);
   if (!g) return;
   if (removeArm?.id === id) {
+    // A fast double-click would arm and confirm in one motion, before the eye reads the danger
+    // prompt. Swallow a confirm that lands within 300ms of the arm (keeping the arm live), so a
+    // real "click again" past that window still deletes.
+    if (Date.now() - removeArm.at < 300) return;
     disarmRemove(true);
     note(`removed ${id}`);
     postComment({ elemId: id, kind: "drop", text: "removed inline", ts: new Date().toISOString(), status: "open" });
     return;
   }
   disarmRemove(true);   // arming a different box replaces the previous arm
-  removeArm = { id, t: setTimeout(() => disarmRemove(true), 3000) };
+  removeArm = { id, at: Date.now(), t: setTimeout(() => disarmRemove(true), 3000) };
   // The keyboard path (Delete) never hovered, so the corner × was never placed — it stranded
   // off-canvas, leaving no visible confirm signal. Position it at the box corner ourselves (the
   // same anchor the mouse hover uses) and arm the box itself with a red dashed ring, so the danger
@@ -127,13 +131,14 @@ function disarmRegion(quiet) {
 function armRegion(regionId, tab) {
   if (!regionId) return;
   if (regionArm?.id === regionId) {
+    if (Date.now() - regionArm.at < 300) return;   // swallow a double-click confirm (see doRemove)
     disarmRegion(true);
     note("region removed");
     postComment({ regionId, kind: "region-remove", ts: new Date().toISOString(), status: "open" });
     return;
   }
   disarmRegion(true);   // arming a different region replaces the previous arm
-  regionArm = { id: regionId, t: setTimeout(() => disarmRegion(true), 3000) };
+  regionArm = { id: regionId, at: Date.now(), t: setTimeout(() => disarmRegion(true), 3000) };
   if (tab) {
     const r = tab.getBoundingClientRect();
     regionXBtn.at(r.right - 3, r.top - 9, regionId);   // the keyboard path never hovered — place it

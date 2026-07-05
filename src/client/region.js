@@ -150,6 +150,7 @@ function bindRegions() {
   }
   document.querySelectorAll(".region-tab").forEach((g) => {
     g.onclick = () => startRename(g, true);
+    g.ondblclick = () => startRename(g, true);   // parity with a sticky's dblclick/F2 rename
     g.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startRename(g, true); }
       else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); e.stopPropagation(); armRegion(g.dataset.region, g); }
@@ -170,6 +171,7 @@ function bindRegions() {
   // region-tab group, so stopPropagation keeps the click off the tab's rename gesture.
   document.querySelectorAll(".region-collapse").forEach((t) => {
     t.onclick = (e) => { e.stopPropagation(); toggleCollapse(t.dataset.region); };
+    t.ondblclick = (e) => e.stopPropagation();   // dblclick doesn't inherit the click's stopPropagation — keep a fold double-tap off the tab's rename
   });
   // Split affordance: a + follows the cursor over a region's band, snapped to the column boundary a
   // split would create. Guarded to columns strictly inside the phase (a split at its very start is a
