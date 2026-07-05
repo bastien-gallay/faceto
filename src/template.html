@@ -1149,6 +1149,18 @@ async function load() {
 // stable identity, so focus survives the swap by id — and restoring it re-fires onfocus, which
 // brings the spotlight and the keyboard claim back with it.
 let suppressFocusNote = false;   // true while re-focusing after a board swap — see onfocus
+// Minimal scroll delta (or null) to bring a focused box back inside the board viewport. Rects are
+// client coords {left,top,right,bottom}. Returns null when the box is already fully visible so an
+// ordinary swap keeps its pan untouched; only a box that left the frame (e.g. a move at the edge)
+// gets revealed. Positive dLeft/dTop scroll toward the box; add them to scrollLeft/scrollTop.
+function revealScroll(el, view) {
+  let dLeft = 0, dTop = 0;
+  if (el.right > view.right) dLeft = el.right - view.right;
+  else if (el.left < view.left) dLeft = el.left - view.left;
+  if (el.bottom > view.bottom) dTop = el.bottom - view.bottom;
+  else if (el.top < view.top) dTop = el.top - view.top;
+  return dLeft || dTop ? { dLeft, dTop } : null;
+}
 function swapBoard(html) {
   // Focus survives the swap by stable identity — a sticky by id, a region tab by data-region — so a
   // repeated keyboard edit (arrow-move, Shift+arrow region resize) doesn't die after every commit.
@@ -1170,6 +1182,14 @@ function swapBoard(html) {
   suppressFocusNote = false;
   board.scrollLeft = scrollLeft;
   board.scrollTop = scrollTop;
+  // Preserving the pan can strand a box the swap just moved outside the viewport (an edge move
+  // leaves it focused but off-screen, so the next ←/→ acts on something unseen). Reveal the focused
+  // box only when it actually left the frame — ordinary swaps keep their restored pan.
+  const focused = document.activeElement;
+  if (focused && focused !== board && board.contains(focused)) {
+    const d = revealScroll(focused.getBoundingClientRect(), board.getBoundingClientRect());
+    if (d) { board.scrollLeft += d.dLeft; board.scrollTop += d.dTop; }
+  }
 }
 
 // Redraw the plain current board (own edit just landed): advance the baseline silently and let
