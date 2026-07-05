@@ -3,6 +3,7 @@
 //!   faceto render  [SOURCE]           write <name>.svg + <name>.html next to SOURCE
 //!   faceto lint    [SOURCE]           check the board against the ES-grammar rules (warn-only)
 //!   faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar
+//!   faceto export  [SOURCE] [--format mermaid]  print the board as Mermaid text (stdout)
 //!   faceto genesis [MODEL]            migrate a model.json into a <name>.event-log.jsonl
 //!   faceto compact [LOG]              fold a log to a snapshot, bounding replay length
 //!
@@ -46,6 +47,10 @@ fn main() {
                 eprintln!("error: {e}");
                 exit(1);
             }
+        }
+        "export" => {
+            let (source, format) = parse_export(&args[2..]);
+            cmd_export(&source, format);
         }
         "genesis" => {
             let model = args.get(2).map(String::as_str).unwrap_or("model.json");
@@ -216,6 +221,27 @@ fn cmd_lint(model_path: &str) {
     for f in &findings {
         println!("  {} [{}] — {}", label_of(&f.element_id), f.rule, f.message);
     }
+}
+
+/// Export a board to a portable text format on **stdout** (a read-only, non-mutating verb, so it
+/// takes any source — a `model.json` or an event log — via `load_source`). Mermaid is the only
+/// format today; the degradation is announced both inside the output (a `%%` header) and on stderr,
+/// so a piped `stdout` stays clean Mermaid while an interactive user still sees the warning.
+fn cmd_export(source: &str, format: Format) {
+    let path = Path::new(source);
+    let model = match load_source(path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            exit(1);
+        }
+    };
+    warn_if_empty(&model, path);
+    let out = match format {
+        Format::Mermaid => render::render_mermaid(&model),
+    };
+    print!("{out}");
+    eprintln!("{}", render::DEGRADATION_NOTICE);
 }
 
 /// Migrate a `model.json` into the genesis batch of a `<name>.event-log.jsonl` written alongside it —
@@ -403,6 +429,44 @@ fn parse_serve(args: &[String]) -> (String, u16) {
     (model, port)
 }
 
+/// The output formats `export` can emit. Only `Mermaid` today; the enum exists so the `--format`
+/// dispatch grows without reshaping — F-model-export's `model` and F-narrative-export's `narrative`
+/// slot in here.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Format {
+    Mermaid,
+}
+
+/// `export [SOURCE] [--format FMT]`. Positional source defaults to `model.json`; `--format` defaults
+/// to `mermaid`. An unknown format fails loudly (exit 2) rather than being misread as a source path,
+/// mirroring `parse_serve`'s handling of `-p`.
+fn parse_export(args: &[String]) -> (String, Format) {
+    let mut source = "model.json".to_string();
+    let mut format = Format::Mermaid;
+    let mut i = 0;
+    while i < args.len() {
+        if matches!(args[i].as_str(), "-f" | "--format") {
+            match args.get(i + 1).map(String::as_str) {
+                Some("mermaid") => format = Format::Mermaid,
+                Some(other) => {
+                    eprintln!("unknown export format: {other}\n(supported: mermaid)");
+                    exit(2);
+                }
+                None => {
+                    eprintln!("--format needs a value\n(supported: mermaid)");
+                    exit(2);
+                }
+            }
+            i += 2;
+        } else {
+            reject_flag(&args[i]);
+            source = args[i].clone();
+            i += 1;
+        }
+    }
+    (source, format)
+}
+
 fn print_help() {
     println!(
         "faceto {} — a typed file → a visual workshop board you think through with an LLM\n\
@@ -411,6 +475,7 @@ fn print_help() {
          \x20 faceto render  [SOURCE]            write <name>.svg + <name>.html next to SOURCE\n\
          \x20 faceto lint    [SOURCE]            check the board against the ES-grammar rules (warn-only)\n\
          \x20 faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar (default :8753)\n\
+         \x20 faceto export  [SOURCE] [--format mermaid]  print the board as Mermaid text to stdout (lossy)\n\
          \x20 faceto genesis [MODEL]             migrate a model.json into a <name>.event-log.jsonl\n\
          \x20 faceto compact [LOG]               fold a log to a snapshot, bounding replay (default model.event-log.jsonl)\n\
          \x20 faceto help | version\n\
