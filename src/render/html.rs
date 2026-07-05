@@ -14,16 +14,19 @@ pub fn render_html(svg: &str, title: &str) -> String {
         "{{\"colW\":{},\"stickyW\":{},\"stickyH\":{},\"rowPitch\":{},\"laneVpad\":{},\"regionTabH\":{},\"regionTabCharW\":{},\"regionTabPad\":{}}}",
         COL_W, STICKY_W, STICKY_H, ROW_PITCH, LANE_VPAD, REGION_TAB_H, REGION_TAB_CHAR_W, REGION_TAB_PAD
     );
-    // Fill the placeholders in a single left-to-right pass, so a *value* that happens to contain
-    // another placeholder token (a sticky or region labelled `__CONFIG__`, a title of `__SVG__`)
-    // is inserted verbatim and never re-scanned. A naive chain of `.replace` inserts the SVG first
-    // and then lets the later `__CONFIG__` pass rewrite that label's text into the config JSON.
+    // Two-stage fill. `__CONFIG__` lives *inside* the client script, so it must be resolved before
+    // the script is inserted into the shell: `fill_template` never re-scans an inserted value (so a
+    // sticky/region labelled `__CONFIG__` can't be clobbered), which means a `__CONFIG__` left in the
+    // `__SCRIPT__` value would survive un-substituted. Stage 1 folds the config into the concatenated
+    // modules; stage 2 drops the resolved script (plus style/svg/title) into the shell in one pass.
+    let script = fill_template(CLIENT_JS, &[("__CONFIG__", &cfg)]);
     fill_template(
         HTML_TEMPLATE,
         &[
             ("__TITLE__", &esc(title)),
             ("__SVG__", svg),
-            ("__CONFIG__", &cfg),
+            ("__STYLE__", STYLE_CSS),
+            ("__SCRIPT__", &script),
         ],
     )
 }
@@ -55,6 +58,25 @@ pub(crate) fn fill_template(template: &str, subs: &[(&str, &str)]) -> String {
 }
 
 pub(crate) const HTML_TEMPLATE: &str = include_str!("../template.html");
+
+/// The board's CSS, extracted from the inline `<style>` block into its own file (F-js-modules).
+pub(crate) const STYLE_CSS: &str = include_str!("../client/style.css");
+
+/// The board's client, split into cohesive modules and concatenated back into one classic script at
+/// build time (F-js-modules). No bundler ships — `concat!` glues the `include_str!`'d modules in
+/// source order, so the result is one shared top-level scope, byte-identical to the former inline
+/// `<script>`. Order is load-bearing: top-level `const`/`let` (e.g. `const CFG = __CONFIG__`) are
+/// TDZ-bound and the boot `load()` in `main.js` must run last — keep this list in file order.
+pub(crate) const CLIENT_JS: &str = concat!(
+    include_str!("../client/core.js"),
+    include_str!("../client/layout.js"),
+    include_str!("../client/drag.js"),
+    include_str!("../client/edit.js"),
+    include_str!("../client/region.js"),
+    include_str!("../client/sync.js"),
+    include_str!("../client/graph.js"),
+    include_str!("../client/main.js"),
+);
 
 #[cfg(test)]
 mod tests {
