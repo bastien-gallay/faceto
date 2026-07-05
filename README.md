@@ -1,4 +1,11 @@
-<!-- markdownlint-disable MD013 MD033 -->
+<!-- markdownlint-disable MD013 MD033 MD041 -->
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/faceto-logo/faceto-wordmark-white.svg">
+    <img src="docs/faceto-logo/faceto-wordmark-ink.svg" alt="faceto" width="220">
+  </picture>
+</p>
 
 # faceto
 
@@ -164,7 +171,7 @@ cargo clippy --all-targets -- -D warnings         # lints
 ```
 
 These mirror CI, which also runs the test + clippy matrix on macOS, Windows, and Linux. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the (one) hard rule and [CLAUDE.md](CLAUDE.md) for the
+[CONTRIBUTING.md](CONTRIBUTING.md) for the (one) hard rule and [AGENTS.md](AGENTS.md) for the
 architecture and domain invariants.
 
 ## Status

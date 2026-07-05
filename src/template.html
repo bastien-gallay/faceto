@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
+<!-- faceto mark: the octagon that replaces the "o" (docs/faceto-logo). Inlined SVG data URI —
+     no extra request, honours zero-dep. Explicit orange (lane-event #FF9F1C, the accent slot)
+     since a favicon inherits no page colour in tab chrome. -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCA5NiA5Nic+PHBvbHlnb24gcG9pbnRzPSc4MC44MCw2MS41OSA2MS41OSw4MC44MCAzNC40MSw4MC44MCAxNS4yMCw2MS41OSAxNS4yMCwzNC40MSAzNC40MSwxNS4yMCA2MS41OSwxNS4yMCA4MC44MCwzNC40MScgZmlsbD0nbm9uZScgc3Ryb2tlPScjRkY5RjFDJyBzdHJva2Utd2lkdGg9JzknIHN0cm9rZS1saW5lam9pbj0nbWl0ZXInLz48L3N2Zz4=">
 <style>
   /* Nameplate: the one serif in the system, for the board title only — the engraved maker's
      mark on the optical bench (DESIGN.md §3). All system fonts; nothing is downloaded. */
@@ -1145,20 +1149,47 @@ async function load() {
 // stable identity, so focus survives the swap by id — and restoring it re-fires onfocus, which
 // brings the spotlight and the keyboard claim back with it.
 let suppressFocusNote = false;   // true while re-focusing after a board swap — see onfocus
+// Minimal scroll delta (or null) to bring a focused box back inside the board viewport. Rects are
+// client coords {left,top,right,bottom}. Returns null when the box is already fully visible so an
+// ordinary swap keeps its pan untouched; only a box that left the frame (e.g. a move at the edge)
+// gets revealed. Positive dLeft/dTop scroll toward the box; add them to scrollLeft/scrollTop.
+function revealScroll(el, view) {
+  let dLeft = 0, dTop = 0;
+  if (el.right > view.right) dLeft = el.right - view.right;
+  else if (el.left < view.left) dLeft = el.left - view.left;
+  if (el.bottom > view.bottom) dTop = el.bottom - view.bottom;
+  else if (el.top < view.top) dTop = el.top - view.top;
+  return dLeft || dTop ? { dLeft, dTop } : null;
+}
 function swapBoard(html) {
   // Focus survives the swap by stable identity — a sticky by id, a region tab by data-region — so a
   // repeated keyboard edit (arrow-move, Shift+arrow region resize) doesn't die after every commit.
+  const board = $("#board");
   const ae = document.activeElement;
   const sticky = ae?.classList?.contains("sticky") ? ae.id : null;
   const region = ae?.classList?.contains("region-tab") ? ae.dataset.region : null;
-  $("#board").innerHTML = html;
+  // The wholesale innerHTML swap resets the scroll box to top-left; snapshot the pan so an edit
+  // doesn't yank the board away from where the eye already is, and restore it after re-bind.
+  const { scrollLeft, scrollTop } = board;
+  board.innerHTML = html;
   bindStickies();
   // Suppress the focus connection-count note so it can't clobber an action confirmation
   // ("moved", "renamed", "region resized") that the swap is landing.
   suppressFocusNote = true;
-  if (sticky) document.getElementById(sticky)?.focus();
-  else if (region) document.querySelector(`.region-tab[data-region="${region}"]`)?.focus();
+  // preventScroll so restoring focus doesn't fight the scroll restore below.
+  if (sticky) document.getElementById(sticky)?.focus({ preventScroll: true });
+  else if (region) document.querySelector(`.region-tab[data-region="${region}"]`)?.focus({ preventScroll: true });
   suppressFocusNote = false;
+  board.scrollLeft = scrollLeft;
+  board.scrollTop = scrollTop;
+  // Preserving the pan can strand a box the swap just moved outside the viewport (an edge move
+  // leaves it focused but off-screen, so the next ←/→ acts on something unseen). Reveal the focused
+  // box only when it actually left the frame — ordinary swaps keep their restored pan.
+  const focused = document.activeElement;
+  if (focused && focused !== board && board.contains(focused)) {
+    const d = revealScroll(focused.getBoundingClientRect(), board.getBoundingClientRect());
+    if (d) { board.scrollLeft += d.dLeft; board.scrollTop += d.dTop; }
+  }
 }
 
 // Redraw the plain current board (own edit just landed): advance the baseline silently and let
@@ -1254,6 +1285,23 @@ function hoverOff() {
   document.querySelectorAll(".edge.hl").forEach((p) => p.classList.remove("hl"));
   document.querySelectorAll(".sticky.adj").forEach((g) => g.classList.remove("adj"));
 }
+// Which box the connector spotlight belongs to, in priority order: the box under the cursor, else
+// the focused sticky, else the box being renamed inline (its editor holds focus, but the box is
+// still the selection). null clears the spotlight. Pure so the precedence is testable and lives in
+// exactly one place — the four sticky handlers below all recompute the owner through it.
+function spotlightOwnerOf(hoverId, focusedStickyId, renamingId) {
+  return hoverId || focusedStickyId || renamingId || null;
+}
+// Recompute the spotlight from the current owner: clear, then light whoever owns it. Called on every
+// hover/focus transition so only one box is ever lit and an empty-space blur clears it (deselect).
+function relightSpotlight() {
+  hoverOff();
+  const ae = document.activeElement;
+  const focused = ae?.classList?.contains("sticky") ? ae.id : null;
+  const renamingSticky = renaming && !renaming.region ? renaming.id : null;
+  const id = spotlightOwnerOf(hoverId, focused, renamingSticky);
+  if (id) hoverOn(id);
+}
 function bindStickies() {
   // A board swap detaches every old node: the hovered box never fires its mouseleave and a
   // captured drag never delivers its pointerup — clear the stale hover/gesture state here or a
@@ -1272,7 +1320,7 @@ function bindStickies() {
     g.ondblclick = () => startRename(g);
     g.onpointerdown = startStickyDrag;
     g.onmouseenter = () => {
-      hoverId = g.id; hoverOn(g.id);
+      hoverId = g.id; relightSpotlight();
       if (gestureBusy()) return;   // an open edit / drag owns the board — no action glyphs meanwhile
       const r = g.getBoundingClientRect();
       showPlus(r.right + 4, r.top + r.height / 2 - 11,
@@ -1282,12 +1330,10 @@ function bindStickies() {
                                                       // left-face arrowhead of any incoming edge)
     };
     g.onmouseleave = () => {
+      // The spotlight follows the mouse, but a focused (or being-renamed) box keeps its claim:
+      // drifting off a clicked box must not read as losing it. relightSpotlight re-lights that owner.
       if (hoverId === g.id) hoverId = null;
-      hoverOff(); hidePlusSoon(); removeXBtn.hideSoon(); commentBtn.hideSoon();
-      // The spotlight follows the mouse, but a focused sticky keeps its claim visible: drifting
-      // off a clicked box must not read as losing it (the keyboard still answers to it).
-      const f = document.activeElement;
-      if (f?.classList?.contains("sticky")) hoverOn(f.id);
+      relightSpotlight(); hidePlusSoon(); removeXBtn.hideSoon(); commentBtn.hideSoon();
     };
     // Keyboard parity with the mouse: focusing a sticky makes it the ← / → move target (same as
     // hover) and spotlights its connectors; Enter / Space opens its comment dialog.
@@ -1295,12 +1341,18 @@ function bindStickies() {
     // dense board has a legend ("5 connections") instead of being impressive but unreadable. Once
     // per deliberate selection, never on hover, and skipped on swap-refocus (see swapBoard).
     g.onfocus = () => {
-      hoverId = g.id; hoverOn(g.id);
+      hoverId = g.id; relightSpotlight();
       if (suppressFocusNote) return;
       const n = (adj[g.id] || new Set()).size;
       note(n ? `${n} connection${n === 1 ? "" : "s"}` : "no connections");
     };
-    g.onblur = () => { if (hoverId === g.id) { hoverId = null; hoverOff(); } };
+    g.onblur = () => {
+      // Focus left this box. Recompute the spotlight owner: if nobody is hovering, focused, or
+      // renaming, it clears — so clicking empty space deselects (#45). The old `hoverId === g.id`
+      // guard skipped clearing whenever the mouse had already drifted off, leaving it stuck.
+      if (hoverId === g.id) hoverId = null;
+      relightSpotlight();
+    };
     g.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openModal(g); }
     };
