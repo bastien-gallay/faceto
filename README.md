@@ -125,12 +125,7 @@ offline — comments queue in `localStorage`, and **Export comments** keeps anyt
 
 ## Reload shows what changed
 
-<!--
-  TODO(diff-loop capture): the hero above proves faceto *renders* a board; this is the section that
-  needs a second visual to prove it *shows what changed*. Capture a GIF of annotate → Reload → diff
-  overlay and drop it in here. Once docs/diff-loop.gif exists, uncomment:
-  <p align="center"><img src="docs/diff-loop.gif" alt="Annotating a sticky, then hitting Reload to see the diff overlay highlight the added, changed and moved stickies." width="100%"></p>
--->
+<p align="center"><img src="docs/diff-loop.gif" alt="Annotating a sticky, then hitting Reload to see the diff overlay highlight the added, changed and moved stickies." width="100%"></p>
 
 **Reload** re-pulls the log and, when it has grown under you, redraws the board with a **diff
 overlay against the version you were just looking at** — no git, no page reload. Joined on `id`: a
@@ -177,9 +172,8 @@ architecture and domain invariants.
 ## Status
 
 Extracted from the daily-ops inception event-storm harness. The event-sourced spine is the current
-shape: the log is truth, the model is a projection, comments are events. Next: more board formats, a
-`reorder` affordance (per-sticky nudge + backward-edge contradiction styling), and a short animated
-capture of the live click→note→diff loop (slot reserved under [Reload shows what changed](#reload-shows-what-changed)).
+shape: the log is truth, the model is a projection, comments are events. Next: more board formats and
+a `reorder` affordance (per-sticky nudge + backward-edge contradiction styling).
 Also planned: a `model.json` **export** (project the log back to a source file) — see
 [ROADMAP.md](ROADMAP.md). The **runtime-only** dependency policy (dev-deps free + a binary-size
 budget) has since landed.

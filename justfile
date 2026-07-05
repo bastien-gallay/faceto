@@ -63,6 +63,19 @@ binary-size:
     fi
     echo "binary-size OK: under the ${ceiling}-byte budget"
 
+# Serve a throwaway copy of the sample board so the README diff-loop GIF can be
+# recaptured without dirtying tracked files. The capture + ffmpeg steps live in
+# docs/regen-diff-loop-gif.md; this recipe is just the one-command board to drive.
+demo-serve port="8753":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release
+    work="$(mktemp -d)"
+    cp examples/sample.model.json "$work/board.model.json"
+    echo "serving a throwaway board from $work on http://127.0.0.1:{{ port }}"
+    echo "(Ctrl-C to stop; the temp dir and its event log are discarded.)"
+    exec ./target/release/faceto serve "$work/board.model.json" -p {{ port }}
+
 # Lint the GitHub Actions workflow files.
 actionlint:
     actionlint
