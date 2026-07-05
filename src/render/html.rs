@@ -64,17 +64,28 @@ pub(crate) const STYLE_CSS: &str = include_str!("../client/style.css");
 
 /// The board's client, split into cohesive modules and concatenated back into one classic script at
 /// build time (F-js-modules). No bundler ships — `concat!` glues the `include_str!`'d modules in
-/// source order, so the result is one shared top-level scope, byte-identical to the former inline
-/// `<script>`. Order is load-bearing: top-level `const`/`let` (e.g. `const CFG = __CONFIG__`) are
-/// TDZ-bound and the boot `load()` in `main.js` must run last — keep this list in file order.
+/// source order, so the result is one shared top-level scope, behaviour-identical to the former
+/// inline `<script>` (only inter-module blank lines differ). A `"\n"` between every module makes the
+/// seam robust: even a module saved without a trailing newline can't glue its last line (e.g. a
+/// `//` comment) onto the next module's first statement. Order is load-bearing: top-level
+/// `const`/`let` (e.g. `const CFG = __CONFIG__`) are TDZ-bound and the boot `load()` in `main.js`
+/// must run last — keep this list in file order. `tests/js/board-logic.test.mjs` joins the same
+/// modules with the same `"\n"`, so the source it lifts from matches what ships.
 pub(crate) const CLIENT_JS: &str = concat!(
     include_str!("../client/core.js"),
+    "\n",
     include_str!("../client/layout.js"),
+    "\n",
     include_str!("../client/drag.js"),
+    "\n",
     include_str!("../client/edit.js"),
+    "\n",
     include_str!("../client/region.js"),
+    "\n",
     include_str!("../client/sync.js"),
+    "\n",
     include_str!("../client/graph.js"),
+    "\n",
     include_str!("../client/main.js"),
 );
 

@@ -118,8 +118,9 @@ the log). Seven modules, each one stage (`json`/`model`/`lint` are single files;
   is a thin shell (head, static body DOM, four placeholders); the CSS and the ~1.3k lines of JS live
   in sibling files, split into cohesive modules (`core` → `layout` → `drag` → `edit` → `region` →
   `sync` → `graph` → `main`). `src/render/html.rs` `include_str!`s them all and `concat!`s the JS
-  modules — in that order — back into one classic `<script>` at build time (no bundler ships; the
-  concatenation is one shared scope, byte-identical to the former inline script). `render_html` then
+  modules — in that order, `"\n"`-separated — back into one classic `<script>` at build time (no
+  bundler ships; the concatenation is one shared scope, behaviour-identical to the former inline
+  script). `render_html` then
   does a two-stage fill: `__CONFIG__` into the script first (single-pass fill never re-scans an
   inserted value), then `__STYLE__` / `__SCRIPT__` / `__SVG__` / `__TITLE__` into the shell. The
   client polls `/model-version`, swaps in diff/plain SVGs, and posts comments/structural ops (falling
