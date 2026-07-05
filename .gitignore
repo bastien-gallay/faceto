@@ -1,9 +1,10 @@
 /target
 **/*.rs.bk
 
-# generated boards live next to the model file
-board.svg
-index.html
+# generated boards live next to the model file, named after the source
+# (orders.model.json → orders.svg / orders.html); the example sources render here
+/examples/*.svg
+/examples/*.html
 comments.jsonl
 
 # editor / OS

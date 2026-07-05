@@ -32,9 +32,9 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 npx markdownlint-cli2 "**/*.md"
 
-faceto render examples/sample.model.json    # → board.svg + index.html
+faceto render examples/sample.model.json    # → sample.svg + sample.html
 faceto serve  examples/sample.model.json    # → live board at 127.0.0.1:8753
-faceto genesis examples/sample.model.json   # → event-log.jsonl from a model
+faceto genesis examples/sample.model.json   # → sample.event-log.jsonl from a model
 ```
 
 A local `.pre-commit-config.yaml` runs these gates automatically — install it

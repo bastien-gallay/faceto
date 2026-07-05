@@ -32,7 +32,7 @@ No network, no crates to download — it builds from the standard library alone.
 ## 30-second tour
 
 ```bash
-faceto render examples/sample.model.json   # writes board.svg + index.html next to the model
+faceto render examples/sample.model.json   # writes sample.svg + sample.html next to the model
 open examples/index.html                   # the board above, straight from that render
 
 faceto lint  examples/sample.model.json    # event-storming grammar findings (warn-only, exits 0)
@@ -82,12 +82,12 @@ replayed from that log, and comments are **first-class events**. `faceto genesis
 model into its founding log:
 
 ```bash
-faceto genesis examples/sample.model.json   # → examples/event-log.jsonl (one-time)
-faceto render  examples/event-log.jsonl     # render/serve also accept a log (by extension)
-faceto compact examples/event-log.jsonl     # fold history to a snapshot, bounding replay
+faceto genesis examples/sample.model.json      # → examples/sample.event-log.jsonl (one-time)
+faceto render  examples/sample.event-log.jsonl # render/serve also accept a log (by extension)
+faceto compact examples/sample.event-log.jsonl # fold history to a snapshot, bounding replay
 ```
 
-Each line is one event — a slice of the generated [`examples/event-log.jsonl`](examples/event-log.jsonl):
+Each line is one event — a slice of the generated [`examples/sample.event-log.jsonl`](examples/sample.event-log.jsonl):
 
 ```jsonl
 {"event":"BoardTitled","title":"faceto — sample board"}
@@ -99,8 +99,9 @@ Each line is one event — a slice of the generated [`examples/event-log.jsonl`]
 ```
 
 `replay` is pure and deterministic: same log → same board. The schema evolves *additively* (new
-optional fields, new event kinds) so old and new logs stay mutually replayable. `event-log.jsonl`
-is **tracked** in git; the rendered `board.svg` / `index.html` are derived and ignored. The full
+optional fields, new event kinds) so old and new logs stay mutually replayable. The
+`<name>.event-log.jsonl` is **tracked** in git; the rendered `<name>.svg` / `<name>.html` are
+derived and ignored. The full
 rationale — compaction, forward/backward compatibility, the locked decisions — lives in
 [`docs/event-sourcing-status.md`](docs/event-sourcing-status.md).
 
