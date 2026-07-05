@@ -43,6 +43,7 @@ jobs:
       markdown: ${{ steps.filter.outputs.markdown }}
       workflows: ${{ steps.filter.outputs.workflows }}
       just: ${{ steps.filter.outputs.just }}
+      js: ${{ steps.filter.outputs.js }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
@@ -64,6 +65,11 @@ jobs:
               - '.github/workflows/**'
             just:
               - 'justfile'
+            js:
+              # The board client's pure helpers are checked in plain node (tests/js/), and the
+              # tests lift those helpers out of template.html — so either changing re-runs them.
+              - 'tests/js/**'
+              - 'src/template.html'
 
   fmt:
     name: rustfmt
@@ -196,6 +202,20 @@ jobs:
             exit 1
           fi
           echo "Release binary is within the size budget."
+
+  # Required check `client-logic (node)`. The board client (src/template.html) has pure helpers
+  # checked in plain node — see tests/js/. Runs when the template or those tests change. Node is
+  # preinstalled on ubuntu-latest and the tests use only std node APIs (no npm, no dependency), so
+  # the zero-dependency promise is untouched. Static name so a skip counts as a passing required
+  # check, matching the Rust jobs above.
+  test-js:
+    name: client-logic (node)
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: node tests/js/board-logic.test.mjs
 
   markdown:
     name: markdownlint
