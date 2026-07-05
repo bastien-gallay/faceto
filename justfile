@@ -63,6 +63,17 @@ binary-size:
     fi
     echo "binary-size OK: under the ${ceiling}-byte budget"
 
+# Reconcile ROADMAP.md from the board/issues: rewrite Status + Horizon columns, keep prose.
+# Run before starting work. Needs `gh` (project scope). Board is canonical for priority/horizon.
+# Stdlib-only, so plain python3 — same as CI; no uv/venv needed.
+sync-roadmap:
+    python3 scripts/sync_roadmap.py
+
+# Report roadmap↔board↔issue drift without writing (nonzero exit on drift). Parser selftest first.
+roadmap-check:
+    python3 scripts/sync_roadmap.py --selftest
+    python3 scripts/sync_roadmap.py --check
+
 # Serve a throwaway copy of the sample board so the README diff-loop GIF can be
 # recaptured without dirtying tracked files. The capture + ffmpeg steps live in
 # docs/regen-diff-loop-gif.md; this recipe is just the one-command board to drive.
