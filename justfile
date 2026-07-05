@@ -74,6 +74,20 @@ roadmap-check:
     python3 scripts/sync_roadmap.py --selftest
     python3 scripts/sync_roadmap.py --check
 
+# Serve a throwaway copy of the sample board so the README diff-loop GIF can be
+# recaptured without dirtying tracked files. The capture + ffmpeg steps live in
+# docs/regen-diff-loop-gif.md; this recipe is just the one-command board to drive.
+demo-serve port="8753":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT INT TERM
+    cp examples/sample.model.json "$work/board.model.json"
+    echo "serving a throwaway board from $work on http://127.0.0.1:{{ port }}"
+    echo "(Ctrl-C to stop; the temp dir and its event log are removed on exit.)"
+    ./target/release/faceto serve "$work/board.model.json" -p {{ port }}
+
 # Lint the GitHub Actions workflow files.
 actionlint:
     actionlint
