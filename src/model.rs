@@ -42,7 +42,7 @@ pub fn level_to_str(level: Level) -> &'static str {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Phase {
     /// Stable identity (the diff join key and the target of resize/rename/remove). A region is a
     /// labelled vertical band; an element belongs to it spatially (its `col` falls inside the
@@ -55,7 +55,7 @@ pub struct Phase {
     pub diff: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Was {
     pub label: String,
     pub col: Option<i64>,
@@ -63,7 +63,7 @@ pub struct Was {
     pub y: Option<f64>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Element {
     pub id: String,
     pub kind: String,
@@ -80,14 +80,14 @@ pub struct Element {
     pub was: Option<Was>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Edge {
     pub src: String,
     pub dst: String,
     pub status: Option<String>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Debug)]
 pub struct Model {
     pub title: String,
     /// Modeling granularity — `BigPicture` (default) or `Design`. Read by `crate::lint` to decide

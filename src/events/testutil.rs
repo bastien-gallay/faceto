@@ -39,16 +39,19 @@ const TEXTS: &[&str] = &["Paid", "ItemAdded", "  spaced  ", "", "   ", "\t"];
 const COMMENT_KINDS: &[&str] = &["rename", "move", "drop", "comment", "resolve"];
 
 /// One posted comment over the fixed `genesis` board. Picks an element id, a kind, and a text
-/// (deliberately including blanks to stress the blank-label guard), plus a `col` used only by
-/// `move`. Fold a `vec` of these through `comment_to_events` to drive the comment property tests.
+/// (deliberately including blanks to stress the blank-label guard), plus a `col` and an optional
+/// in-lane `y` — both used only by `move`. `y` reaches for `None` on purpose so the generator
+/// exercises both a col-only nudge and a 2D placement, so the compact round-trip property actually
+/// covers the `y`-carry seam (`from_model`'s `y: e.y`), not just `col`.
 pub(crate) fn comment_strategy() -> impl Strategy<Value = Json> {
     (
         prop::sample::select(vec!["E1", "E2", "C1", "A1", "H1"]),
         prop::sample::select(COMMENT_KINDS.to_vec()),
         prop::sample::select(TEXTS.to_vec()),
         0i64..6,
+        prop::option::of(0.0f64..1.0),
     )
-        .prop_map(|(id, kind, text, col)| {
+        .prop_map(|(id, kind, text, col, y)| {
             let mut o = vec![
                 ("elemId".to_string(), Json::Str(id.to_string())),
                 ("kind".to_string(), Json::Str(kind.to_string())),
@@ -56,6 +59,9 @@ pub(crate) fn comment_strategy() -> impl Strategy<Value = Json> {
             ];
             if kind == "move" {
                 o.push(("col".to_string(), Json::Num(col as f64)));
+                if let Some(y) = y {
+                    o.push(("y".to_string(), Json::Num(y)));
+                }
             }
             Json::Obj(o)
         })
@@ -88,7 +94,7 @@ pub(crate) fn phase_log_strategy() -> impl Strategy<Value = Vec<Event>> {
             edge_start,
         },
     );
-    prop::collection::vec(op, 1..12).prop_map(build_phase_log)
+    prop::collection::vec(op, 1..=12).prop_map(build_phase_log)
 }
 
 fn build_phase_log(ops: Vec<PhaseOp>) -> Vec<Event> {
