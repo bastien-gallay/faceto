@@ -1,0 +1,150 @@
+{"event":"BoardTitled","title":"faceto — event-sourced (the log is truth; the model is a projection replayed from it)"}
+{"event":"PhaseAdded","id":"K1","label":"author","fromCol":0,"toCol":1}
+{"event":"PhaseAdded","id":"K2","label":"persist","fromCol":2,"toCol":3}
+{"event":"PhaseAdded","id":"K3","label":"project","fromCol":4,"toCol":5}
+{"event":"PhaseAdded","id":"K4","label":"serve","fromCol":6,"toCol":7}
+{"event":"PhaseAdded","id":"K5","label":"maintain","fromCol":8,"toCol":9}
+{"event":"ElementAdded","id":"X1","type":"actor","label":"Author (thinks with an LLM)","col":0,"y":0.2}
+{"event":"ElementAdded","id":"X2","type":"actor","label":"LLM collaborator","col":0,"y":0.7}
+{"event":"ElementAdded","id":"A3","type":"aggregate","label":"Board (title, level)","col":0,"y":0.25}
+{"event":"ElementAdded","id":"A2","type":"aggregate","label":"Element (stable id = identity)","col":1,"y":0.25}
+{"event":"ElementAdded","id":"A4","type":"aggregate","label":"Region partition (Phases)","col":1,"y":0.7}
+{"event":"ElementAdded","id":"A1","type":"aggregate","label":"EventLog (append-only spine)","col":2,"y":0.5}
+{"event":"ElementAdded","id":"C1","type":"command","label":"add element","col":1,"y":0.05}
+{"event":"ElementAdded","id":"C2","type":"command","label":"rename element","col":1,"y":0.16}
+{"event":"ElementAdded","id":"C3","type":"command","label":"move element (col / y)","col":1,"y":0.27}
+{"event":"ElementAdded","id":"C4","type":"command","label":"annotate element (click → comment)","col":1,"y":0.38}
+{"event":"ElementAdded","id":"C5","type":"command","label":"resolve hotspot","col":1,"y":0.49}
+{"event":"ElementAdded","id":"C6","type":"command","label":"remove element (drop)","col":1,"y":0.6}
+{"event":"ElementAdded","id":"C7","type":"command","label":"connect / disconnect (edge)","col":1,"y":0.71}
+{"event":"ElementAdded","id":"C12","type":"command","label":"set board title / level","col":0,"y":0.55}
+{"event":"ElementAdded","id":"C8","type":"command","label":"add / split region","col":0,"y":0.72}
+{"event":"ElementAdded","id":"C9","type":"command","label":"move region frontier","col":0,"y":0.83}
+{"event":"ElementAdded","id":"C10","type":"command","label":"rename / remove region","col":0,"y":0.94}
+{"event":"ElementAdded","id":"C11","type":"command","label":"rebuild model (replay log)","col":4,"y":0.5}
+{"event":"ElementAdded","id":"C13","type":"command","label":"render / lint (read-only replay)","col":8,"y":0.75}
+{"event":"ElementAdded","id":"C14","type":"command","label":"compact log → snapshot","col":8,"y":0.35}
+{"event":"ElementAdded","id":"C15","type":"command","label":"genesis: migrate model.json → log","col":9,"y":0.35}
+{"event":"ElementAdded","id":"E5","type":"event","label":"ElementAdded","col":2,"y":0.03}
+{"event":"ElementAdded","id":"E3","type":"event","label":"ElementRenamed","col":2,"y":0.13}
+{"event":"ElementAdded","id":"E4","type":"event","label":"ElementMoved (col / y)","col":2,"y":0.23}
+{"event":"ElementAdded","id":"E2","type":"event","label":"ElementAnnotated (the former comment)","col":2,"y":0.33}
+{"event":"ElementAdded","id":"E6","type":"event","label":"HotspotResolved","col":2,"y":0.43}
+{"event":"ElementAdded","id":"E10","type":"event","label":"ElementRemoved","col":2,"y":0.53}
+{"event":"ElementAdded","id":"E11","type":"event","label":"EdgeAdded / EdgeRemoved","col":2,"y":0.63}
+{"event":"ElementAdded","id":"E12","type":"event","label":"PhaseAdded / PhaseSplit","col":2,"y":0.73}
+{"event":"ElementAdded","id":"E13","type":"event","label":"FrontierMoved","col":2,"y":0.83}
+{"event":"ElementAdded","id":"E14","type":"event","label":"PhaseRenamed / PhaseRemoved","col":2,"y":0.93}
+{"event":"ElementAdded","id":"E15","type":"event","label":"BoardTitled / BoardLeveled","col":3,"y":0.15}
+{"event":"ElementAdded","id":"E7","type":"event","label":"EventAppended (one JSONL line)","col":3,"y":0.5}
+{"event":"ElementAdded","id":"E8","type":"event","label":"ModelProjected (replayed from log)","col":4,"y":0.2}
+{"event":"ElementAdded","id":"E9","type":"event","label":"LogCompacted (history folded away)","col":8,"y":0.55}
+{"event":"ElementAdded","id":"P1","type":"policy","label":"on a successful command, append its event","col":3,"y":0.35}
+{"event":"ElementAdded","id":"P5","type":"policy","label":"on read: skip unknown kinds (fwd compat), upcast a renamed kind (bwd compat)","col":4,"y":0.5}
+{"event":"ElementAdded","id":"P4","type":"policy","label":"a frontier move re-borders its neighbour — the partition stays gap-free (normalize)","col":3,"y":0.7}
+{"event":"ElementAdded","id":"P2","type":"policy","label":"on append, re-project on next read (cache keyed on log hash)","col":4,"y":0.8}
+{"event":"ElementAdded","id":"P6","type":"policy","label":"lint the model on read; suppress a finding once its element is resolved","col":6,"y":0.72}
+{"event":"ElementAdded","id":"P3","type":"policy","label":"client polls /model-version; on change, swap the SVG","col":6,"y":0.35}
+{"event":"ElementAdded","id":"P7","type":"policy","label":"when the log grows past threshold, compact","col":8,"y":0.15}
+{"event":"ElementAdded","id":"R1","type":"readmodel","label":"Model (board projection)","col":5,"y":0.2}
+{"event":"ElementAdded","id":"R2","type":"readmodel","label":"board.svg / index.html","col":5,"y":0.5}
+{"event":"ElementAdded","id":"R3","type":"readmodel","label":"model-version (fnv12 content hash)","col":6,"y":0.15}
+{"event":"ElementAdded","id":"R4","type":"readmodel","label":"diff overlay (?base=hash, 12-deep ring)","col":7,"y":0.25}
+{"event":"ElementAdded","id":"R5","type":"readmodel","label":"comments sidebar (annotations + lint findings)","col":7,"y":0.55}
+{"event":"ElementAdded","id":"R6","type":"readmodel","label":"element history (its own events)","col":7,"y":0.82}
+{"event":"ElementAdded","id":"G1","type":"external","label":"event-log.jsonl (durable, git-tracked)","col":3,"y":0.5}
+{"event":"ElementAdded","id":"G4","type":"external","label":"std TcpListener + threads (no framework)","col":6,"y":0.5}
+{"event":"ElementAdded","id":"G3","type":"external","label":"browser client","col":7,"y":0.1}
+{"event":"ElementAdded","id":"G2","type":"external","label":"model.json (derived / bootstrap, gitignored)","col":9,"y":0.6}
+{"event":"ElementAdded","id":"H6","type":"hotspot","label":"Who mints ids for added elements & regions?","col":1,"y":0.88}
+{"event":"HotspotResolved","id":"H6","resolution":"Ids are minted server-side, never by the client: <PREFIX><N>, one past the highest suffix ever added under that lane's prefix in the log (removed-but-not-compacted ids stay reserved), computed under the appends lock so concurrent adds can't collide. Regions share the rule via resolve_region_id (K<n>)."}
+{"event":"ElementAdded","id":"H3","type":"hotspot","label":"Event schema versioning / migration over time","col":2,"y":0.5}
+{"event":"HotspotResolved","id":"H3","resolution":"Schema grows by additive change (new optional fields ignored, new event kinds skipped on read = forward compat); a renamed event *kind* is migrated forward at events::upcast, the single read-path seam (backward compat), shape-detected so no version counter and no log-format change. Fields evolve additively only. Seeded with CommentAdded/Comment → ElementAnnotated."}
+{"event":"ElementAdded","id":"H4","type":"hotspot","label":"Concurrency: ordering of appends from multiple clients","col":3,"y":0.5}
+{"event":"HotspotResolved","id":"H4","resolution":"All appends serialize through one mutex in serve.rs so concurrent POST /comment handlers never interleave a half-written line and the log's order is causal."}
+{"event":"ElementAdded","id":"H1","type":"hotspot","label":"Replay cost: rebuild per request, or cache the projection?","col":4,"y":0.5}
+{"event":"HotspotResolved","id":"H1","resolution":"Cache the projection: version = fnv12(log bytes); reuse serve.rs's existing ring keyed on the log hash; replay only on a cache miss; compact caps replay length by folding to a snapshot."}
+{"event":"ElementAdded","id":"H2","type":"hotspot","label":"Is model.json a derived snapshot, or gone entirely?","col":9,"y":0.85}
+{"event":"HotspotResolved","id":"H2","resolution":"log-only (pure ES): model.json is derived & gitignored, never hand-edited; the log is the only write path; render & serve replay the log; an existing model.json bootstraps as a genesis batch of events. F-auto-genesis killed the legacy serve-from-model mode entirely."}
+{"event":"ElementAdded","id":"H5","type":"hotspot","label":"Migrate the legacy comments.jsonl inbox into the log","col":3,"y":0.85}
+{"event":"HotspotResolved","id":"H5","resolution":"faceto genesis folds a sibling comments.jsonl after the model's genesis batch: each stored comment maps through events::comment_to_events (the same mapping the live server uses) into ElementAnnotated/HotspotResolved/ElementRenamed/ElementMoved/ElementRemoved. Best-effort: blank/unparseable/elemId-less lines are skipped and counted."}
+{"event":"ElementAdded","id":"H7","type":"hotspot","label":"Can regions overlap or leave holes?","col":0,"y":0.5}
+{"event":"HotspotResolved","id":"H7","resolution":"No. Regions are a contiguous partition of the timeline. Frontier moves set one border and replay's normalize re-borders the neighbour atomically; legacy independent spans (PhaseResized) are projected onto a gap-free, overlap-free partition too. Remove = merge under the partition (the neighbour absorbs the freed columns; a board-end removal extends the outermost survivor)."}
+{"event":"ElementAdded","id":"H8","type":"hotspot","label":"F-region-edge-fold: what happens to edges crossing a collapsed region?","col":7,"y":0.95}
+{"event":"ElementAdded","id":"H9","type":"hotspot","label":"F-region-collapse: fold a region to one summary column?","col":9,"y":0.15}
+{"event":"EdgeAdded","src":"X1","dst":"C1"}
+{"event":"EdgeAdded","src":"X2","dst":"C1"}
+{"event":"EdgeAdded","src":"X1","dst":"C2"}
+{"event":"EdgeAdded","src":"X1","dst":"C3"}
+{"event":"EdgeAdded","src":"X1","dst":"C4"}
+{"event":"EdgeAdded","src":"X2","dst":"C4"}
+{"event":"EdgeAdded","src":"X1","dst":"C5"}
+{"event":"EdgeAdded","src":"X1","dst":"C6"}
+{"event":"EdgeAdded","src":"X1","dst":"C7"}
+{"event":"EdgeAdded","src":"X1","dst":"C8"}
+{"event":"EdgeAdded","src":"X1","dst":"C9"}
+{"event":"EdgeAdded","src":"X1","dst":"C10"}
+{"event":"EdgeAdded","src":"X1","dst":"C12"}
+{"event":"EdgeAdded","src":"C1","dst":"E5"}
+{"event":"EdgeAdded","src":"C2","dst":"E3"}
+{"event":"EdgeAdded","src":"C3","dst":"E4"}
+{"event":"EdgeAdded","src":"C4","dst":"E2"}
+{"event":"EdgeAdded","src":"C5","dst":"E6"}
+{"event":"EdgeAdded","src":"C6","dst":"E10"}
+{"event":"EdgeAdded","src":"C7","dst":"E11"}
+{"event":"EdgeAdded","src":"C8","dst":"E12"}
+{"event":"EdgeAdded","src":"C9","dst":"E13"}
+{"event":"EdgeAdded","src":"C10","dst":"E14"}
+{"event":"EdgeAdded","src":"C12","dst":"E15"}
+{"event":"EdgeAdded","src":"C1","dst":"A2"}
+{"event":"EdgeAdded","src":"C8","dst":"A4"}
+{"event":"EdgeAdded","src":"C12","dst":"A3"}
+{"event":"EdgeAdded","src":"E5","dst":"P1"}
+{"event":"EdgeAdded","src":"E3","dst":"P1"}
+{"event":"EdgeAdded","src":"E4","dst":"P1"}
+{"event":"EdgeAdded","src":"E2","dst":"P1"}
+{"event":"EdgeAdded","src":"E6","dst":"P1"}
+{"event":"EdgeAdded","src":"E10","dst":"P1"}
+{"event":"EdgeAdded","src":"E11","dst":"P1"}
+{"event":"EdgeAdded","src":"E12","dst":"P1"}
+{"event":"EdgeAdded","src":"E13","dst":"P1"}
+{"event":"EdgeAdded","src":"E14","dst":"P1"}
+{"event":"EdgeAdded","src":"E15","dst":"P1"}
+{"event":"EdgeAdded","src":"E13","dst":"P4"}
+{"event":"EdgeAdded","src":"P4","dst":"A4"}
+{"event":"EdgeAdded","src":"P1","dst":"E7"}
+{"event":"EdgeAdded","src":"E7","dst":"A1"}
+{"event":"EdgeAdded","src":"E7","dst":"G1"}
+{"event":"EdgeAdded","src":"E7","dst":"P2"}
+{"event":"EdgeAdded","src":"C11","dst":"A1"}
+{"event":"EdgeAdded","src":"A1","dst":"P5"}
+{"event":"EdgeAdded","src":"P5","dst":"E8"}
+{"event":"EdgeAdded","src":"P2","dst":"E8"}
+{"event":"EdgeAdded","src":"E8","dst":"R1"}
+{"event":"EdgeAdded","src":"R1","dst":"R2"}
+{"event":"EdgeAdded","src":"R1","dst":"R3"}
+{"event":"EdgeAdded","src":"R1","dst":"R4"}
+{"event":"EdgeAdded","src":"R1","dst":"R6"}
+{"event":"EdgeAdded","src":"R1","dst":"P6"}
+{"event":"EdgeAdded","src":"P6","dst":"R5"}
+{"event":"EdgeAdded","src":"E2","dst":"R5"}
+{"event":"EdgeAdded","src":"R3","dst":"P3"}
+{"event":"EdgeAdded","src":"P3","dst":"G3"}
+{"event":"EdgeAdded","src":"G4","dst":"R2"}
+{"event":"EdgeAdded","src":"E7","dst":"P7"}
+{"event":"EdgeAdded","src":"P7","dst":"C14"}
+{"event":"EdgeAdded","src":"C14","dst":"E9"}
+{"event":"EdgeAdded","src":"E9","dst":"A1"}
+{"event":"EdgeAdded","src":"E9","dst":"G2"}
+{"event":"EdgeAdded","src":"C15","dst":"G2"}
+{"event":"EdgeAdded","src":"C15","dst":"A1"}
+{"event":"EdgeAdded","src":"C13","dst":"A1"}
+{"event":"EdgeAdded","src":"H6","dst":"C1"}
+{"event":"EdgeAdded","src":"H3","dst":"A1"}
+{"event":"EdgeAdded","src":"H4","dst":"P1"}
+{"event":"EdgeAdded","src":"H1","dst":"P2"}
+{"event":"EdgeAdded","src":"H2","dst":"G2"}
+{"event":"EdgeAdded","src":"H5","dst":"G1"}
+{"event":"EdgeAdded","src":"H7","dst":"A4"}
+{"event":"EdgeAdded","src":"H8","dst":"R4"}
+{"event":"EdgeAdded","src":"H9","dst":"G2"}
