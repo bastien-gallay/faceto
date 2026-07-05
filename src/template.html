@@ -30,6 +30,11 @@ __STYLE__
 <button id="remove-x" class="hovglyph" type="button" aria-label="remove this element" title="remove this element">×</button>
 <button id="comment-c" class="hovglyph" type="button" aria-label="comment on this element (or press c)" title="comment (c)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5c-3.9 0-7 2.24-7 5 0 1.58 1.02 2.99 2.6 3.9-.14.86-.57 1.8-1.3 2.55 1.35-.14 2.55-.66 3.46-1.38.7.18 1.46.28 2.24.28 3.9 0 7-2.24 7-5.35C15 3.74 11.9 1.5 8 1.5z"/></svg></button>
 <button id="region-x" class="hovglyph" type="button" aria-label="remove this region" title="remove region">×</button>
+<!-- F-edge-connect: the connect handle (a live-pen dot on the selected box's right border) and the
+     drag preview overlay. The dot is a mouse handle (the keyboard path is the e key), so it is
+     aria-hidden and not a tab stop. The overlay is a viewport SVG the wire is drawn into. -->
+<div id="connect-dot" aria-hidden="true"></div>
+<svg id="connect-overlay" aria-hidden="true"><path id="connect-preview"></path></svg>
 <div id="region-drag-guide" aria-hidden="true"></div>
 <div id="lane-grow-guide" aria-hidden="true"></div>
 
@@ -72,10 +77,11 @@ __STYLE__
     <div><kbd>a</kbd> / <kbd>Insert</kbd></div><div class="act">add an element after this one</div>
     <div><kbd>F2</kbd> / dbl-click</div><div class="act">rename in place</div>
     <div><kbd>c</kbd> / <kbd>Enter</kbd></div><div class="act">comment on this box</div>
+    <div><kbd>e</kbd></div><div class="act">connect this box to a target: focus it and press <kbd>Enter</kbd> (again to disconnect), Esc cancels</div>
     <div><kbd>Delete</kbd></div><div class="act">remove — press again to confirm, Esc keeps</div>
     <div><kbd>⌘/Ctrl</kbd> <kbd>Z</kbd></div><div class="act">undo the last move or rename</div>
     <div><kbd>Esc</kbd></div><div class="act">cancel a drag, a rename, or an armed remove</div>
-    <div><kbd>drag</kbd></div><div class="act">a box moves along the timeline; drop on an occupied slot to stack above / below (the lane grows); a frontier drags to re-border two phases</div>
+    <div><kbd>drag</kbd></div><div class="act">a box moves along the timeline; drop on an occupied slot to stack above / below (the lane grows); a frontier drags to re-border two phases; the dot on a selected box's edge pulls a wire to another box to connect (onto a linked box to disconnect)</div>
     <div><kbd>region</kbd></div><div class="act">tab: click renames, <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> resizes, <kbd>Delete</kbd> merges into the neighbour; hover a band to split, empty board to add</div>
     <div><kbd>z</kbd> / ▸▾</div><div class="act">fold a region to a thin band (its own reading lens — not saved to the model); the ▸/▾ on the tab toggles it too</div>
     <div><kbd>?</kbd></div><div class="act">this sheet</div>

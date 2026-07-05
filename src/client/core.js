@@ -7,6 +7,7 @@ const CFG = __CONFIG__;   // { colW, stickyW, stickyH, regionTab… } — geomet
 const STRUCTURAL_KINDS = new Set([
   "move", "add", "drop", "rename", "region-add", "region-rename", "region-remove",
   "frontier-move", "phase-split",   // F-region-frontiers: resize = move a frontier, add = split a phase
+  "connect", "disconnect",          // F-edge-connect: wire / unwire two existing boxes (edge ops)
 ]);
 // Of those, add/drop/region-* have no client-side fallback: there is no id to mint, or nothing to
 // remove/resize/rename locally without a server round-trip. `move` is the one exception — it

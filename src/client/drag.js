@@ -15,7 +15,7 @@ let stickyDrag = null;      // { id, pointerId, startX, startY, startCy, fromCol
                             //   col, frac, moved } while dragging, else null
 // One predicate for "a gesture owns the board" (inline edit, add, either drag): every gesture
 // entry point checks it, so mutual exclusion is one flag added here — not an edit at five sites.
-function gestureBusy() { return !!(renaming || adding || frontierDrag || stickyDrag); }
+function gestureBusy() { return !!(renaming || adding || frontierDrag || stickyDrag || connectDrag || connecting); }
 function hideGlyphs() { document.querySelectorAll(".hovglyph.show").forEach((b) => b.classList.remove("show")); }
 // The column index whose centre is nearest an SVG-space x, searching the occupied span plus one
 // past each end (colCenter interpolates the empty ones at the default pitch) — snap-to-grid.

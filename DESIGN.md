@@ -341,6 +341,17 @@ the rest: single-click focuses, double-click / F2 renames in place, a left/right
 it along its lane, and **`c`** opens its comment. This is the anti-Miro reading of "gestures on the
 element" — the chrome stays calm while every edit stays direct.
 
+### Signature Component — the Connect Handle (F-edge-connect)
+
+Wiring two boxes gets one **select-scoped** affordance, not a fourth hover glyph: a small live-pen
+dot on the **focused** box's right border (the flow-out edge). It appears on selection, one box at a
+time — the calm counterpart to the hover glyphs. Drag a wire from it to another box to create a
+directed edge `src→dst`; the live preview is dashed **ink-blue to connect**, and turns **danger-red
+over a box the source already points at** (release disconnects). The target box echoes the outcome
+as a keyline — solid accent to connect, dashed red to cut — so the result reads without relying on
+colour. Keyboard parity: `e` arms "connect from", focus a target and `Enter` completes (again to
+disconnect). One gesture, a toggle: pull a wire to link, pull it again to unlink.
+
 ## 6. Do's and Don'ts
 
 ### Do

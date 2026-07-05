@@ -44,8 +44,10 @@ pub fn clamp_y(y: f64) -> f64 {
 ///
 /// Region edits (`region-resize`/`region-rename`/`region-remove`) key off `regionId` instead of
 /// `elemId` and are dispatched to [`region_comment_to_events`] before the element path runs.
-/// `region-add` is **not** handled here — like the element `add`, it needs a server-minted id and
-/// is special-cased in `serve.rs` (`add_region_from_comment`).
+/// `connect`/`disconnect` carry a `src`/`dst` *pair* (not a single `elemId`) and are dispatched to
+/// [`edge_comment_to_events`] on the same seam. `region-add` is **not** handled here — like the
+/// element `add`, it needs a server-minted id and is special-cased in `serve.rs`
+/// (`add_region_from_comment`).
 pub fn comment_to_events(v: &Json) -> Vec<Event> {
     let kind = v.get_str("kind").unwrap_or("comment");
     if matches!(
@@ -53,6 +55,9 @@ pub fn comment_to_events(v: &Json) -> Vec<Event> {
         "region-resize" | "region-rename" | "region-remove" | "frontier-move"
     ) {
         return region_comment_to_events(v, kind);
+    }
+    if matches!(kind, "connect" | "disconnect") {
+        return edge_comment_to_events(v, kind);
     }
     let Some(id) = v.get_str("elemId").map(str::to_string) else {
         return Vec::new();
@@ -105,6 +110,31 @@ fn move_events(v: &Json, id: String) -> Vec<Event> {
         }
     }
     evs
+}
+
+/// A `connect`/`disconnect` comment → the `EdgeAdded`/`EdgeRemoved` it persists. An edge's
+/// identity is the directed `(src, dst)` pair — the drag/keyboard gesture names both endpoints, so
+/// unlike the element ops this reads `src`/`dst`, not a single `elemId`. Returns an empty vec (the
+/// caller's "nothing to persist" → `400`) when either endpoint is missing or when they coincide: a
+/// self-loop `src == dst` has no rendered path and no place in the grammar, and `replay` has no
+/// guard against one, so it is rejected at this write seam. Endpoint *existence* is not checked
+/// here — `comment_to_events` sees only the raw comment, never the `Model`; the client only lets a
+/// drop land on a real box, and `replay` is deliberately tolerant of a stray id (cascade-cleaned
+/// when its element is removed). A duplicate `connect` is a harmless no-op — `replay` dedups the
+/// pair.
+fn edge_comment_to_events(v: &Json, kind: &str) -> Vec<Event> {
+    let (Some(src), Some(dst)) = (v.get_str("src"), v.get_str("dst")) else {
+        return Vec::new();
+    };
+    if src == dst {
+        return Vec::new();
+    }
+    let (src, dst) = (src.to_string(), dst.to_string());
+    match kind {
+        "connect" => vec![Event::EdgeAdded { src, dst }],
+        "disconnect" => vec![Event::EdgeRemoved { src, dst }],
+        _ => Vec::new(),
+    }
 }
 
 /// The region half of [`comment_to_events`]: `region-resize`/`region-rename`/`region-remove`,
@@ -181,6 +211,36 @@ mod tests {
         assert!(
             mk(r#"{"kind":"frontier-move","regionId":"K1","edge":"end"}"#).is_empty(),
             "a missing col is nothing to persist"
+        );
+    }
+
+    #[test]
+    fn connect_and_disconnect_map_to_edge_events() {
+        let mk = |body: &str| comment_to_events(&json::parse(body).unwrap());
+        assert!(
+            matches!(&mk(r#"{"kind":"connect","src":"E1","dst":"E2"}"#)[..],
+                [Event::EdgeAdded { src, dst }] if src == "E1" && dst == "E2"),
+        );
+        assert!(
+            matches!(&mk(r#"{"kind":"disconnect","src":"E1","dst":"E2"}"#)[..],
+                [Event::EdgeRemoved { src, dst }] if src == "E1" && dst == "E2"),
+        );
+    }
+
+    #[test]
+    fn edge_comment_guards_reject_self_loops_and_missing_endpoints() {
+        let mk = |body: &str| comment_to_events(&json::parse(body).unwrap());
+        assert!(
+            mk(r#"{"kind":"connect","src":"E1","dst":"E1"}"#).is_empty(),
+            "a self-loop has no place in the grammar"
+        );
+        assert!(
+            mk(r#"{"kind":"connect","src":"E1"}"#).is_empty(),
+            "a missing dst is nothing to persist"
+        );
+        assert!(
+            mk(r#"{"kind":"disconnect","dst":"E2"}"#).is_empty(),
+            "a missing src is nothing to persist"
         );
     }
 

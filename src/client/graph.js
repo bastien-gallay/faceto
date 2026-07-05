@@ -45,6 +45,7 @@ function bindStickies() {
   hoverOff();
   if (stickyDrag) { stickyDrag = null; growGuide.style.display = "none"; }
   if (frontierDrag) { frontierDrag = null; dragGuide.style.display = "none"; }
+  resetConnect();   // clear any in-flight wire drag / keyboard arm + the handle (nodes are new)
   buildGraph();
   readLayout();
   document.querySelectorAll(".sticky").forEach((g) => {
@@ -76,6 +77,7 @@ function bindStickies() {
     // per deliberate selection, never on hover, and skipped on swap-refocus (see swapBoard).
     g.onfocus = () => {
       hoverId = g.id; relightSpotlight();
+      placeConnectDot(g);   // select-scoped connect handle (F-edge-connect): shown on the focused box
       if (suppressFocusNote) return;
       const n = (adj[g.id] || new Set()).size;
       note(n ? `${n} connection${n === 1 ? "" : "s"}` : "no connections");
@@ -86,9 +88,16 @@ function bindStickies() {
       // guard skipped clearing whenever the mouse had already drifted off, leaving it stuck.
       if (hoverId === g.id) hoverId = null;
       relightSpotlight();
+      hideConnectDot();   // the handle follows the selection off this box
     };
     g.onkeydown = (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openModal(g); }
+      // While a keyboard connect is armed, Enter on a box completes the wire to it (the toggle),
+      // not the comment modal — completeConnect consumes the key. Otherwise Enter/Space comment.
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (connecting && completeConnect(g.id)) return;
+        openModal(g);
+      }
     };
   });
   bindLaneAdders();

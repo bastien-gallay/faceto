@@ -78,6 +78,8 @@ pub(crate) const CLIENT_JS: &str = concat!(
     "\n",
     include_str!("../client/drag.js"),
     "\n",
+    include_str!("../client/connect.js"),
+    "\n",
     include_str!("../client/edit.js"),
     "\n",
     include_str!("../client/region.js"),
