@@ -100,9 +100,9 @@ next without reaching across it.
   not on rendering; `src/render.rs` is pure layout over a `Model`; `src/serve.rs`
   wires them behind HTTP. `src/events.rs` `replay()` folds a log into a `Model`
   and depends on nothing downstream.
-- The client (`src/template.html`) talks to the server only through the routes
-  and the geometry it is handed (`__CONFIG__`); it never assumes server
-  internals.
+- The client (`src/template.html` shell + `src/client/*.js`) talks to the server
+  only through the routes and the geometry it is handed (`__CONFIG__`); it never
+  assumes server internals.
 
 **Watch for**: the client or `serve.rs` re-deriving a layout/colour decision
 that `render.rs` already owns. If two sites want the same derived value, hoist
@@ -114,8 +114,8 @@ once, into the page).
 Do one thing well — **one file, one stage.**
 
 - `json` parses, `model` types & diffs, `lint` checks ES-grammar, `render` lays
-  out & draws, `serve` serves, `events` is the log/replay spine, `template.html`
-  is the client.
+  out & draws, `serve` serves, `events` is the log/replay spine, and the
+  `template.html` shell + `client/*.js` are the client.
 - `src/main.rs` is CLI dispatch only (`render` / `lint` / `serve` / `genesis` /
   `compact` / `help` / `version`) — no domain logic.
 
@@ -351,7 +351,8 @@ src/
 ├── events.rs     # event log: Event enum, replay() → Model, from_model() genesis
 ├── render.rs     # pure layout + SVG (render_svg) and HTML wrapping (render_html)
 ├── serve.rs      # std-only HTTP server (TcpListener + threads)
-├── template.html # the client, embedded via include_str! in render.rs
+├── template.html # the client's thin shell (placeholders), embedded via include_str! in render.rs
+├── client/       # the client's CSS + JS modules, concat!'d into the shell at build (no bundler)
 └── main.rs       # CLI dispatch only
 ```
 

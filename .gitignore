@@ -22,6 +22,7 @@ comments.jsonl
 /.claude/*
 !/.claude/settings.json
 !/.claude/rules/
+!/.claude/skills/
 
 # impeccable design-skill per-machine cache (design.json is shared, this is not)
 .impeccable/hook.cache.json

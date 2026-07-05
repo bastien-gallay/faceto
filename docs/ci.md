@@ -43,14 +43,16 @@ skips the Rust jobs, a Rust-only change skips markdownlint/actionlint, and so on
 
 | Output      | Globs that set it to `true`                                                     |
 | ----------- | ------------------------------------------------------------------------------ |
-| `rust`      | `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `src/template.html` |
+| `rust`      | `**/*.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `src/template.html`, `src/client/**` |
 | `markdown`  | `**/*.md`, `.markdownlint-cli2.jsonc`                                           |
 | `workflows` | `.github/workflows/**`                                                          |
 | `just`      | `justfile`                                                                     |
-| `js`        | `tests/js/**`, `src/template.html`                                              |
+| `js`        | `tests/js/**`, `src/client/**`                                                  |
+| `roadmap`   | `ROADMAP.md`, `scripts/sync_roadmap.py`                                         |
 
-> **Why `src/template.html` counts as a Rust change.** It is `include_str!`'d into the binary by
-> `render.rs`, so editing it rebuilds the crate and can break tests — it must trigger the Rust jobs.
+> **Why `src/template.html` + `src/client/**` count as a Rust change.** The shell template and the
+> client modules are `include_str!`'d into the binary by `render.rs`, so editing any of them rebuilds
+> the crate and can break tests — they must trigger the Rust jobs.
 
 **Why gating is safe with required checks.** A job skipped by a job-level `if:` still reports a
 check, with conclusion **`skipped`**, which the branch ruleset counts as **passing**. So a
@@ -75,6 +77,7 @@ job-level skips — see the [static-names gotcha](#the-static-names-gotcha).
 | `actionlint`              | ubuntu          | `workflows`                      | Lint the workflow files themselves                |
 | `justfile`                | ubuntu          | `just`                           | `just --fmt --check` + `--summary` (guard rot)   |
 | `client-logic (node)`     | ubuntu          | `js`                             | `node tests/js/board-logic.test.mjs` — pure client helpers |
+| `roadmap-check`           | ubuntu          | `roadmap`                        | `ROADMAP.md` reconciled with issues (Now/Next rows tracked; no orphan open issues) |
 
 Notes on the less-obvious ones:
 
@@ -89,9 +92,17 @@ Notes on the less-obvious ones:
   now that dep count no longer is.
 - **`actionlint`** installs the linter via the upstream downloader script, pinned to a commit and
   **verified by sha256** before running — never an unverified `curl | bash`.
-- **`client-logic (node)`** checks the board client's pure helpers (lifted out of `src/template.html`
-  by `tests/js/board-logic.test.mjs`) in plain node. Node is preinstalled on the runner and the
-  tests use only std node APIs — no npm, no dependency — so the zero-dependency promise is untouched.
+- **`client-logic (node)`** checks the board client's pure helpers (lifted out of the
+  `src/client/*.js` modules by `tests/js/board-logic.test.mjs`) in plain node. Node is preinstalled
+  on the runner and the tests use only std node APIs — no npm, no dependency — so the zero-dependency
+  promise is untouched.
+- **`roadmap-check`** runs `python3 scripts/sync_roadmap.py --check` (stdlib-only; Python is
+  preinstalled on the runner — no PAT, no crate, promise untouched). It enforces the single-source-of-truth
+  invariant documented in [`ROADMAP.md`](../ROADMAP.md): every **Now/Next** row carries a `Tracked #N`
+  and every open issue is referenced by some row. The board's Status/Horizon *columns* are **not**
+  checked in CI — reading user Project #2 needs `project` scope that `GITHUB_TOKEN` lacks, so the
+  script degrades gracefully (skips the board dimension) and that sync stays a local `just sync-roadmap`
+  step.
 - The macOS jobs (`clippy (macos-latest)`, `test (macos-latest)`) are **not required checks**; they
   run only on `push`/`workflow_dispatch`, never on PRs.
 

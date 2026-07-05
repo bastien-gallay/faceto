@@ -44,6 +44,7 @@ jobs:
       workflows: ${{ steps.filter.outputs.workflows }}
       just: ${{ steps.filter.outputs.just }}
       js: ${{ steps.filter.outputs.js }}
+      roadmap: ${{ steps.filter.outputs.roadmap }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
@@ -55,9 +56,10 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
-              # template.html is include_str!'d into the binary, so a change to
-              # it rebuilds and can break tests — treat it as a Rust change.
+              # template.html + the client modules are include_str!'d into the binary, so a change
+              # to any of them rebuilds and can break tests — treat them as a Rust change.
               - 'src/template.html'
+              - 'src/client/**'
             markdown:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
@@ -67,9 +69,12 @@ jobs:
               - 'justfile'
             js:
               # The board client's pure helpers are checked in plain node (tests/js/), and the
-              # tests lift those helpers out of template.html — so either changing re-runs them.
+              # tests lift those helpers out of the client modules — so either changing re-runs them.
               - 'tests/js/**'
-              - 'src/template.html'
+              - 'src/client/**'
+            roadmap:
+              - 'ROADMAP.md'
+              - 'scripts/sync_roadmap.py'
 
   fmt:
     name: rustfmt
@@ -228,6 +233,29 @@ jobs:
         with:
           globs: '**/*.md'
           config: '.markdownlint-cli2.jsonc'
+
+  # Single-source-of-truth gate: ROADMAP.md must stay reconciled with issues (see its
+  # "Single source of truth" section). The board (user Project #2) needs `project` scope,
+  # which GITHUB_TOKEN lacks, so the check degrades to what a repo-scoped token can enforce:
+  # the offline structural rule (every Now/Next row carries a `Tracked #N`) plus the
+  # orphan-issue check (every open issue is referenced by some row). Column sync
+  # (board → Status/Horizon) stays a local `just sync-roadmap` step — no PAT in CI.
+  roadmap-check:
+    name: roadmap-check
+    needs: changes
+    if: needs.changes.outputs.roadmap == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Parser selftest (offline, no network)
+        run: python3 scripts/sync_roadmap.py --selftest
+      - name: Reconcile ROADMAP.md against issues (stdlib-only, no PAT)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/sync_roadmap.py --check
 
   actionlint:
     name: actionlint
