@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Output & log names are derived from the model basename** (F-output-naming): `faceto render
+  orders.model.json` now writes `orders.svg` / `orders.html` (was a shared `board.svg` /
+  `index.html`), and the event log is `orders.event-log.jsonl` (was a shared `event-log.jsonl`), so
+  sibling boards in one directory no longer clobber each other's outputs *or* their logs. A model
+  and its log resolve to the same board name, so `render` of either writes the same files. **This
+  renames the on-disk log convention**: an existing `event-log.jsonl` is no longer found for a
+  sibling `<name>.model.json` — rename it to `<name>.event-log.jsonl` (the tracked
+  `examples/event-log.jsonl` was migrated to `examples/sample.event-log.jsonl`). Also folds in the
+  two F-auto-genesis review carry-overs — the wrong-board serve bug is fixed by construction, and a
+  new warn-only nudge fires when a source replays to an empty board (0 elements).
+
 ### Added
 
 - **Collapse a region to a band** (F-region-collapse): fold a wide board's off-topic regions to

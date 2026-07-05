@@ -13,7 +13,8 @@ substance here so the two tools can't drift.
 the first format). It renders a static board or serves a live one with a click→comment sidecar and
 an in-page diff. The whole point is "a simple typed file you think through with an LLM."
 
-The durable record is an **append-only event log** (`event-log.jsonl`); the `Model` is a
+The durable record is an **append-only event log** (`<name>.event-log.jsonl`, named after the
+model basename so sibling boards in one directory own separate logs); the `Model` is a
 projection replayed from it, and `model.json` is a derived/bootstrap form. Comments are
 first-class events. This event-sourcing inversion is the current spine — see
 [`docs/event-sourcing-status.md`](docs/event-sourcing-status.md) for the full rationale and the
@@ -51,15 +52,15 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 npx markdownlint-cli2 "**/*.md"
 
-faceto render examples/sample.model.json     # → board.svg + index.html next to the model
-faceto lint   examples/sample.model.json     # → ES-grammar findings (warn-only, exits 0)
-faceto serve  examples/sample.model.json     # → live board at http://127.0.0.1:8753
-faceto serve  path/to/model.json -p 9000     # custom port
+faceto render examples/sample.model.json       # → sample.svg + sample.html next to the model
+faceto lint   examples/sample.model.json       # → ES-grammar findings (warn-only, exits 0)
+faceto serve  examples/sample.model.json       # → live board at http://127.0.0.1:8753
+faceto serve  path/to/model.json -p 9000       # custom port
 
 # Event-sourced flow (genesis creates the log the next two commands consume):
-faceto genesis examples/sample.model.json    # migrate a model.json → examples/event-log.jsonl
-faceto render  examples/event-log.jsonl      # render/serve also accept a log (by extension)
-faceto compact examples/event-log.jsonl      # fold a log to a snapshot, bounding replay
+faceto genesis examples/sample.model.json      # migrate → examples/sample.event-log.jsonl
+faceto render  examples/sample.event-log.jsonl # render/serve also accept a log (by extension)
+faceto compact examples/sample.event-log.jsonl # fold a log to a snapshot, bounding replay
 ```
 
 A local `.pre-commit-config.yaml` runs these gates automatically — install it with
@@ -105,7 +106,7 @@ the log). Seven modules, each one stage (`json`/`model`/`lint` are single files;
   (`render_html`). Holds the lane order (`LANES`), the colour grammar (`colour`), geometry
   constants (`COL_W`, `LANE_H`, etc.), label wrapping, the serif nameplate, and diff styling.
 - **`src/serve/`** — std-only HTTP server, **event-log-only** (F-auto-genesis killed legacy
-  mode: `main` resolves any `model.json` to its sibling `event-log.jsonl` via `serve_log_path`
+  mode: `main` resolves any `model.json` to its sibling `<name>.event-log.jsonl` via `serve_log_path`
   before calling `serve`, auto-running genesis if no log exists yet, so the server only ever
   mutates the log). Routes: `GET /` (page), `GET /board.svg` (re-rendered each request,
   `?base=<version>` produces a diff overlay), `GET /model-version`, `GET /comments`, `GET /health`,
