@@ -63,7 +63,8 @@ def board_by_issue() -> dict[int, dict] | None:
         data = gh_json(
             ["project", "item-list", PROJECT, "--owner", OWNER, "--format", "json", "--limit", "300"]
         )
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
+    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
+        # OSError covers a missing `gh` (FileNotFoundError) — degrade, don't crash.
         return None
     out: dict[int, dict] = {}
     for it in data.get("items", []):
@@ -80,7 +81,8 @@ def open_issue_numbers() -> set[int] | None:
         data = gh_json(
             ["issue", "list", "--repo", REPO, "--state", "open", "--limit", "300", "--json", "number"]
         )
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
+    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
+        # OSError covers a missing `gh` (FileNotFoundError) — degrade, don't crash.
         return None
     return {int(i["number"]) for i in data}
 
@@ -91,7 +93,9 @@ def split_row(line: str) -> list[str] | None:
         return None
     # keep the trailing newline off; rebuild exactly with ' | ' joins + outer pipes
     body = line.rstrip("\n")
-    cells = [c.strip() for c in body.strip().strip("|").split("|")]
+    # Cap at 4 splits (5 cells) so an escaped pipe (`\|`) in the Summary stays inside the
+    # Summary cell instead of over-splitting the row into >5 cells and being silently dropped.
+    cells = [c.strip() for c in body.strip().strip("|").split("|", 4)]
     return cells if len(cells) == 5 else None
 
 
@@ -99,7 +103,44 @@ def rebuild_row(cells: list[str]) -> str:
     return "| " + " | ".join(cells) + " |\n"
 
 
+def selftest() -> int:
+    """Parser regression guards — run offline, no network. Exit 0 on pass, 1 on failure."""
+    esc = (
+        "| F-es-lint | linting | ✅ | ✅ Shipped | the `level: big-picture \\| design` knob, "
+        "keyed on #14 and #19. |\n"
+    )
+    cases = [
+        # (line, expected cells or None)
+        (esc, 5),  # an escaped pipe in Summary must NOT over-split the row
+        ("| F-x | UI | ☐ | Next | plain summary Tracked #99. |\n", 5),
+        ("not a row\n", None),
+        ("| header | not | a | feature | row |\n", None),  # doesn't start with `| F-`
+    ]
+    fails = []
+    for line, want in cases:
+        got = split_row(line)
+        n = None if got is None else len(got)
+        if n != want:
+            fails.append(f"split_row expected {want} cells, got {n}: {line!r}")
+    # the escaped-pipe row's Summary must round-trip with its pipe intact and its refs readable
+    cells = split_row(esc)
+    if not cells:
+        fails.append("escaped-pipe row failed to parse")
+    else:
+        if "\\|" not in cells[4]:
+            fails.append("escaped pipe lost from Summary cell")
+        refs = {int(x) for x in ANY_REF_RE.findall(cells[4])}
+        if not {14, 19} <= refs:
+            fails.append(f"issue refs not recovered from escaped-pipe Summary: {refs}")
+    for f in fails:
+        print("selftest FAIL:", f)
+    print("selftest OK" if not fails else f"selftest: {len(fails)} failure(s)")
+    return 1 if fails else 0
+
+
 def main() -> int:
+    if "--selftest" in sys.argv[1:]:
+        return selftest()
     check = "--check" in sys.argv[1:]
     board = board_by_issue()
     open_issues = open_issue_numbers()

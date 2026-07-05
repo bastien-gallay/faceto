@@ -65,12 +65,14 @@ binary-size:
 
 # Reconcile ROADMAP.md from the board/issues: rewrite Status + Horizon columns, keep prose.
 # Run before starting work. Needs `gh` (project scope). Board is canonical for priority/horizon.
+# Stdlib-only, so plain python3 — same as CI; no uv/venv needed.
 sync-roadmap:
-    uv run --no-project python3 scripts/sync_roadmap.py
+    python3 scripts/sync_roadmap.py
 
-# Report roadmap↔board↔issue drift without writing (nonzero exit on drift).
+# Report roadmap↔board↔issue drift without writing (nonzero exit on drift). Parser selftest first.
 roadmap-check:
-    uv run --no-project python3 scripts/sync_roadmap.py --check
+    python3 scripts/sync_roadmap.py --selftest
+    python3 scripts/sync_roadmap.py --check
 
 # Lint the GitHub Actions workflow files.
 actionlint:
