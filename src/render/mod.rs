@@ -5,10 +5,12 @@
 
 mod geometry;
 mod html;
+mod mermaid;
 mod style;
 mod svg;
 mod text;
 
 pub use html::render_html;
+pub use mermaid::{render_mermaid, DEGRADATION_NOTICE};
 pub use style::lane_prefix;
 pub use svg::{render_svg, View};
