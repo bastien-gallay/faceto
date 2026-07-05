@@ -12,7 +12,7 @@ default:
     @just --list
 
 # Run every CI gate in order (format → lint → test → docs → firewall → size → workflows → justfile).
-ci: fmt clippy test md zero-deps binary-size actionlint lint-justfile
+ci: fmt clippy test test-js md zero-deps binary-size actionlint lint-justfile
     @echo "✓ all local CI gates passed"
 
 # Formatting is law: cargo fmt --all --check.
@@ -26,6 +26,10 @@ clippy:
 # The test suite over all targets.
 test:
     cargo test --all-targets
+
+# Client-logic tests: pure helpers lifted out of src/template.html, checked in plain node (no deps).
+test-js:
+    node tests/js/board-logic.test.mjs
 
 # markdownlint (prose ≤100 cols; rules in .markdownlint-cli2.jsonc).
 md:
