@@ -1148,17 +1148,24 @@ let suppressFocusNote = false;   // true while re-focusing after a board swap �
 function swapBoard(html) {
   // Focus survives the swap by stable identity — a sticky by id, a region tab by data-region — so a
   // repeated keyboard edit (arrow-move, Shift+arrow region resize) doesn't die after every commit.
+  const board = $("#board");
   const ae = document.activeElement;
   const sticky = ae?.classList?.contains("sticky") ? ae.id : null;
   const region = ae?.classList?.contains("region-tab") ? ae.dataset.region : null;
-  $("#board").innerHTML = html;
+  // The wholesale innerHTML swap resets the scroll box to top-left; snapshot the pan so an edit
+  // doesn't yank the board away from where the eye already is, and restore it after re-bind.
+  const { scrollLeft, scrollTop } = board;
+  board.innerHTML = html;
   bindStickies();
   // Suppress the focus connection-count note so it can't clobber an action confirmation
   // ("moved", "renamed", "region resized") that the swap is landing.
   suppressFocusNote = true;
-  if (sticky) document.getElementById(sticky)?.focus();
-  else if (region) document.querySelector(`.region-tab[data-region="${region}"]`)?.focus();
+  // preventScroll so restoring focus doesn't fight the scroll restore below.
+  if (sticky) document.getElementById(sticky)?.focus({ preventScroll: true });
+  else if (region) document.querySelector(`.region-tab[data-region="${region}"]`)?.focus({ preventScroll: true });
   suppressFocusNote = false;
+  board.scrollLeft = scrollLeft;
+  board.scrollTop = scrollTop;
 }
 
 // Redraw the plain current board (own edit just landed): advance the baseline silently and let
