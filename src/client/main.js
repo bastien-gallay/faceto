@@ -120,7 +120,9 @@ document.addEventListener("keydown", (e) => {
     // Same editor, same endAdd(kind:"add"); the id is minted server-side. Mirrors the mouse anchor
     // (r.right + 12, r.top) so the inline field opens exactly where the click path would place it.
     e.preventDefault();
-    const g = document.getElementById(target), r = g.getBoundingClientRect();
+    const g = document.getElementById(target);
+    if (!g) return;   // a stale hoverId can name a box a board swap removed (parity with F2/c above)
+    const r = g.getBoundingClientRect();
     startAdd({ type: g.dataset.kind, col: +g.dataset.col + 1, sx: r.right + 12, sy: r.top });
   }
 });

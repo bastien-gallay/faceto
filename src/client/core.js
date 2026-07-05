@@ -25,7 +25,7 @@ let diffBase = null;      // baseline hash the current diff overlay is drawn aga
 // board fetch (plain, diff, own-edit refresh) so the fold survives each swap without per-call plumbing.
 const LS_COLLAPSE = "facetoCollapsed";
 const collapsedSet = () => { try { return new Set(JSON.parse(localStorage.getItem(LS_COLLAPSE) || "[]")); } catch { return new Set(); } };
-const setCollapsed = (s) => localStorage.setItem(LS_COLLAPSE, JSON.stringify([...s]));
+const setCollapsed = (s) => { try { localStorage.setItem(LS_COLLAPSE, JSON.stringify([...s])); } catch {} };
 const boardSrc = (extra = {}) => {
   const params = { ...extra };
   const c = [...collapsedSet()];
@@ -36,7 +36,7 @@ const boardSrc = (extra = {}) => {
 
 const $ = (s) => document.querySelector(s);
 const lsGet = () => { try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); } catch { return []; } };
-const lsSet = (a) => localStorage.setItem(LS_KEY, JSON.stringify(a));
+const lsSet = (a) => { try { localStorage.setItem(LS_KEY, JSON.stringify(a)); } catch {} };
 const note = (msg, tone) => {
   const n = $("#note");
   n.textContent = msg || "";

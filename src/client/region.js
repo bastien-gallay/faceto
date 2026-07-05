@@ -15,6 +15,7 @@ let railLeft = {}, railRight = {};   // col -> its rail cell's left/right x, in 
 let railCols = [];   // ascending list of covered columns; cached per swap (rail is fixed between swaps)
 function readRegionRail() {
   railLeft = {}; railRight = {};
+  _svg = null;   // a board swap detaches the cached svg; drop it so svgLeftPx re-queries the fresh one
   document.querySelectorAll(".region-rail").forEach((r) => {
     const col = +r.dataset.col;
     railLeft[col] = +r.getAttribute("x");
