@@ -63,6 +63,15 @@ binary-size:
     fi
     echo "binary-size OK: under the ${ceiling}-byte budget"
 
+# Reconcile ROADMAP.md from the board/issues: rewrite Status + Horizon columns, keep prose.
+# Run before starting work. Needs `gh` (project scope). Board is canonical for priority/horizon.
+sync-roadmap:
+    uv run --no-project python3 scripts/sync_roadmap.py
+
+# Report roadmap↔board↔issue drift without writing (nonzero exit on drift).
+roadmap-check:
+    uv run --no-project python3 scripts/sync_roadmap.py --check
+
 # Lint the GitHub Actions workflow files.
 actionlint:
     actionlint
