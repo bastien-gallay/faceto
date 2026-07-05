@@ -86,10 +86,13 @@ with one of these, the invariant wins; do the safe thing and say why:
    serving a *different* board. So also confirm **identity**: `GET /board.svg` (or `GET /`) and
    check that the board title **and** at least one distinctive label from step 1 appear.
    Match carefully — the rendered SVG is not the raw log:
-   - Grep for a **short, rare, unescaped token** inside a label (e.g. `EventLog`, `PaymentTaken`),
-     never a whole phrase. Labels are XML-escaped (`&` `<` `>` `"` `'`), CamelCase is split, and
-     long labels are wrapped across lines and truncated with `…` — so a full-string match on a
-     long or punctuated label will falsely fail.
+   - Grep for a **short, rare token** from a label (e.g. `EventLog`, `PaymentTaken`). The full
+     label survives intact in the SVG's `aria-label` / `data-hero` attributes even though the
+     *visible* `<text>` is CamelCase-split, line-wrapped, and truncated with `…` — so grep the
+     raw bytes and a contiguous CamelCase token still matches. The one transform that does bite:
+     labels are **XML-escaped** (`&`→`&amp;`, `<` `>` `"` `'`), so pick a token free of those
+     characters (or match the escaped form). Avoid whole phrases — surrounding markup can fall
+     between words.
    - Require **both** signals (title *and* a label). On a genesis / near-empty board with a
      generic title and few labels (e.g. "blank canvas"), distinctiveness is impossible — treat
      identity as **unproven** and ask the user to confirm the port before the first write.

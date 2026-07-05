@@ -67,8 +67,8 @@ curl -s http://127.0.0.1:8753/health           # → {"ok":true}
 > Reading it backwards, two things stand out. An **ItemAdded** can name a topic that doesn't
 > exist yet — the board already flags this as the open hotspot **`H1` "TopicCreated (item
 > added to a non-existent topic)"**, and nothing on the board creates a topic. And the story
-> only ever *adds* work: no command completes or closes an item, so **UnfinishedWorkProjected­
-> Forward** has no counterweight — everything projects forward, forever.
+> only ever *adds* work: no command completes or closes an item, so
+> **UnfinishedWorkProjectedForward** has no counterweight — everything projects forward, forever.
 
 ### Pass 2 — discovery (proposals)
 
