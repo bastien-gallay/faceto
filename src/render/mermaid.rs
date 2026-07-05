@@ -34,10 +34,14 @@ fn shape(kind: &str) -> (&'static str, &'static str) {
 
 /// Escape a label for a Mermaid quoted node string. Node text is wrapped in double quotes, so the
 /// one character that must not appear raw is `"` — replaced with Mermaid's HTML entity `#quot;`.
-/// Raw newlines would break the single-line node statement, so they collapse to a space. (This is
-/// *not* `text::esc`, which produces HTML entities for an SVG/HTML context.)
+/// A literal backslash is doubled first so it can never combine with a following character to
+/// escape the closing quote (belt-and-suspenders: current Mermaid's string lexer stops at the first
+/// `"` regardless, but this stays correct if that ever changes). Raw newlines would break the
+/// single-line node statement, so they collapse to a space. (This is *not* `text::esc`, which
+/// produces HTML entities for an SVG/HTML context.)
 fn mermaid_esc(s: &str) -> String {
-    s.replace('"', "#quot;")
+    s.replace('\\', "\\\\")
+        .replace('"', "#quot;")
         .replace(['\n', '\r'], " ")
         .trim()
         .to_string()
@@ -222,6 +226,15 @@ flowchart LR
         let out = render_mermaid(&m);
         // Quotes become the Mermaid entity; the raw label's inner quotes never leak.
         assert!(out.contains("E1(\"say #quot;hi#quot; <now>\")"), "{out}");
+    }
+
+    #[test]
+    fn trailing_backslash_is_doubled_so_it_cannot_escape_the_close_quote() {
+        // A label ending in a backslash (e.g. a Windows path `C:\`) must not leave a lone `\`
+        // adjacent to the node's closing quote.
+        let m = model_of(r#"{ "elements": [ { "id": "E1", "type": "event", "label": "C:\\" } ] }"#);
+        let out = render_mermaid(&m);
+        assert!(out.contains("E1(\"C:\\\\\")"), "{out}");
     }
 
     #[test]
