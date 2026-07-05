@@ -109,4 +109,22 @@ mod tests {
         assert!(html.contains("<text>__CONFIG__</text>")); // label survived
         assert!(html.contains("\"colW\":")); // real config JSON still landed
     }
+
+    #[test]
+    fn a_label_equal_to_a_stage_two_token_is_not_clobbered() {
+        // `__STYLE__`/`__SCRIPT__` are the tokens live during the shell fill that inserts the SVG,
+        // so they are the ones a mis-ordered pass could rewrite into the whole CSS/JS blob. A sticky
+        // labelled with either must reach the board verbatim, and the real style/script still land.
+        for token in ["__STYLE__", "__SCRIPT__"] {
+            let html = render_html(&format!("<text>{token}</text>"), "t");
+            assert!(
+                html.contains(&format!("<text>{token}</text>")),
+                "{token} label clobbered"
+            );
+        }
+        // The real assets landed (CSS nameplate rule + the boot call from the concatenated script).
+        let html = render_html("<text>__SCRIPT__</text>", "t");
+        assert!(html.contains("--nameplate")); // style.css was inserted
+        assert!(html.contains("\nload();")); // main.js (last module) was inserted
+    }
 }

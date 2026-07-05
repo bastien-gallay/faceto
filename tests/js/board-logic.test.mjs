@@ -19,8 +19,10 @@ const source = MODULES
 // Lift `function <name>(...) { ... }` out of the source by counting braces from the first `{`. Good
 // enough for the small pure helpers below; it would miscount on braces inside strings.
 function lift(name) {
-  const start = source.indexOf("function " + name + "(");
+  const decl = "function " + name + "(";
+  const start = source.indexOf(decl);
   if (start < 0) throw new Error(`function ${name}(...) not found in src/client/*.js`);
+  if (source.indexOf(decl, start + 1) >= 0) throw new Error(`ambiguous lift: ${decl} appears twice`);
   let depth = 0;
   for (let i = source.indexOf("{", start); i < source.length; i++) {
     if (source[i] === "{") depth++;
@@ -35,8 +37,10 @@ function lift(name) {
 // Lift a single-line `const <name> = <expr>;` arrow helper — the brace-counter above can't handle an
 // arrow whose body carries an object literal (esc), so grab the initializer up to the line's end.
 function liftLine(name) {
-  const start = source.indexOf("const " + name + " = ");
+  const decl = "const " + name + " = ";
+  const start = source.indexOf(decl);
   if (start < 0) throw new Error(`const ${name} = ... not found in src/client/*.js`);
+  if (source.indexOf(decl, start + 1) >= 0) throw new Error(`ambiguous lift: ${decl} appears twice`);
   const eol = source.indexOf("\n", start);
   const rhs = source.slice(start + `const ${name} = `.length, eol).replace(/;\s*$/, "");
   // eslint-disable-next-line no-new-func
@@ -113,6 +117,12 @@ check("near boxes route through top/bottom faces (vertical branch)",
   edgePath([0, 0], [50, 100]) === "M0.0,27.0 C0.0,50.0 50.0,50.0 50.0,73.0");
 check("fan offsets slide the anchors along their faces",
   edgePath([0, 0], [50, 100], 6, -6) === "M6.0,27.0 C6.0,50.0 44.0,50.0 44.0,73.0");
+// Reversed direction flips the anchoring sign s in each branch (a broken hard-coded s=1 passes the
+// forward cases above but fails these): an upward near-connector and a right-to-left far one.
+check("upward near-connector uses the bottom→top faces (s=-1, vertical branch)",
+  edgePath([0, 100], [50, 0]) === "M0.0,73.0 C0.0,50.0 50.0,50.0 50.0,27.0");
+check("right-to-left far connector uses the left→right faces (s=-1, horizontal branch)",
+  edgePath([300, 0], [0, 0]) === "M212.0,0.0 C150.0,0.0 150.0,0.0 88.0,0.0");
 
 // --- colCenter(col): the centre x of an authored column. Known columns read straight from the
 // measured map; empty columns extrapolate from the first anchor at the uniform colW pitch, so a
@@ -132,6 +142,10 @@ globalThis.colCenter = colCenter;      // nearestCol calls colCenter — expose 
 globalThis.colX = { 0: 100, 1: 310 };
 check("nearestCol snaps to the closest measured column", nearestCol(100) === 0 && nearestCol(310) === 1);
 check("nearestCol picks the nearer of two columns", nearestCol(220) === 1 && nearestCol(190) === 0);
+// The distinctive part: the search runs one column past each end, so a drag can snap into an empty
+// column just off the occupied span (colCenter interpolates it). colCenter(2) = 100 + 2*210 = 520.
+check("nearestCol snaps into an empty column past the end", nearestCol(520) === 2);
+check("nearestCol snaps into an empty column before the start", nearestCol(-110) === -1);
 globalThis.colX = {};
 check("nearestCol with nothing measured is column 0", nearestCol(500) === 0);
 
@@ -143,6 +157,11 @@ globalThis.bandH = { event: 200 };
 check("cyToFrac maps the band midpoint to 0.5", cyToFrac("event", 200) === 0.5);
 check("cyToFrac maps the band top to 0", cyToFrac("event", 100) === 0);
 check("cyToFrac maps the band bottom to 1", cyToFrac("event", 300) === 1);
+// The .toFixed(4) clamp (parity with events::clamp_y) must round a non-terminating ratio, not pass
+// the raw float: 100/300 = 0.3333… → 0.3333, where an unrounded map would emit 0.3333333333333333.
+globalThis.bandTop.r = 0;
+globalThis.bandH.r = 300;
+check("cyToFrac rounds a non-terminating ratio to 4 dp", cyToFrac("r", 100) === 0.3333);
 
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log("\nall board-logic checks passed");
