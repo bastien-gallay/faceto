@@ -68,7 +68,11 @@
   @media (prefers-reduced-motion: reduce) { .sticky.settle { animation: none; } }
   /* Armed remove: the × turns alert-red for its confirm window (press again commits, Esc keeps).
      Replaces window.confirm — the one native-chrome intrusion the register forbade. */
-  .hovglyph.armed { display: block; color: #b4232a; opacity: 1; }
+  /* Armed = the one destructive instant: the bare glyph becomes a solid red confirm disc so the
+     "click again to remove" prompt lives on the element, not only in the 11px note line. Chrome
+     appears only here; at rest the glyph stays chromeless. The white fill overrides the halo. */
+  .hovglyph.armed { display: block; color: #fff; opacity: 1; background: #b4232a;
+                    border-radius: 50%; filter: none; }
   /* Inline rename: an HTML input floated over the sticky's screen rect — the live pen writes
      directly on the box (DESIGN: the accent is used only where you are acting). Double-click or
      F2 a sticky to edit its label in place; Enter commits, Escape cancels. */
@@ -86,7 +90,11 @@
   .hovglyph { position: fixed; display: none; z-index: 19; width: 22px; height: 22px;
               padding: 0; border: none; background: none; cursor: pointer; color: #1A6FAE;
               font: 600 20px -apple-system, Segoe UI, Roboto, sans-serif; line-height: 22px;
-              text-align: center; opacity: 0; transition: opacity .15s ease-out; }
+              text-align: center; opacity: 0; transition: opacity .15s ease-out;
+              /* A white halo lifts the bare glyph off any edge it floats over — stacked so the
+                 backing is near-opaque, yet still chromeless (no box). One filter covers the text
+                 glyphs (+ ×) and the comment SVG alike, since drop-shadow follows rendered alpha. */
+              filter: drop-shadow(0 0 2px #fff) drop-shadow(0 0 2px #fff) drop-shadow(0 0 1px #fff); }
   .hovglyph.show { display: block; opacity: 1; }
   #comment-c svg { width: 16px; height: 16px; vertical-align: middle; fill: currentColor; }
   .hovglyph:focus-visible { outline: 2px solid #1A6FAE; outline-offset: 1px; border-radius: 3px; opacity: 1; display: block; }
@@ -700,13 +708,17 @@ function doRemove(id) {
   const g = document.getElementById(id);
   if (!g) return;
   if (removeArm?.id === id) {
+    // A fast double-click would arm and confirm in one motion, before the eye reads the danger
+    // prompt. Swallow a confirm that lands within 300ms of the arm (keeping the arm live), so a
+    // real "click again" past that window still deletes.
+    if (Date.now() - removeArm.at < 300) return;
     disarmRemove(true);
     note(`removed ${id}`);
     postComment({ elemId: id, kind: "drop", text: "removed inline", ts: new Date().toISOString(), status: "open" });
     return;
   }
   disarmRemove(true);   // arming a different box replaces the previous arm
-  removeArm = { id, t: setTimeout(() => disarmRemove(true), 3000) };
+  removeArm = { id, at: Date.now(), t: setTimeout(() => disarmRemove(true), 3000) };
   // The keyboard path (Delete) never hovered, so the corner × was never placed — it stranded
   // off-canvas, leaving no visible confirm signal. Position it at the box corner ourselves (the
   // same anchor the mouse hover uses) and arm the box itself with a red dashed ring, so the danger
@@ -766,13 +778,14 @@ function disarmRegion(quiet) {
 function armRegion(regionId, tab) {
   if (!regionId) return;
   if (regionArm?.id === regionId) {
+    if (Date.now() - regionArm.at < 300) return;   // swallow a double-click confirm (see doRemove)
     disarmRegion(true);
     note("region removed");
     postComment({ regionId, kind: "region-remove", ts: new Date().toISOString(), status: "open" });
     return;
   }
   disarmRegion(true);   // arming a different region replaces the previous arm
-  regionArm = { id: regionId, t: setTimeout(() => disarmRegion(true), 3000) };
+  regionArm = { id: regionId, at: Date.now(), t: setTimeout(() => disarmRegion(true), 3000) };
   if (tab) {
     const r = tab.getBoundingClientRect();
     regionXBtn.at(r.right - 3, r.top - 9, regionId);   // the keyboard path never hovered — place it
@@ -1030,6 +1043,7 @@ function bindRegions() {
   }
   document.querySelectorAll(".region-tab").forEach((g) => {
     g.onclick = () => startRename(g, true);
+    g.ondblclick = () => startRename(g, true);   // parity with a sticky's dblclick/F2 rename
     g.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startRename(g, true); }
       else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); e.stopPropagation(); armRegion(g.dataset.region, g); }
