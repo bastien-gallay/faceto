@@ -29,6 +29,32 @@ function check(name, cond) {
   console.log((cond ? "PASS" : "FAIL") + " — " + name);
   if (!cond) failures++;
 }
+const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// --- revealScroll(el, view): the scroll delta (or null) to bring the focused box back inside the
+// board viewport after a swap pins the pan. Rects are viewport/client coords {left,top,right,bottom}.
+// The #46 scroll-preserve fix pins the pan, which can leave a just-moved focused sticky off-screen
+// (review finding #1); revealScroll drives a minimal reveal only when the box actually left the frame.
+const revealScroll = lift("revealScroll");
+const view = { left: 0, top: 0, right: 800, bottom: 600 };
+
+check("fully-visible box needs no reveal (pan preserved)",
+  revealScroll({ left: 100, top: 100, right: 200, bottom: 160 }, view) === null);
+
+check("box past the right edge scrolls right by the overflow",
+  eq(revealScroll({ left: 780, top: 100, right: 900, bottom: 160 }, view), { dLeft: 100, dTop: 0 }));
+
+check("box past the left edge scrolls left by the overflow",
+  eq(revealScroll({ left: -30, top: 100, right: 70, bottom: 160 }, view), { dLeft: -30, dTop: 0 }));
+
+check("box past the bottom edge scrolls down by the overflow",
+  eq(revealScroll({ left: 100, top: 560, right: 200, bottom: 660 }, view), { dLeft: 0, dTop: 60 }));
+
+check("box off both right and bottom reveals on both axes",
+  eq(revealScroll({ left: 820, top: 620, right: 920, bottom: 700 }, view), { dLeft: 120, dTop: 100 }));
+
+check("box exactly flush with the right edge is still visible",
+  revealScroll({ left: 700, top: 100, right: 800, bottom: 160 }, view) === null);
 
 // --- spotlightOwnerOf(hoverId, focusedStickyId, renamingId): which box the connector spotlight
 // belongs to, in priority order — the box under the cursor, else the focused sticky, else the box
