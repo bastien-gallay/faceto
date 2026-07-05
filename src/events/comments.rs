@@ -115,21 +115,24 @@ fn move_events(v: &Json, id: String) -> Vec<Event> {
 /// A `connect`/`disconnect` comment → the `EdgeAdded`/`EdgeRemoved` it persists. An edge's
 /// identity is the directed `(src, dst)` pair — the drag/keyboard gesture names both endpoints, so
 /// unlike the element ops this reads `src`/`dst`, not a single `elemId`. Returns an empty vec (the
-/// caller's "nothing to persist" → `400`) when either endpoint is missing or when they coincide: a
-/// self-loop `src == dst` has no rendered path and no place in the grammar, and `replay` has no
-/// guard against one, so it is rejected at this write seam. Endpoint *existence* is not checked
-/// here — `comment_to_events` sees only the raw comment, never the `Model`; the client only lets a
-/// drop land on a real box, and `replay` is deliberately tolerant of a stray id (cascade-cleaned
-/// when its element is removed). A duplicate `connect` is a harmless no-op — `replay` dedups the
-/// pair.
+/// caller's "nothing to persist" → `400`) when either endpoint is missing or **blank** (`nonblank`,
+/// the same write-seam guard `add`/`rename` use — a raw POST can't mint an edge to a `""` element
+/// the client could never produce), or when the two coincide: a self-loop `src == dst` has no
+/// rendered path and no place in the grammar, and `replay` has no guard against one, so it is
+/// rejected here. Endpoint *existence* is not checked — `comment_to_events` sees only the raw
+/// comment, never the `Model`; the client only lets a drop land on a real box, and `replay` is
+/// deliberately tolerant of a stray id (cascade-cleaned when its element is removed). A duplicate
+/// `connect` is a harmless no-op — `replay` dedups the pair.
 fn edge_comment_to_events(v: &Json, kind: &str) -> Vec<Event> {
-    let (Some(src), Some(dst)) = (v.get_str("src"), v.get_str("dst")) else {
+    let (Some(src), Some(dst)) = (
+        v.get_str("src").and_then(nonblank),
+        v.get_str("dst").and_then(nonblank),
+    ) else {
         return Vec::new();
     };
     if src == dst {
         return Vec::new();
     }
-    let (src, dst) = (src.to_string(), dst.to_string());
     match kind {
         "connect" => vec![Event::EdgeAdded { src, dst }],
         "disconnect" => vec![Event::EdgeRemoved { src, dst }],
@@ -241,6 +244,25 @@ mod tests {
         assert!(
             mk(r#"{"kind":"disconnect","dst":"E2"}"#).is_empty(),
             "a missing src is nothing to persist"
+        );
+        assert!(
+            mk(r#"{"kind":"connect","src":"","dst":"E2"}"#).is_empty(),
+            "an empty endpoint is a blank id (nonblank guard) — a raw POST can't mint an edge to \"\""
+        );
+        assert!(
+            mk(r#"{"kind":"connect","src":"E1","dst":"  "}"#).is_empty(),
+            "a whitespace-only endpoint is blank too"
+        );
+    }
+
+    #[test]
+    fn connect_trims_surrounding_whitespace_on_its_endpoints() {
+        let evs = comment_to_events(
+            &json::parse(r#"{"kind":"connect","src":" E1 ","dst":"E2 "}"#).unwrap(),
+        );
+        assert!(
+            matches!(&evs[..], [Event::EdgeAdded { src, dst }] if src == "E1" && dst == "E2"),
+            "got {evs:?}"
         );
     }
 

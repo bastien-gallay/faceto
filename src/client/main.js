@@ -108,6 +108,16 @@ document.addEventListener("keydown", (e) => {
     }
     return;
   }
+  // Re-arm a keyboard connect from a different box without pressing Esc first: an armed `connecting`
+  // makes gestureBusy() true, which would otherwise swallow the `e` branch below. armConnect replaces
+  // the previous source. (This is above the gestureBusy guard precisely so the arm doesn't block it.)
+  if ((e.key === "e" || e.key === "E") && connecting) {
+    const armAe = document.activeElement;
+    if (armAe && /^(INPUT|TEXTAREA|SELECT)$/.test(armAe.tagName)) return;
+    const t = keyTarget();
+    if (t) { e.preventDefault(); armConnect(t); }
+    return;
+  }
   // gestureBusy: a drag captures the pointer but not the keyboard, so F2 or c could otherwise
   // fire mid-drag (review: no gesture guarded against the other's in-progress state).
   const target = keyTarget();

@@ -112,18 +112,23 @@ function moveConnect(e) {
   const d = connectDrag;
   const tgt = document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".sticky");
   const dst = tgt && tgt.id !== d.src ? tgt.id : null;
-  const decision = dst ? connectDecision(d.edges, d.src, dst) : null;
-  document.querySelectorAll(".sticky.connect-target, .sticky.connect-cut")
-    .forEach((g) => g.classList.remove("connect-target", "connect-cut"));
+  // The target ring + decision only change when the box under the cursor changes — recompute them
+  // (and touch the DOM) only then, not on every pointermove, so a fast drag doesn't re-decide and
+  // re-class at pointer frequency. `clearConnectPreview` is still the teardown safety net.
+  if (dst !== d.dst) {
+    if (d.dst) document.getElementById(d.dst)?.classList.remove("connect-target", "connect-cut");
+    d.decision = dst ? connectDecision(d.edges, d.src, dst) : null;   // committed for endConnect
+    if (dst) tgt.classList.add(d.decision === "disconnect" ? "connect-cut" : "connect-target");
+    connectPreview.classList.toggle("cut", d.decision === "disconnect");
+    d.dst = dst;
+  }
+  // The wire itself follows the cursor every move — snapped onto the target box when over one.
   let fx = e.clientX, fy = e.clientY;
   if (dst) {
     const tr = tgt.getBoundingClientRect();
-    fx = tr.left + tr.width / 2; fy = tr.top + tr.height / 2;   // snap the wire onto the target box
-    tgt.classList.add(decision === "disconnect" ? "connect-cut" : "connect-target");
+    fx = tr.left + tr.width / 2; fy = tr.top + tr.height / 2;
   }
-  connectPreview.classList.toggle("cut", decision === "disconnect");
   connectPreview.setAttribute("d", screenPath(d.ax, d.ay, fx, fy));
-  d.dst = dst; d.decision = decision;   // commit what the preview last showed (see endConnect)
 }
 
 // Release commits whatever the preview showed at the last move: a valid target → the decided op, an
@@ -151,10 +156,11 @@ function postEdge(kind, src, dst) {
 // would open the modal). Esc cancels. Same toggle as the drag.
 function armConnect(id) {
   const g = id && document.getElementById(id);
-  if (!g || gestureBusy()) return;
+  if (!g || (gestureBusy() && !connecting)) return;   // a re-arm from an armed state is allowed
   cancelConnect(true);   // re-arming from a new box replaces the old
   connecting = { src: id };
   g.classList.add("connect-src");
+  hideConnectDot();   // the arm owns the board — the mouse handle must not compete with .connect-src
   note(`connect ${id} to… — focus a box and press Enter, Esc cancels`);
 }
 // Complete a keyboard-armed connect on the focused box. Returns true when it consumed the key (so
@@ -188,11 +194,14 @@ function resetConnect() {
   cancelConnect(true);
 }
 
-// The handle is placed on focus (a screen-space fixed element), so a scroll of the board would leave
-// it behind its box — reposition it to track the selected box. Skipped mid-drag (the wire owns the
-// overlay) and when nothing is selected.
-$("#board").addEventListener("scroll", () => {
+// The handle is a screen-space fixed element placed from the box's rect, so anything that moves the
+// box under it — a board scroll or a window resize (which reflows the board) — leaves it stranded.
+// Re-place it against the still-selected box on both; skipped mid-drag (the wire owns the overlay)
+// and when nothing is selected.
+function repositionConnectDot() {
   if (connectDrag || !connectDot._src) return;
   const g = document.getElementById(connectDot._src);
   if (g && document.activeElement === g) placeConnectDot(g); else hideConnectDot();
-});
+}
+$("#board").addEventListener("scroll", repositionConnectDot);
+window.addEventListener("resize", repositionConnectDot);
