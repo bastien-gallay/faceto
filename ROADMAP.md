@@ -164,7 +164,8 @@ show me with solution B") decomposes into 4 capabilities; 2 exist (populate via 
 `POST /comment` + faceto-narrate; read user comments via `/comments`), 2 were missing →
 **F-extract** (#90) and **F-variants** (#91), both pure-std CLI verbs. Format audit fixed
 as #94 (`lanes` false affordance), #95 (JSON Schema), #96 (additive `links`/edge `label`);
-`detail` overload is already F-comment-lifecycle #21.
+`detail` overload is already F-comment-lifecycle #21. The recalibrated positioning is implemented
+via the benefits-first pitch rewrite (**F-pitch-benefits** #102).
 
 **Horizon 2 (adjacent, 12–36 months).** The spec-driven wave is massive and 100% prose (Spec
 Kit 118k★, Kiro, Tessl) — the "typed, diffable, event-sourced model as spec" slot is nearly
