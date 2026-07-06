@@ -43,8 +43,7 @@ multi-board, C4-xref, code-binding) parked as sibling-apps or big bets. Per-idea
 inline in each row. The 8 live-horizon rows are tracked as #67–#74; the 7 Parked rows carry
 `issue TBD` (minted when they leave Parked).
 
-**Strategic review triage 2026-07-06** (three-horizons pass; working note below) added 12 rows
-tracked as #90–#102: the H1 AI-loop bricks (`F-extract` #90, `F-variants` #91), zero-server
+**Strategic review triage 2026-07-06** (three-horizons pass; working note below) added 12 new rows (tracked within #90–#102) and updated 1 existing row: the H1 AI-loop bricks (`F-extract` #90, `F-variants` #91), zero-server
 sharing (`F-share-file` #92), a reading mode (`F-walkthrough` #93), format quick wins
 (#94–#96), the H2 adjacencies (`F-context-pack` #97, `F-living-doc` #98,
 `F-eventcatalog-export` #99), the H3 seeds umbrella (`F-log-seeds` #100), an `F-mcp-server`
