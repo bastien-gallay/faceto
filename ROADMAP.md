@@ -43,11 +43,13 @@ multi-board, C4-xref, code-binding) parked as sibling-apps or big bets. Per-idea
 inline in each row. The 8 live-horizon rows are tracked as #67–#74; the 7 Parked rows carry
 `issue TBD` (minted when they leave Parked).
 
-**Strategic review triage 2026-07-06** (three-horizons pass; working note below) added 12 new rows (tracked within #90–#102) and updated 1 existing row: the H1 AI-loop bricks (`F-extract` #90, `F-variants` #91), zero-server
-sharing (`F-share-file` #92), a reading mode (`F-walkthrough` #93), format quick wins
-(#94–#96), the H2 adjacencies (`F-context-pack` #97, `F-living-doc` #98,
-`F-eventcatalog-export` #99), the H3 seeds umbrella (`F-log-seeds` #100), an `F-mcp-server`
-re-examination (#101 — de-park candidate), and a benefits-first pitch rewrite (#102).
+**Strategic review triage 2026-07-06** (three-horizons pass; working note below) added 12 new
+rows (tracked within #90–#102) and updated 1 existing row: the H1 AI-loop bricks
+(`F-extract` #90, `F-variants` #91), zero-server sharing (`F-share-file` #92), a reading
+mode (`F-walkthrough` #93), format quick wins (#94–#96), the H2 adjacencies
+(`F-context-pack` #97, `F-living-doc` #98, `F-eventcatalog-export` #99), the H3 seeds
+umbrella (`F-log-seeds` #100), an `F-mcp-server` re-examination (#101 — de-park candidate),
+and a benefits-first pitch rewrite (#102).
 Positioning recalibrated: real competitors are the free generalists (Miro free tier, draw.io);
 sell the *safety* event-sourcing procures and local-FIRST, not the mechanism.
 
@@ -135,7 +137,7 @@ sell the *safety* event-sourcing procures and local-FIRST, not the mechanism.
 | F-variants | render · AI loop | ☐ | Next | *(strategic review 2026-07-06 — the "show me with solution B" step.)* **Cross-log diff**: `render a.jsonl --base b.jsonl` and/or `serve --variant sibling.jsonl` — an agent builds a variant in a sibling log, the user sees the added/removed/moved overlay. `diff_models` + the SVG overlay exist; the delta is only the cross-file entry point. With F-extract: extract → variant → diff = the full "what if" loop. Step toward the PR-diff gap (**F-living-doc** #98). **P1** · Tracked #91. |
 | F-share-file | UI · sharing | ☐ | Later | *(strategic review 2026-07-06 — the zero-dep version of sharing.)* **Standalone shareable HTML artifact**: works from `file://`, local comments via the existing localStorage fallback, an "export my comments" button → `comments.jsonl` the author replays through `POST /comment`. Async collaboration by mail/Slack with **zero server** — what no SaaS can copy. Pairs with **F-deep-links** #56. **P2** · Tracked #92. |
 | F-walkthrough | UI · legibility | ☐ | Later | *(strategic review 2026-07-06 — system-understanding axis.)* **Step-through reading mode**: walk the board phase by phase (or column by column) with the rest dimmed — the presentation counterpart of hover-to-focus. Client-only. On-thesis stretch: replay the *log* (the story of the modelling), which only an event-sourced board can do. **P3** · Tracked #93. |
-| fix-lanes-field | format · docs | ☐ | Next | *(strategic review 2026-07-06 — format audit.)* The model.json `lanes` array is a **false affordance**: present in examples, never read (`from_json` ignores it; `LANES` is a const). Remove from examples or document as decorative; the real lane declaration belongs to the profiles route (**F-new-diagrams**). **P2** · Tracked #94. |
+| F-lanes-field | format · docs | ☐ | Next | *(strategic review 2026-07-06 — format audit.)* The model.json `lanes` array is a **false affordance**: present in examples, never read (`from_json` ignores it; `LANES` is a const). Remove from examples or document as decorative; the real lane declaration belongs to the profiles route (**F-new-diagrams**). **P2** · Tracked #94. |
 | F-json-schema | docs · AI | ☐ | Next | *(strategic review 2026-07-06.)* Publish a **JSON Schema** for model.json + one event-log line (kinds, payloads, additive-evolution rules) under `docs/`. Lets any LLM generate valid files first try — the founding "typed file you think through with an LLM" pitch, docs-only cost. **P2** · Tracked #95. |
 | F-element-links | model · fidelity | ☐ | Later | *(strategic review 2026-07-06 — format audit.)* Two additive fields: **`links: [url]` on Element** (attach ticket/doc — sharing + understanding axes) and **`label` on Edge** (edges are a bare `[src,dst]`). The edge half shapes **with F-typed-edges** (same `Edge` seam — touch it once). `tags` deferred. **P2** · Tracked #96. |
 | F-context-pack | interop · AI | ☐ | Next | *(strategic review 2026-07-06 — H2 opportunity #1, effort S.)* `export --format context`: a structured markdown+Mermaid **context pack** (ubiquitous language, flows, regions, open hotspots) + a documented AGENTS.md-reference convention. JTBD: "my coding agent knows the domain model without me re-explaining it". Tailwinds verified: AGENTS.md won (60k+ repos, Linux Foundation); the spec-driven wave (Spec Kit 118k★) is 100% prose — the typed-model-as-spec slot is empty. Watch **nebulit/eventmodelers.ai** (Miro plugin, announced Claude Code integration). Rides the `export` seam (F-mermaid-export). Seam cluster **E**. **P1** · Tracked #97. |
