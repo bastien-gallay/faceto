@@ -1,6 +1,5 @@
 {
   "title": "faceto — event-sourced (the log is truth; the model is a projection replayed from it)",
-  "lanes": ["actor", "command", "aggregate", "event", "policy", "readmodel", "external", "hotspot"],
   "phases": [
     { "id": "K1", "label": "author", "fromCol": 0, "toCol": 1 },
     { "id": "K2", "label": "persist", "fromCol": 2, "toCol": 3 },
