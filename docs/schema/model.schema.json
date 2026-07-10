@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/bastien-gallay/faceto/main/docs/schema/model.schema.json",
+  "title": "faceto model.json",
+  "description": "The authoring/bootstrap source format for a faceto event-storming board — a typed JSON file you think through with an LLM. Parsed by `model::from_json`. Every top-level field is optional (an empty object `{}` is a valid, empty board); unknown fields are ignored by design (forward compatibility), so this schema is deliberately permissive (`additionalProperties: true`). The durable record is the derived append-only `<name>.event-log.jsonl`, not this file.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Board title. Defaults to \"board\" when absent."
+    },
+    "level": {
+      "type": "string",
+      "enum": ["big-picture", "design"],
+      "default": "big-picture",
+      "description": "Modeling granularity. `design` turns on stricter lint rules (e.g. a command with no output is flagged). Any value other than \"design\" is treated as \"big-picture\"."
+    },
+    "phases": {
+      "type": "array",
+      "description": "Labelled vertical bands (regions / bounded contexts) over the column timeline. On load they are normalized into a gap-free, overlap-free partition, so authored bands may be adjusted to fit.",
+      "items": { "$ref": "#/$defs/phase" }
+    },
+    "elements": {
+      "type": "array",
+      "description": "The stickies. Each is placed by `type` (its lane) and `col` (its point on the shared timeline).",
+      "items": { "$ref": "#/$defs/element" }
+    },
+    "edges": {
+      "type": "array",
+      "description": "Directed connections between elements, as positional tuples.",
+      "items": { "$ref": "#/$defs/edge" }
+    }
+  },
+  "$defs": {
+    "elementType": {
+      "type": "string",
+      "description": "Selects the lane AND the colour from the fixed 8-lane event-storming grammar. An off-grammar value does not crash but has no lane and renders drably — stay within the enum.",
+      "enum": [
+        "actor",
+        "command",
+        "aggregate",
+        "event",
+        "policy",
+        "readmodel",
+        "external",
+        "hotspot"
+      ]
+    },
+    "phase": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["label", "fromCol", "toCol"],
+      "description": "A vertical band spanning columns [fromCol, toCol] across all lanes. A band missing any of the three required fields is dropped on load.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable region identity (the diff/resize/rename/remove key). Omit to have a deterministic `K<n>` id minted on load; convention: never renumber an id, only add."
+        },
+        "label": { "type": "string" },
+        "fromCol": {
+          "type": "integer",
+          "description": "Left column of the band (inclusive), on the shared timeline."
+        },
+        "toCol": {
+          "type": "integer",
+          "description": "Right column of the band (inclusive)."
+        }
+      }
+    },
+    "element": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type", "label"],
+      "description": "One sticky. An element missing any of `id` / `type` / `label` (or with a non-string value there) is dropped on load.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable identity — the comment join key AND the diff key. Never derived from text or position; never renumbered, only added. Convention: a `type`-prefixed letter + number (E2, C3, …), but any unique string is accepted."
+        },
+        "type": { "$ref": "#/$defs/elementType" },
+        "label": {
+          "type": "string",
+          "description": "The sticky's headline text."
+        },
+        "col": {
+          "type": "integer",
+          "description": "Global timeline coordinate shared across ALL lanes (left→right = time), NOT a per-lane index. Order within a lane is just sort-by-col. Omit to auto-assign in file order."
+        },
+        "detail": {
+          "type": "string",
+          "description": "Optional smaller second line under the label. A trailing `(parenthetical)` in the label becomes this too."
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Stored vertical sub-position WITHIN the lane band, as a fraction of the band interior. Omit for auto-stacking. Never identity (id is), never a lane choice (type is)."
+        },
+        "resolved": {
+          "type": "boolean",
+          "default": false,
+          "description": "For a `hotspot`: when true it goes quiet (grey + check) instead of loud red."
+        }
+      }
+    },
+    "edge": {
+      "type": "array",
+      "description": "A directed edge as a positional tuple: [src, dst] or [src, dst, status]. `src` and `dst` are element ids. A tuple with fewer than 2 string ids is dropped on load. (Note: in the EVENT LOG, edges are objects `{src, dst}` instead — see event-log-line.schema.json.)",
+      "minItems": 2,
+      "maxItems": 3,
+      "items": false,
+      "prefixItems": [
+        { "type": "string", "description": "src — source element id" },
+        { "type": "string", "description": "dst — destination element id" },
+        { "type": "string", "description": "optional status/annotation carried through render" }
+      ]
+    }
+  }
+}

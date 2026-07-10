@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/bastien-gallay/faceto/main/docs/schema/event-log-line.schema.json",
+  "title": "faceto event-log line",
+  "description": "ONE line of a `<name>.event-log.jsonl` — a single event object. The log is the append-only source of truth; the board is a projection replayed from it. Parsed by `events::parse_event`. The schema evolves ADDITIVELY: on read, unknown event kinds are skipped and unknown fields ignored, so old and new logs stay mutually replayable — hence `additionalProperties: true` on every branch. This schema enumerates the CURRENT kinds; a future additive kind will be valid at runtime (skipped) even before it is listed here. When a new `Event` variant is added to `src/events/codec.rs`, add its branch here too.",
+  "type": "object",
+  "required": ["event"],
+  "properties": {
+    "event": {
+      "type": "string",
+      "description": "The kind discriminator."
+    }
+  },
+  "oneOf": [
+    {
+      "title": "BoardTitled",
+      "additionalProperties": true,
+      "required": ["event", "title"],
+      "properties": {
+        "event": { "const": "BoardTitled" },
+        "title": { "type": "string" }
+      }
+    },
+    {
+      "title": "BoardLeveled",
+      "description": "Sets modeling granularity. Additive kind — an old log without it replays as the default big-picture.",
+      "additionalProperties": true,
+      "required": ["event", "level"],
+      "properties": {
+        "event": { "const": "BoardLeveled" },
+        "level": { "type": "string", "enum": ["big-picture", "design"] }
+      }
+    },
+    {
+      "title": "PhaseAdded",
+      "additionalProperties": true,
+      "required": ["event", "label", "fromCol", "toCol"],
+      "properties": {
+        "event": { "const": "PhaseAdded" },
+        "id": { "type": "string", "description": "Optional — a legacy band with no id gets a deterministic positional id minted on replay." },
+        "label": { "type": "string" },
+        "fromCol": { "type": "integer" },
+        "toCol": { "type": "integer" }
+      }
+    },
+    {
+      "title": "PhaseResized",
+      "additionalProperties": true,
+      "required": ["event", "id", "fromCol", "toCol"],
+      "properties": {
+        "event": { "const": "PhaseResized" },
+        "id": { "type": "string" },
+        "fromCol": { "type": "integer" },
+        "toCol": { "type": "integer" }
+      }
+    },
+    {
+      "title": "PhaseRenamed",
+      "additionalProperties": true,
+      "required": ["event", "id", "label"],
+      "properties": {
+        "event": { "const": "PhaseRenamed" },
+        "id": { "type": "string" },
+        "label": { "type": "string" }
+      }
+    },
+    {
+      "title": "PhaseRemoved",
+      "additionalProperties": true,
+      "required": ["event", "id"],
+      "properties": {
+        "event": { "const": "PhaseRemoved" },
+        "id": { "type": "string" }
+      }
+    },
+    {
+      "title": "FrontierMoved",
+      "description": "Move one border of a phase; replay re-borders the neighbour atomically so the partition never opens a gap.",
+      "additionalProperties": true,
+      "required": ["event", "id", "edge", "col"],
+      "properties": {
+        "event": { "const": "FrontierMoved" },
+        "id": { "type": "string" },
+        "edge": { "type": "string", "enum": ["start", "end"], "description": "Which border: `start` (from_col) or `end` (to_col)." },
+        "col": { "type": "integer" }
+      }
+    },
+    {
+      "title": "PhaseSplit",
+      "description": "Split a phase in two at atCol; `id` keeps the left half, `newId` (server-minted) takes the right.",
+      "additionalProperties": true,
+      "required": ["event", "id", "atCol", "newId", "newLabel"],
+      "properties": {
+        "event": { "const": "PhaseSplit" },
+        "id": { "type": "string" },
+        "atCol": { "type": "integer" },
+        "newId": { "type": "string" },
+        "newLabel": { "type": "string" }
+      }
+    },
+    {
+      "title": "ElementAdded",
+      "additionalProperties": true,
+      "required": ["event", "id", "type", "label"],
+      "properties": {
+        "event": { "const": "ElementAdded" },
+        "id": { "type": "string", "description": "Minted server-side (`<PREFIX><N>`) when the add comes through `POST /comment`." },
+        "type": { "$ref": "#/$defs/elementType" },
+        "label": { "type": "string" },
+        "col": { "type": "integer" },
+        "detail": { "type": "string" },
+        "y": { "type": "number", "minimum": 0, "maximum": 1, "description": "Sub-position within the lane band; omit for auto-stacking." }
+      }
+    },
+    {
+      "title": "ElementRenamed",
+      "additionalProperties": true,
+      "required": ["event", "id", "label"],
+      "properties": {
+        "event": { "const": "ElementRenamed" },
+        "id": { "type": "string" },
+        "label": { "type": "string" }
+      }
+    },
+    {
+      "title": "ElementMoved",
+      "description": "Move and/or re-lane a sticky. An absent field leaves that dimension untouched (a col-only nudge never resets y or type).",
+      "additionalProperties": true,
+      "required": ["event", "id"],
+      "properties": {
+        "event": { "const": "ElementMoved" },
+        "id": { "type": "string" },
+        "col": { "type": "integer" },
+        "type": { "$ref": "#/$defs/elementType" },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    {
+      "title": "ElementAnnotated",
+      "description": "A comment on an element (a first-class event). Legacy kinds `CommentAdded` / `Comment` are upcast to this on read.",
+      "additionalProperties": true,
+      "required": ["event", "id", "text"],
+      "properties": {
+        "event": { "const": "ElementAnnotated" },
+        "id": { "type": "string" },
+        "text": { "type": "string" }
+      }
+    },
+    {
+      "title": "HotspotResolved",
+      "additionalProperties": true,
+      "required": ["event", "id", "resolution"],
+      "properties": {
+        "event": { "const": "HotspotResolved" },
+        "id": { "type": "string" },
+        "resolution": { "type": "string", "description": "Resolution note; may be an empty string." }
+      }
+    },
+    {
+      "title": "ElementRemoved",
+      "description": "Removes the element; replay cascades to drop its edges. The id stays reserved (never reused) until a compaction.",
+      "additionalProperties": true,
+      "required": ["event", "id"],
+      "properties": {
+        "event": { "const": "ElementRemoved" },
+        "id": { "type": "string" }
+      }
+    },
+    {
+      "title": "EdgeAdded",
+      "description": "A directed edge. Note: unlike model.json (tuple `[src, dst]`), edges in the LOG are objects.",
+      "additionalProperties": true,
+      "required": ["event", "src", "dst"],
+      "properties": {
+        "event": { "const": "EdgeAdded" },
+        "src": { "type": "string" },
+        "dst": { "type": "string" }
+      }
+    },
+    {
+      "title": "EdgeRemoved",
+      "additionalProperties": true,
+      "required": ["event", "src", "dst"],
+      "properties": {
+        "event": { "const": "EdgeRemoved" },
+        "src": { "type": "string" },
+        "dst": { "type": "string" }
+      }
+    },
+    {
+      "title": "LogCompacted",
+      "description": "A marker written by `faceto compact` recording how many events were folded into the preceding genesis snapshot.",
+      "additionalProperties": true,
+      "required": ["event"],
+      "properties": {
+        "event": { "const": "LogCompacted" },
+        "folded": { "type": "integer", "minimum": 0, "description": "Count of folded events; defaults to 0 if absent." }
+      }
+    }
+  ],
+  "$defs": {
+    "elementType": {
+      "type": "string",
+      "description": "The 8-lane event-storming grammar (lane + colour). An off-grammar value does not crash but has no lane.",
+      "enum": [
+        "actor",
+        "command",
+        "aggregate",
+        "event",
+        "policy",
+        "readmodel",
+        "external",
+        "hotspot"
+      ]
+    }
+  }
+}

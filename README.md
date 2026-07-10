@@ -73,6 +73,10 @@ You author a board as one typed JSON file — a slice of [`examples/sample.model
 - A trailing `(parenthetical)` or an explicit **`detail`** field becomes the sticky's smaller
   second line. A hotspot with **`"resolved": true`** goes quiet (grey + check) instead of loud red.
 
+A machine-readable [**JSON Schema**](docs/schema/) pins the exact shape of both `model.json` and a
+single event-log line — hand it to an LLM to generate a valid file first try, or validate one
+locally.
+
 ## The event log is the source of truth
 
 ```mermaid
