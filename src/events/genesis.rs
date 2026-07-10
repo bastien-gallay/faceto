@@ -42,6 +42,7 @@ pub fn from_model(m: &Model) -> Vec<Event> {
             col: e.col,
             detail: if e.resolved { None } else { e.detail.clone() },
             y: e.y,
+            links: e.links.clone(),
         });
         if e.resolved {
             ev.push(Event::HotspotResolved {
@@ -54,6 +55,7 @@ pub fn from_model(m: &Model) -> Vec<Event> {
         ev.push(Event::EdgeAdded {
             src: e.src.clone(),
             dst: e.dst.clone(),
+            label: e.label.clone(),
         });
     }
     ev
@@ -128,6 +130,33 @@ mod tests {
         assert_eq!(h1.detail.as_deref(), Some("done"));
         let e2 = rebuilt.elements.iter().find(|e| e.id == "E2").unwrap();
         assert_eq!(e2.detail.as_deref(), Some("a note"));
+    }
+
+    // F-element-links: an element's `links` and an edge's `label` survive genesis → replay.
+    #[test]
+    fn from_model_then_replay_preserves_links_and_edge_label() {
+        let src = r#"{
+            "elements":[
+                {"id":"E1","type":"event","label":"Made","links":["https://tix/42","adr://7"]},
+                {"id":"E2","type":"command","label":"Do"}
+            ],
+            "edges":[{"src":"E2","dst":"E1","label":"causes"}]
+        }"#;
+        let original = crate::model::from_json(&json::parse(src).unwrap());
+        let rebuilt = replay(&from_model(&original));
+
+        let e1 = rebuilt.elements.iter().find(|e| e.id == "E1").unwrap();
+        assert_eq!(e1.links, vec!["https://tix/42", "adr://7"]);
+        assert_eq!(
+            rebuilt
+                .elements
+                .iter()
+                .find(|e| e.id == "E2")
+                .unwrap()
+                .links,
+            Vec::<String>::new()
+        );
+        assert_eq!(rebuilt.edges[0].label.as_deref(), Some("causes"));
     }
 
     // ---- F-es-lint: the board level round-trips through the log ----------------------------

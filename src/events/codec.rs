@@ -126,6 +126,7 @@ pub fn parse_event(raw: &Json) -> Option<Event> {
             col: int_field("col"),
             detail: str_field("detail"),
             y: num_field("y"),
+            links: crate::model::links_from(event.get("links")),
         },
         "ElementRenamed" => Event::ElementRenamed {
             id: str_field("id")?,
@@ -151,6 +152,7 @@ pub fn parse_event(raw: &Json) -> Option<Event> {
         "EdgeAdded" => Event::EdgeAdded {
             src: str_field("src")?,
             dst: str_field("dst")?,
+            label: str_field("label"),
         },
         "EdgeRemoved" => Event::EdgeRemoved {
             src: str_field("src")?,
@@ -231,6 +233,7 @@ pub fn to_json(ev: &Event) -> Json {
             col,
             detail,
             y,
+            links,
         } => {
             let mut p = vec![
                 ("event", s("ElementAdded")),
@@ -246,6 +249,9 @@ pub fn to_json(ev: &Event) -> Json {
             }
             if let Some(y) = y {
                 p.push(("y", Json::Num(*y)));
+            }
+            if !links.is_empty() {
+                p.push(("links", Json::Arr(links.iter().map(|l| s(l)).collect())));
             }
             obj(p)
         }
@@ -278,11 +284,13 @@ pub fn to_json(ev: &Event) -> Json {
             ("resolution", s(resolution)),
         ]),
         Event::ElementRemoved { id } => obj(vec![("event", s("ElementRemoved")), ("id", s(id))]),
-        Event::EdgeAdded { src, dst } => obj(vec![
-            ("event", s("EdgeAdded")),
-            ("src", s(src)),
-            ("dst", s(dst)),
-        ]),
+        Event::EdgeAdded { src, dst, label } => {
+            let mut p = vec![("event", s("EdgeAdded")), ("src", s(src)), ("dst", s(dst))];
+            if let Some(l) = label {
+                p.push(("label", s(l)));
+            }
+            obj(p)
+        }
         Event::EdgeRemoved { src, dst } => obj(vec![
             ("event", s("EdgeRemoved")),
             ("src", s(src)),
@@ -363,6 +371,7 @@ mod tests {
                 col: None,
                 detail: None,
                 y: None,
+                links: Vec::new(),
             },
             Event::ElementRenamed {
                 id: "E1".into(),
@@ -386,6 +395,7 @@ mod tests {
             Event::EdgeAdded {
                 src: "E1".into(),
                 dst: "E2".into(),
+                label: None,
             },
             Event::EdgeRemoved {
                 src: "E1".into(),

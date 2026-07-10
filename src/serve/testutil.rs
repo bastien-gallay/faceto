@@ -12,6 +12,7 @@ pub(crate) fn added(id: &str, kind: &str) -> events::Event {
         col: None,
         detail: None,
         y: None,
+        links: Vec::new(),
     }
 }
 

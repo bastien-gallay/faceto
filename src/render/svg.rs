@@ -970,6 +970,7 @@ mod tests {
                 detail: None,
                 y: None,
                 resolved: false,
+                links: Vec::new(),
                 diff: None,
                 was: None,
             }],
@@ -1046,6 +1047,7 @@ mod tests {
                     detail: None,
                     y: None,
                     resolved: false,
+                    links: Vec::new(),
                     diff: None,
                     was: None,
                 })
@@ -1142,6 +1144,7 @@ mod tests {
             detail: None,
             y: None,
             resolved: false,
+            links: Vec::new(),
             diff: None,
             was: None,
         });
@@ -1274,11 +1277,13 @@ mod tests {
             Edge {
                 src: "E2".into(),
                 dst: "E3".into(),
+                label: None,
                 status: None,
             }, // wholly inside K2
             Edge {
                 src: "E1".into(),
                 dst: "E4".into(),
+                label: None,
                 status: None,
             }, // crosses K2, both ends visible
         ];
@@ -1510,6 +1515,7 @@ mod tests {
             detail: None,
             y: None,
             resolved: false,
+            links: Vec::new(),
             diff: None,
             was: None,
         }
@@ -1535,11 +1541,13 @@ mod tests {
                 Edge {
                     src: "X1".into(),
                     dst: "E_lo".into(),
+                    label: None,
                     status: None,
                 },
                 Edge {
                     src: "E_hi".into(),
                     dst: "R1".into(),
+                    label: None,
                     status: None,
                 },
             ],
@@ -1583,11 +1591,13 @@ mod tests {
                 Edge {
                     src: "X1".into(),
                     dst: "C1".into(),
+                    label: None,
                     status: None,
                 },
                 Edge {
                     src: "X1".into(),
                     dst: "C2".into(),
+                    label: None,
                     status: None,
                 },
             ],
@@ -1626,6 +1636,7 @@ mod tests {
             edges.push(Edge {
                 src: "X1".into(),
                 dst: format!("C{k}"),
+                label: None,
                 status: None,
             });
         }
