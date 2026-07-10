@@ -167,6 +167,13 @@
   .modal-h .label { font-size: 16px; font-weight: 600; margin-top: 2px; }
   .modal-h .detail { font-size: 11px; color: #5a5a5a; margin-top: 3px; }
   .modal-h .detail:empty { display: none; }
+  /* F-element-links: attached reference URLs, surfaced on click as quiet chips (not painted on the
+     calm board). Mirrors the .rel chip rhythm; link chips carry the command-blue accent. */
+  .modal-h .links { font-size: 11px; color: #888; margin-top: 6px; display: flex; flex-wrap: wrap; gap: 5px; align-items: baseline; }
+  .modal-h .links:empty { display: none; }
+  .modal-h .links .chip { background: #eef1f4; border-radius: 6px; padding: 1px 7px; color: #334; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .modal-h .links a.chip { color: #1A6FAE; text-decoration: none; }
+  .modal-h .links a.chip:hover { text-decoration: underline; }
   .modal-b { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
   .modal-b select, .modal-b textarea { font: inherit; padding: 8px; border: 1px solid #cfcfda; border-radius: 8px; }
   .modal-b textarea { min-height: 90px; resize: vertical; }

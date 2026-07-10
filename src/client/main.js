@@ -1,10 +1,28 @@
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+// A sticky's `data-links` (newline-joined URLs, F-element-links) → clickable chips for the modal.
+// Pure and side-effect-free (tested in tests/js). Only http/https/mailto open as anchors — any
+// other scheme (a `javascript:` URL a hand-authored model.json might carry) renders as inert text,
+// never a live link. `rel="noopener noreferrer"` and `target="_blank"` keep the board tab isolated.
+function linkChips(raw) {
+  return (raw || "")
+    .split("\n")
+    .map((u) => u.trim())
+    .filter(Boolean)
+    .map((u) =>
+      /^(https?|mailto):/i.test(u)
+        ? `<a class="chip" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`
+        : `<span class="chip">${esc(u)}</span>`,
+    )
+    .join("");
+}
 function openModal(g) {
   if (!g) return;   // a stale hoverId / glyph target can name a box a board swap removed
   const id = g.id;
   $("#m-id").textContent = id;
   $("#m-label").textContent = g.dataset.hero || "";
   $("#m-detail").textContent = g.dataset.detail || "";
+  const links = linkChips(g.dataset.links);
+  $("#m-links").innerHTML = links ? "links: " + links : "";
   // Relationships, the keyboard/non-hover way to read a box's connectors.
   const rel = [...(adj[id] || [])].map((n) => {
     const h = document.getElementById(n)?.dataset.hero || n;

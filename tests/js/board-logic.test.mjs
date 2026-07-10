@@ -177,5 +177,26 @@ globalThis.bandTop.r = 0;
 globalThis.bandH.r = 300;
 check("cyToFrac rounds a non-terminating ratio to 4 dp", cyToFrac("r", 100) === 0.3333);
 
+// --- linkChips(raw): a sticky's newline-joined `data-links` (F-element-links) → clickable modal
+// chips. http/https/mailto become anchors; any other scheme renders as inert text (never a live
+// `javascript:` link). Blank entries are dropped. It calls esc, so seed esc on globalThis first.
+globalThis.esc = esc;
+const linkChips = lift("linkChips");
+check("linkChips renders http/https as anchors",
+  linkChips("https://tix/9\nhttp://d/1") ===
+    `<a class="chip" href="https://tix/9" target="_blank" rel="noopener noreferrer">https://tix/9</a>` +
+    `<a class="chip" href="http://d/1" target="_blank" rel="noopener noreferrer">http://d/1</a>`);
+check("linkChips renders mailto as an anchor",
+  linkChips("mailto:a@b.co") ===
+    `<a class="chip" href="mailto:a@b.co" target="_blank" rel="noopener noreferrer">mailto:a@b.co</a>`);
+check("linkChips renders a non-web scheme as inert text, not a link",
+  linkChips("javascript:alert(1)") === `<span class="chip">javascript:alert(1)</span>`);
+check("linkChips drops blank entries and trims", linkChips("  \n https://x \n") ===
+  `<a class="chip" href="https://x" target="_blank" rel="noopener noreferrer">https://x</a>`);
+check("linkChips on empty/undefined yields no chips",
+  linkChips("") === "" && linkChips(undefined) === "");
+check("linkChips escapes markup in a URL", linkChips("https://x?a=<b>") ===
+  `<a class="chip" href="https://x?a=&lt;b&gt;" target="_blank" rel="noopener noreferrer">https://x?a=&lt;b&gt;</a>`);
+
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log("\nall board-logic checks passed");
