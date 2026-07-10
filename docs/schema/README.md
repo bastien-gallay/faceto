@@ -19,8 +19,10 @@ Both are [JSON Schema Draft 2020-12](https://json-schema.org/).
 - **`*.event-log.jsonl`** is the durable record: one JSON event object per line. Validate each line
   against `event-log-line.schema.json` (it describes a single line, not the whole file).
 
-One shape differs between them on purpose: an **edge** is a positional tuple `["C2", "E2"]` in
-`model.json`, but an **object** `{"event":"EdgeAdded","src":"C2","dst":"E2"}` in the log.
+One shape differs between them on purpose: an **edge** in `model.json` is a positional tuple
+`["C2", "E2"]` (or the object form `{"src":"C2","dst":"E2","label":"emits"}` when it carries a
+label), whereas in the log it is always an event object
+`{"event":"EdgeAdded","src":"C2","dst":"E2","label":"emits"}`.
 
 ## Additive evolution — why the schemas are permissive
 
