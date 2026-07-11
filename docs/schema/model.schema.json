@@ -14,7 +14,7 @@
       "type": "string",
       "enum": ["big-picture", "design"],
       "default": "big-picture",
-      "description": "Modeling granularity. `design` turns on stricter lint rules (e.g. a command with no output is flagged). Any value other than \"design\" is treated as \"big-picture\"."
+      "description": "Modeling granularity — use one of these two. `design` turns on stricter lint rules (e.g. a command with no output is flagged); `big-picture` is the default when the field is absent. (The parser is lenient — it maps any non-\"design\" string to big-picture — but author only these two.)"
     },
     "phases": {
       "type": "array",
@@ -121,7 +121,7 @@
           "prefixItems": [
             { "type": "string", "description": "src — source element id" },
             { "type": "string", "description": "dst — destination element id" },
-            { "type": "string", "description": "internal diff status (not authored)" }
+            { "type": "string", "description": "internal diff status (added/removed/…), written by diff_models — not an authored field" }
           ]
         },
         {

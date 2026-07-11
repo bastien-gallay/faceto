@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/bastien-gallay/faceto/main/docs/schema/event-log-line.schema.json",
   "title": "faceto event-log line",
-  "description": "ONE line of a `<name>.event-log.jsonl` — a single event object. The log is the append-only source of truth; the board is a projection replayed from it. Parsed by `events::parse_event`. The schema evolves ADDITIVELY: on read, unknown event kinds are skipped and unknown fields ignored, so old and new logs stay mutually replayable — hence `additionalProperties: true` on every branch. This schema enumerates the CURRENT kinds; a future additive kind will be valid at runtime (skipped) even before it is listed here. When a new `Event` variant is added to `src/events/codec.rs`, add its branch here too.",
+  "description": "ONE line of a `<name>.event-log.jsonl` — a single event object. The log is the append-only source of truth; the board is a projection replayed from it. Parsed by `events::parse_event`. Fields evolve ADDITIVELY: unknown *fields* are ignored on read, so `additionalProperties: true` on every branch. Event *kinds*, by contrast, are enumerated strictly: an unrecognised or misspelled `event` matches no `oneOf` branch and FAILS validation — deliberately, so a typo like `\"ElementAdd\"` is caught at authoring time (the schema's main job). This differs from the runtime on purpose: `parse_event` *skips* an unknown kind (forward-compatibility for a log written by a newer faceto), but this schema ships with the code and validates against the kinds this version knows. When a new `Event` variant is added to `src/events/codec.rs`, add its branch here too.",
   "type": "object",
   "required": ["event"],
   "properties": {
