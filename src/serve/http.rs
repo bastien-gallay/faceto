@@ -130,16 +130,20 @@ pub(crate) fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
 
 /// Apply a launch-time `--base` overlay (F-variants): when a fixed baseline board is set, return the
 /// current board diffed against it (added/removed/moved/changed tagged, ready for the SVG overlay);
-/// with no baseline it is the identity — the plain current board. Pure `(&baseline, &current) ->
-/// Model`, so it unit-tests without a running server. The single seam both `route_page` and
-/// `route_board_svg` funnel through, so the first paint and every poll agree.
-fn overlay(
-    baseline: &Option<(model::Model, (String, String))>,
-    current: &model::Model,
-) -> model::Model {
+/// with no baseline it is the identity — the plain current board. Returns a `Cow` so the common
+/// no-baseline path (every page load / poll of an ordinary live board) *borrows* `current` instead
+/// of deep-cloning a whole `Model`. Pure `(&baseline, &current)`, so it unit-tests without a running
+/// server. The single seam both `route_page` and `route_board_svg` funnel through, so the first paint
+/// and every poll agree.
+fn overlay<'a>(
+    baseline: &'a Option<(model::Model, (String, String))>,
+    current: &'a model::Model,
+) -> std::borrow::Cow<'a, model::Model> {
     match baseline {
-        Some((base, meta)) => model::diff_models(base, current, meta.clone()),
-        None => current.clone(),
+        Some((base, meta)) => {
+            std::borrow::Cow::Owned(model::diff_models(base, current, meta.clone()))
+        }
+        None => std::borrow::Cow::Borrowed(current),
     }
 }
 

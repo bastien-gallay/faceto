@@ -233,20 +233,17 @@ fn render_diff(
     meta: (String, String),
 ) -> (String, String, String) {
     let merged = model::diff_models(base, new, meta);
-    let mut counts = [0usize; 4]; // added, removed, moved, changed
+    let (mut added, mut removed, mut moved, mut changed) = (0, 0, 0, 0);
     for e in &merged.elements {
         match e.diff.as_deref() {
-            Some("added") => counts[0] += 1,
-            Some("removed") => counts[1] += 1,
-            Some("moved") => counts[2] += 1,
-            Some("changed") => counts[3] += 1,
+            Some("added") => added += 1,
+            Some("removed") => removed += 1,
+            Some("moved") => moved += 1,
+            Some("changed") => changed += 1,
             _ => {}
         }
     }
-    let tally = format!(
-        "{} added, {} removed, {} moved, {} changed",
-        counts[0], counts[1], counts[2], counts[3]
-    );
+    let tally = format!("{added} added, {removed} removed, {moved} moved, {changed} changed");
     let svg = render::render_svg(&merged, &render::View::none());
     let html = render::render_html(&svg, &merged.title);
     (svg, html, tally)
