@@ -1,0 +1,22 @@
+{
+  "title": "Checkout — variant",
+  "phases": [
+    { "id": "K1", "label": "order", "fromCol": 0, "toCol": 2 },
+    { "id": "K2", "label": "fulfil", "fromCol": 3, "toCol": 4 }
+  ],
+  "elements": [
+    { "id": "X1", "type": "actor", "label": "Customer", "col": 0 },
+    { "id": "C1", "type": "command", "label": "Place order", "col": 0 },
+    { "id": "A1", "type": "aggregate", "label": "Order", "col": 2 },
+    { "id": "E1", "type": "event", "label": "OrderPlaced (validated)", "col": 1 },
+    { "id": "C2", "type": "command", "label": "Pay", "col": 2 },
+    { "id": "E2", "type": "event", "label": "OrderPaid", "col": 2 },
+    { "id": "P1", "type": "policy", "label": "when OrderPaid, arrange shipping", "col": 3 },
+    { "id": "E3", "type": "event", "label": "ShipmentDispatched", "col": 3 },
+    { "id": "R2", "type": "readmodel", "label": "Fulfilment view", "col": 4 }
+  ],
+  "edges": [
+    ["X1", "C1"], ["C1", "E1"], ["E1", "A1"], ["X1", "C2"],
+    ["C2", "E2"], ["E2", "P1"], ["P1", "E3"], ["E3", "R2"]
+  ]
+}
