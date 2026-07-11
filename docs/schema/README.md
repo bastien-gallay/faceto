@@ -53,7 +53,9 @@ model.validate(json.load(open("examples/sample.model.json")))
 
 line = Draft202012Validator(json.load(open("docs/schema/event-log-line.schema.json")))
 for ln in open("examples/sample.event-log.jsonl"):
-    line.validate(json.loads(ln))
+    ln = ln.strip()
+    if ln:  # skip blank / trailing lines — one event object per non-empty line
+        line.validate(json.loads(ln))
 print("valid")
 PY
 ```
