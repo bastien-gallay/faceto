@@ -52,7 +52,13 @@ fn main() {
                 Some(b) => {
                     let bp = Path::new(&b);
                     match load_source(bp) {
-                        Ok(m) => Some((m, (output_stem(bp), output_stem(&log)))),
+                        Ok(m) => {
+                            // Warn on an empty/mis-suffixed baseline, same as `render --base` warns
+                            // both sides — otherwise a wrong `--base` file silently reads every
+                            // current element as "added".
+                            warn_if_empty(&m, bp);
+                            Some((m, (output_stem(bp), output_stem(&log))))
+                        }
                         Err(e) => {
                             eprintln!("error: {e}");
                             exit(1);
