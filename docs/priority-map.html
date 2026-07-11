@@ -84,6 +84,7 @@
     transition:transform .12s ease,box-shadow .12s ease}
   .chip .num{font-variant-numeric:tabular-nums;opacity:.72;font-weight:600}
   .chip:hover{transform:translateY(-1px);box-shadow:var(--shadow);z-index:3}
+  .chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px;transform:translateY(-1px);box-shadow:var(--shadow);z-index:3}
   .chip.now{background:var(--now-bg);color:var(--now-ink);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
   .chip.next{background:var(--next-bg);color:var(--next-ink);border-color:var(--next-bd)}
   .chip.later{background:transparent;color:var(--later-ink);border-color:var(--later-bd)}
@@ -228,20 +229,24 @@
   const obj = r => ({id:r[0],name:r[1],cls:r[2],eff:r[3],type:r[4],sev:r[5],areas:r[6],hz:r[7]});
 
   const tip = document.getElementById("tip");
+  function fillTip(d){
+    tip.innerHTML=`<div class="t-id">#${d.id} · ${d.name}</div>`+
+      `<div class="t-meta">${d.type==="Fix"?("Fix · "+d.sev+" severity"):(d.cls+" · "+d.eff+" effort")} · ${d.hz}</div>`+
+      `<div class="t-areas">${d.areas.map(a=>`<span>area:${a}</span>`).join("")}</div>`;
+  }
+  function moveTip(x,y){
+    const pad=14;
+    if(x+tip.offsetWidth>innerWidth-8) x=Math.max(8,x-tip.offsetWidth-pad);
+    if(y+tip.offsetHeight>innerHeight-8) y=Math.max(8,y-tip.offsetHeight-pad);
+    tip.style.left=x+"px"; tip.style.top=y+"px";
+  }
   function wireTip(el,d){
-    el.addEventListener("mousemove",e=>{
-      tip.style.opacity="1";
-      const pad=14; let x=e.clientX+pad, y=e.clientY+pad;
-      if(x+tip.offsetWidth>innerWidth-8) x=e.clientX-tip.offsetWidth-pad;
-      if(y+tip.offsetHeight>innerHeight-8) y=e.clientY-tip.offsetHeight-pad;
-      tip.style.left=x+"px"; tip.style.top=y+"px";
-    });
-    el.addEventListener("mouseenter",()=>{
-      tip.innerHTML=`<div class="t-id">#${d.id} · ${d.name}</div>`+
-        `<div class="t-meta">${d.type==="Fix"?("Fix · "+d.sev+" severity"):(d.cls+" · "+d.eff+" effort")} · ${d.hz}</div>`+
-        `<div class="t-areas">${d.areas.map(a=>`<span>area:${a}</span>`).join("")}</div>`;
-    });
+    // Mouse: follow the cursor. Keyboard: anchor under the focused chip — same tooltip either way.
+    el.addEventListener("mouseenter",()=>{fillTip(d);tip.style.opacity="1";});
+    el.addEventListener("mousemove",e=>moveTip(e.clientX+14,e.clientY+14));
     el.addEventListener("mouseleave",()=>{tip.style.opacity="0";});
+    el.addEventListener("focus",()=>{fillTip(d);tip.style.opacity="1";const r=el.getBoundingClientRect();moveTip(r.left,r.bottom+6);});
+    el.addEventListener("blur",()=>{tip.style.opacity="0";});
   }
   function chip(d,extraClass){
     const c=document.createElement("span");
@@ -290,7 +295,7 @@
       const cell=el("div","cell");
       if(ri===SEV.length-1) cell.classList.add("lastrow");
       const here=fixes.filter(d=>d.sev===S.k&&d.eff===e);
-      if(here.length===0){ if(!(ri===2&&ci===0)) cell.appendChild(el("span","empty","—")); }
+      if(here.length===0) cell.appendChild(el("span","empty","—"));
       here.forEach(d=>{
         const c=chip(d,"fix later");
         c.style.borderColor=sevColor[S.k]; c.style.color=sevColor[S.k];
