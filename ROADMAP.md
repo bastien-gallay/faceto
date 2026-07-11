@@ -53,6 +53,13 @@ and a benefits-first pitch rewrite (#102).
 Positioning recalibrated: real competitors are the free generalists (Miro free tier, draw.io);
 sell the *safety* event-sourcing procures and local-FIRST, not the mechanism.
 
+**Reprioritised 2026-07-11** (H1 quick-wins cleared): the three format-audit quick wins shipped
+back-to-back — `F-lanes-field` #94 (PR #104), `F-element-links` #96 (PR #106), `F-json-schema` #95
+(PR #105) — so the H1 format pass is **done**. The live focus moves to the **conversational
+AI-loop core**: `F-extract` #90 and `F-variants` #91 (both **P1**, Next) — the extract → variant →
+diff "what if" loop that no competitor offers. `F-context-pack` #97 (P1, effort S) rides right
+behind on the `export` seam. Everything else in Next stays as-is.
+
 **Next — worked by seam cluster, in order:**
 
 1. **CLI / `main.rs`** — `F-output-naming` + `F-cli-help`, one dispatch pass;
@@ -137,9 +144,9 @@ sell the *safety* event-sourcing procures and local-FIRST, not the mechanism.
 | F-variants | render · AI loop | ☐ | Next | *(strategic review 2026-07-06 — the "show me with solution B" step.)* **Cross-log diff**: `render a.jsonl --base b.jsonl` and/or `serve --variant sibling.jsonl` — an agent builds a variant in a sibling log, the user sees the added/removed/moved overlay. `diff_models` + the SVG overlay exist; the delta is only the cross-file entry point. With F-extract: extract → variant → diff = the full "what if" loop. Step toward the PR-diff gap (**F-living-doc** #98). **P1** · Tracked #91. |
 | F-share-file | UI · sharing | ☐ | Later | *(strategic review 2026-07-06 — the zero-dep version of sharing.)* **Standalone shareable HTML artifact**: works from `file://`, local comments via the existing localStorage fallback, an "export my comments" button → `comments.jsonl` the author replays through `POST /comment`. Async collaboration by mail/Slack with **zero server** — what no SaaS can copy. Pairs with **F-deep-links** #56. **P2** · Tracked #92. |
 | F-walkthrough | UI · legibility | ☐ | Later | *(strategic review 2026-07-06 — system-understanding axis.)* **Step-through reading mode**: walk the board phase by phase (or column by column) with the rest dimmed — the presentation counterpart of hover-to-focus. Client-only. On-thesis stretch: replay the *log* (the story of the modelling), which only an event-sourced board can do. **P3** · Tracked #93. |
-| F-lanes-field | format · docs | ☐ | Next | *(strategic review 2026-07-06 — format audit.)* The model.json `lanes` array is a **false affordance**: present in examples, never read (`from_json` ignores it; `LANES` is a const). Remove from examples or document as decorative; the real lane declaration belongs to the profiles route (**F-new-diagrams**). **P2** · Tracked #94. |
-| F-json-schema | docs · AI | ☐ | Next | *(strategic review 2026-07-06.)* Publish a **JSON Schema** for model.json + one event-log line (kinds, payloads, additive-evolution rules) under `docs/`. Lets any LLM generate valid files first try — the founding "typed file you think through with an LLM" pitch, docs-only cost. **P2** · Tracked #95. |
-| F-element-links | model · fidelity | ☐ | Later | *(strategic review 2026-07-06 — format audit.)* Two additive fields: **`links: [url]` on Element** (attach ticket/doc — sharing + understanding axes) and **`label` on Edge** (edges are a bare `[src,dst]`). The edge half shapes **with F-typed-edges** (same `Edge` seam — touch it once). `tags` deferred. **P2** · Tracked #96. |
+| F-lanes-field | format · docs | ✅ | ✅ Shipped | *(strategic review 2026-07-06 — format audit.)* The model.json `lanes` array was a **false affordance**: present in examples, never read (`from_json` ignores it; `LANES` is a const). Removed the decorative field from the examples so authored files no longer imply a knob that does nothing; the real lane declaration belongs to the profiles route (**F-new-diagrams**). Shipped 2026-07-10 (PR #104). **P2** · Tracked #94. |
+| F-json-schema | docs · AI | ✅ | ✅ Shipped | *(strategic review 2026-07-06.)* Published **JSON Schemas** for model.json + one event-log line (kinds, payloads, additive-evolution rules) under `docs/`. Lets any LLM generate valid files first try — the founding "typed file you think through with an LLM" pitch, docs-only cost. Shipped 2026-07-11 (PR #105). **P2** · Tracked #95. |
+| F-element-links | model · fidelity | ✅ | ✅ Shipped | *(strategic review 2026-07-06 — format audit.)* Two additive fields: **`links: [url]` on Element** (attach ticket/doc — sharing + understanding axes) and **`label` on Edge** (edges are a bare `[src,dst]`). The edge half shaped **with F-typed-edges** (same `Edge` seam — touched once). `tags` deferred. Shipped 2026-07-11 (PR #106). **P2** · Tracked #96. |
 | F-context-pack | interop · AI | ☐ | Next | *(strategic review 2026-07-06 — H2 opportunity #1, effort S.)* `export --format context`: a structured markdown+Mermaid **context pack** (ubiquitous language, flows, regions, open hotspots) + a documented AGENTS.md-reference convention. JTBD: "my coding agent knows the domain model without me re-explaining it". Tailwinds verified: AGENTS.md won (60k+ repos, Linux Foundation); the spec-driven wave (Spec Kit 118k★) is 100% prose — the typed-model-as-spec slot is empty. Watch **nebulit/eventmodelers.ai** (Miro plugin, announced Claude Code integration). Rides the `export` seam (F-mermaid-export). Seam cluster **E**. **P1** · Tracked #97. |
 | F-living-doc | CI · docs | ☐ | Later | *(strategic review 2026-07-06 — H2 opportunity #2.)* **Living-doc CI/PR suite**: a GitHub Action running `faceto lint` on PRs, a structural diff between two log revisions posted as a PR comment (needs **F-variants**), a documented Pages publication path. Occupies a confirmed generalist gap (structural diagram diff in PRs — github/community#12888 unanswered since 2022); Structurizr cloud EOL validates local-first. Risk: adoption amplifier, not motor. **P2** · Tracked #98. |
 | F-eventcatalog-export | interop · export | ☐ | Later | *(strategic review 2026-07-06 — H2 opportunity #3.)* `export --format eventcatalog`: an **EventCatalog skeleton** (markdown + frontmatter; events/commands ≈ messages, aggregates ≈ services). EventCatalog is the rising de-facto standard (~8.5k catalogues, +15-20%/month, built-in MCP). Granularity impedance is real — own being a skeleton. Rides the `export` seam. Seam cluster **E**. **P3** · Tracked #99. |
@@ -187,7 +194,7 @@ Proposal > actor/why > trace). Explicit anti-bet: no executable canvas, no CRDT 
 documented road to demo-ware (tldraw computer, Fairies, Natto, Fermat all dead or frozen);
 collab, if it comes, rides the log.
 
-**Sequencing.** H1 quick wins (#94–#96) → the AI-loop core (#90, #91) → H3 seeds
+**Sequencing.** H1 quick wins (#94–#96) ✅ **done 2026-07-11** → the AI-loop core (#90, #91) → H3 seeds
 opportunistically whenever the log is touched (#100) → #97 context pack (+ #101 MCP
 re-torture) → #98 living-doc → #99 EventCatalog → one second format. Every new row passes
 feature-torture before scoping.
