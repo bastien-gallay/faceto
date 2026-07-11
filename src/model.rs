@@ -75,6 +75,10 @@ pub struct Element {
     /// (`id` is) and never a lane choice (`type` is) — it only places the sticky *within* its band.
     pub y: Option<f64>,
     pub resolved: bool,
+    /// Attached reference URLs (F-element-links): tickets, docs, ADRs. Additive and free-form —
+    /// never identity, never a lane. Surfaced as clickable chips in the click modal, not painted
+    /// into the calm SVG board. Empty when the element carries none.
+    pub links: Vec<String>,
     // diff annotations (not in the file)
     pub diff: Option<String>,
     pub was: Option<Was>,
@@ -84,6 +88,11 @@ pub struct Element {
 pub struct Edge {
     pub src: String,
     pub dst: String,
+    /// Optional human label for the connection (F-element-links) — drawn at the edge midpoint so
+    /// connection kinds stop reading identically. Shares the `Edge` seam with F-typed-edges (a
+    /// future additive `type`); touch it once. Distinct from `status`, which is the internal
+    /// diff-overlay channel, not an authored field.
+    pub label: Option<String>,
     pub status: Option<String>,
 }
 
@@ -180,6 +189,18 @@ pub fn resolve_region_id(explicit: Option<&str>, max_region: &mut u32) -> String
     id
 }
 
+/// The string entries of a JSON `links` array (F-element-links). Absent, non-array, or non-string
+/// entries are dropped, never an error — same lenient additive-field posture as the rest of the parser.
+pub fn links_from(j: Option<&Json>) -> Vec<String> {
+    j.and_then(Json::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn element_from(j: &Json) -> Option<Element> {
     Some(Element {
         id: j.get("id")?.as_str()?.to_string(),
@@ -189,17 +210,30 @@ fn element_from(j: &Json) -> Option<Element> {
         detail: j.get("detail").and_then(|v| v.as_str()).map(String::from),
         y: j.get("y").and_then(|v| v.as_f64()),
         resolved: j.get("resolved").and_then(|v| v.as_bool()).unwrap_or(false),
+        links: links_from(j.get("links")),
         diff: None,
         was: None,
     })
 }
 
+/// An edge is a positional tuple `[src, dst]` / `[src, dst, status]` **or** an object
+/// `{src, dst, label}` (F-element-links: the object form carries the authored `label`; the tuple's
+/// third slot is the internal diff `status`, not an authored field). The object form is the seam
+/// F-typed-edges extends with a future `type`.
 fn edge_from(j: &Json) -> Option<Edge> {
-    let a = j.as_array()?;
+    if let Some(a) = j.as_array() {
+        return Some(Edge {
+            src: a.first()?.as_str()?.to_string(),
+            dst: a.get(1)?.as_str()?.to_string(),
+            label: None,
+            status: a.get(2).and_then(|v| v.as_str()).map(String::from),
+        });
+    }
     Some(Edge {
-        src: a.first()?.as_str()?.to_string(),
-        dst: a.get(1)?.as_str()?.to_string(),
-        status: a.get(2).and_then(|v| v.as_str()).map(String::from),
+        src: j.get("src")?.as_str()?.to_string(),
+        dst: j.get("dst")?.as_str()?.to_string(),
+        label: j.get("label").and_then(|v| v.as_str()).map(String::from),
+        status: None,
     })
 }
 
@@ -350,6 +384,7 @@ pub fn diff_models(a: &Model, b: &Model, meta: (String, String)) -> Model {
         edges.push(Edge {
             src: e.src.clone(),
             dst: e.dst.clone(),
+            label: e.label.clone(),
             status: Some(status.into()),
         });
     }
@@ -358,6 +393,7 @@ pub fn diff_models(a: &Model, b: &Model, meta: (String, String)) -> Model {
             edges.push(Edge {
                 src: e.src.clone(),
                 dst: e.dst.clone(),
+                label: e.label.clone(),
                 status: Some("removed".into()),
             });
         }
@@ -416,6 +452,54 @@ mod tests {
 
     fn model_of(src: &str) -> Model {
         from_json(&json::parse(src).unwrap())
+    }
+
+    // ---- F-element-links: element `links` + edge `label` ----------------------------------
+
+    #[test]
+    fn element_links_parse_as_a_string_list_and_default_empty() {
+        let m = model_of(
+            r#"{"elements":[
+                {"id":"E1","type":"event","label":"A","links":["https://t/1","doc://x"]},
+                {"id":"E2","type":"event","label":"B"}
+            ]}"#,
+        );
+        assert_eq!(m.elements[0].links, vec!["https://t/1", "doc://x"]);
+        assert!(
+            m.elements[1].links.is_empty(),
+            "no links → empty, not an error"
+        );
+    }
+
+    #[test]
+    fn a_malformed_links_field_is_ignored_not_fatal() {
+        // Non-array `links`, and non-string entries within an array, drop silently (additive posture).
+        let m = model_of(
+            r#"{"elements":[
+                {"id":"E1","type":"event","label":"A","links":"nope"},
+                {"id":"E2","type":"event","label":"B","links":["ok",7,null,"two"]}
+            ]}"#,
+        );
+        assert!(m.elements[0].links.is_empty());
+        assert_eq!(m.elements[1].links, vec!["ok", "two"]);
+    }
+
+    #[test]
+    fn an_edge_object_form_carries_a_label_the_tuple_form_has_none() {
+        let m = model_of(
+            r#"{"elements":[
+                {"id":"E1","type":"event","label":"A"},
+                {"id":"E2","type":"event","label":"B"},
+                {"id":"E3","type":"event","label":"C"}
+            ],"edges":[
+                ["E1","E2"],
+                {"src":"E2","dst":"E3","label":"then"}
+            ]}"#,
+        );
+        assert_eq!(m.edges[0].src, "E1");
+        assert_eq!(m.edges[0].label, None, "tuple form → no authored label");
+        assert_eq!(m.edges[1].src, "E2");
+        assert_eq!(m.edges[1].label.as_deref(), Some("then"));
     }
 
     // ---- F-es-lint: board level ------------------------------------------------------------

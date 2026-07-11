@@ -109,7 +109,8 @@
         "label": { "type": "string" },
         "col": { "type": "integer" },
         "detail": { "type": "string" },
-        "y": { "type": "number", "minimum": 0, "maximum": 1, "description": "Sub-position within the lane band; omit for auto-stacking." }
+        "y": { "type": "number", "minimum": 0, "maximum": 1, "description": "Sub-position within the lane band; omit for auto-stacking." },
+        "links": { "type": "array", "items": { "type": "string", "format": "uri" }, "description": "Attached reference URLs (F-element-links); omit when none." }
       }
     },
     {
@@ -174,7 +175,8 @@
       "properties": {
         "event": { "const": "EdgeAdded" },
         "src": { "type": "string" },
-        "dst": { "type": "string" }
+        "dst": { "type": "string" },
+        "label": { "type": "string", "description": "Optional human label for the connection (F-element-links); omit when none." }
       }
     },
     {

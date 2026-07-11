@@ -72,6 +72,9 @@ You author a board as one typed JSON file — a slice of [`examples/sample.model
 - **`id`** is the stable identity — the comment join key and the diff key. Never renumber; only add.
 - A trailing `(parenthetical)` or an explicit **`detail`** field becomes the sticky's smaller
   second line. A hotspot with **`"resolved": true`** goes quiet (grey + check) instead of loud red.
+- An element may carry **`links`** (a list of reference URLs — tickets, docs, ADRs), surfaced as
+  clickable chips when you click it. An edge may carry a **`label`** via its object form
+  (`{ "src": "C2", "dst": "E2", "label": "emits" }`), drawn quietly at the connection's midpoint.
 
 A machine-readable [**JSON Schema**](docs/schema/) pins the exact shape of both `model.json` and a
 single event-log line — hand it to an LLM to generate a valid file first try, or validate one

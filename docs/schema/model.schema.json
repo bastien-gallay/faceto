@@ -101,19 +101,40 @@
           "type": "boolean",
           "default": false,
           "description": "For a `hotspot`: when true it goes quiet (grey + check) instead of loud red."
+        },
+        "links": {
+          "type": "array",
+          "description": "Attached reference URLs (F-element-links): tickets, docs, ADRs. Surfaced as clickable chips in the click modal, not painted on the board. Non-string entries are dropped on load.",
+          "items": { "type": "string", "format": "uri" }
         }
       }
     },
     "edge": {
-      "type": "array",
-      "description": "A directed edge as a positional tuple: [src, dst] or [src, dst, status]. `src` and `dst` are element ids. A tuple with fewer than 2 string ids is dropped on load. (Note: in the EVENT LOG, edges are objects `{src, dst}` instead — see event-log-line.schema.json.)",
-      "minItems": 2,
-      "maxItems": 3,
-      "items": false,
-      "prefixItems": [
-        { "type": "string", "description": "src — source element id" },
-        { "type": "string", "description": "dst — destination element id" },
-        { "type": "string", "description": "optional status/annotation carried through render" }
+      "description": "A directed edge, in either form: a positional tuple `[src, dst]` / `[src, dst, status]`, OR an object `{src, dst, label}` (F-element-links: the object form carries an authored `label`). `src` and `dst` are element ids. (Note: in the EVENT LOG, edges are objects `{src, dst, label?}` — see event-log-line.schema.json.)",
+      "oneOf": [
+        {
+          "type": "array",
+          "description": "Tuple form. A tuple with fewer than 2 string ids is dropped on load. The optional third slot is the internal diff `status`, not an authored field.",
+          "minItems": 2,
+          "maxItems": 3,
+          "items": false,
+          "prefixItems": [
+            { "type": "string", "description": "src — source element id" },
+            { "type": "string", "description": "dst — destination element id" },
+            { "type": "string", "description": "internal diff status (not authored)" }
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Object form (F-element-links). The seam F-typed-edges extends with a future `type`.",
+          "additionalProperties": true,
+          "required": ["src", "dst"],
+          "properties": {
+            "src": { "type": "string", "description": "source element id" },
+            "dst": { "type": "string", "description": "destination element id" },
+            "label": { "type": "string", "description": "optional human label, drawn at the edge midpoint" }
+          }
+        }
       ]
     }
   }
