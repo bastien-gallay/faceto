@@ -154,7 +154,9 @@ fn route_page(out: &mut TcpStream, ctx: &Ctx) -> std::io::Result<()> {
         Ok((_v, model)) => {
             let board = overlay(&ctx.baseline, &model);
             let svg = render::render_svg(&board, &render::View::none());
-            let html = render::render_html(&svg, &board.title);
+            // A launch-time `--base` makes this a diff overlay → render the page read-only so no
+            // edit gesture lands on the ghost-carrying diff DOM.
+            let html = render::render_html(&svg, &board.title, ctx.baseline.is_some());
             send(out, 200, "text/html; charset=utf-8", html.as_bytes(), &[])
         }
         Err(e) => send(out, 500, "text/plain; charset=utf-8", e.as_bytes(), &[]),

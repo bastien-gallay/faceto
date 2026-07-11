@@ -3,7 +3,11 @@
 use super::style::*;
 use super::text::esc;
 
-pub fn render_html(svg: &str, title: &str) -> String {
+/// Wrap an SVG board in the interactive page. `variant` marks a **diff-overlay** render (a
+/// `--base` cross-file diff, from either `render --base` or `serve --base`): it flips the client
+/// into a **read-only review surface** (`CFG.variant`), so no structural-edit gesture ever operates
+/// on a diff DOM that carries baseline-only "removed" ghosts. A plain board passes `false`.
+pub fn render_html(svg: &str, title: &str, variant: bool) -> String {
     // The client reuses these geometry constants to re-place a moved sticky and redraw its edges
     // in the browser — keep render.rs the single source of truth for them. `regionTabH`/
     // `regionTabCharW` do the same for the region-add editor's box (Composable — the client must
@@ -11,8 +15,8 @@ pub fn render_html(svg: &str, title: &str) -> String {
     // `rowPitch`/`laneVpad` let the drag preview place the lane-growth guide exactly one row
     // below the lane's current bottom rule — the same numbers this renderer will use on commit.
     let cfg = format!(
-        "{{\"colW\":{},\"stickyW\":{},\"stickyH\":{},\"rowPitch\":{},\"laneVpad\":{},\"regionTabH\":{},\"regionTabCharW\":{},\"regionTabPad\":{}}}",
-        COL_W, STICKY_W, STICKY_H, ROW_PITCH, LANE_VPAD, REGION_TAB_H, REGION_TAB_CHAR_W, REGION_TAB_PAD
+        "{{\"colW\":{},\"stickyW\":{},\"stickyH\":{},\"rowPitch\":{},\"laneVpad\":{},\"regionTabH\":{},\"regionTabCharW\":{},\"regionTabPad\":{},\"variant\":{}}}",
+        COL_W, STICKY_W, STICKY_H, ROW_PITCH, LANE_VPAD, REGION_TAB_H, REGION_TAB_CHAR_W, REGION_TAB_PAD, variant
     );
     // Two-stage fill. `__CONFIG__` lives *inside* the client script, so it must be resolved before
     // the script is inserted into the shell: `fill_template` never re-scans an inserted value (so a
@@ -97,17 +101,25 @@ mod tests {
 
     #[test]
     fn render_html_injects_the_geometry_config() {
-        let html = render_html("<svg></svg>", "t");
+        let html = render_html("<svg></svg>", "t", false);
         assert!(!html.contains("__CONFIG__"));
         assert!(html.contains("\"colW\":210"));
         assert!(html.contains("\"stickyW\":176"));
     }
 
     #[test]
+    fn variant_flag_marks_the_page_read_only() {
+        // A plain board injects variant:false; a diff overlay (render/serve --base) injects
+        // variant:true, which the client reads into its read-only review mode (F-variants #1).
+        assert!(render_html("<svg></svg>", "t", false).contains("\"variant\":false"));
+        assert!(render_html("<svg></svg>", "t", true).contains("\"variant\":true"));
+    }
+
+    #[test]
     fn a_label_equal_to_a_template_token_is_not_clobbered() {
         // A sticky labelled `__CONFIG__` reaches the SVG verbatim (esc leaves underscores). The
         // single-pass fill must insert it as-is, not rewrite it into the geometry JSON.
-        let html = render_html("<text>__CONFIG__</text>", "t");
+        let html = render_html("<text>__CONFIG__</text>", "t", false);
         assert!(html.contains("<text>__CONFIG__</text>")); // label survived
         assert!(html.contains("\"colW\":")); // real config JSON still landed
     }
@@ -118,14 +130,14 @@ mod tests {
         // so they are the ones a mis-ordered pass could rewrite into the whole CSS/JS blob. A sticky
         // labelled with either must reach the board verbatim, and the real style/script still land.
         for token in ["__STYLE__", "__SCRIPT__"] {
-            let html = render_html(&format!("<text>{token}</text>"), "t");
+            let html = render_html(&format!("<text>{token}</text>"), "t", false);
             assert!(
                 html.contains(&format!("<text>{token}</text>")),
                 "{token} label clobbered"
             );
         }
         // The real assets landed (CSS nameplate rule + the boot call from the concatenated script).
-        let html = render_html("<text>__SCRIPT__</text>", "t");
+        let html = render_html("<text>__SCRIPT__</text>", "t", false);
         assert!(html.contains("--nameplate")); // style.css was inserted
         assert!(html.contains("\nload();")); // main.js (last module) was inserted
     }

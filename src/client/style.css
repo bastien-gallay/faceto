@@ -12,6 +12,12 @@
   button:hover { background: #f2f2f7; }
   #status { font-size: 11px; padding: 3px 9px; border-radius: 999px; background: #eef; color: #557; }
   #status.live { background: #e6f7ec; color: #1b7a3d; }
+  /* A read-only variant overlay (render/serve --base): amber pill, and every structural-edit
+     affordance disabled so no gesture lands on the ghost-carrying diff DOM. Reading stays live —
+     scroll, the comment sidebar, and keyboard region-collapse (z) are untouched. */
+  #status.variant { background: #fdf2e0; color: #9a6a12; }
+  body.variant .sticky, body.variant .frontier, body.variant .region-tab { pointer-events: none; }
+  body.variant .hovglyph, body.variant #connect-dot { display: none !important; }
   #note { font-size: 11px; color: #1b7a3d; }
   /* A destructive-confirm prompt must not wear the success-green: the one moment the text channel
      carries danger, it says so in red. Set by doRemove / armRegion, cleared on disarm. */

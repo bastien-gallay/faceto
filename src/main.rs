@@ -191,7 +191,7 @@ fn cmd_render(args: &RenderArgs) {
         // Plain render: the board as-is.
         None => {
             let svg = render::render_svg(&model, &render::View::none());
-            let html = render::render_html(&svg, &model.title);
+            let html = render::render_html(&svg, &model.title, false);
             let (svg_path, html_path) = write_board_files(&dir, &stem, &svg, &html);
             println!(
                 "rendered {} elements → {} + {}",
@@ -251,7 +251,8 @@ fn render_diff(
     }
     let tally = format!("{added} added, {removed} removed, {moved} moved, {changed} changed");
     let svg = render::render_svg(&merged, &render::View::none());
-    let html = render::render_html(&svg, &merged.title);
+    // A cross-file diff is a review artifact → render read-only (variant = true).
+    let html = render::render_html(&svg, &merged.title, true);
     (svg, html, tally)
 }
 

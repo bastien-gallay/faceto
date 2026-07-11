@@ -64,7 +64,9 @@ async function load() {
     if (collapsedSet().size) await redrawView();
   }
   ownEdit = null;
-  replayMoves();
+  // A read-only variant overlay never replays local moves onto the diff DOM (there are none to
+  // replay — editing is disabled — and the board must mirror the log/baseline exactly).
+  if (!READONLY) replayMoves();
   paint();
 }
 
