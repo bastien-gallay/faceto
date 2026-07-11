@@ -16,7 +16,7 @@
     { "id": "E3", "type": "event", "label": "UnfinishedWorkProjectedForward", "col": 3 },
     { "id": "R1", "type": "readmodel", "label": "Today view", "col": 4 },
     { "id": "H1", "type": "hotspot", "label": "TopicCreated (item added to a non-existent topic)", "col": 3 },
-    { "id": "H2", "type": "hotspot", "label": "resolved example", "col": 4, "resolved": true, "resolution": "settled in review" }
+    { "id": "H2", "type": "hotspot", "label": "resolved example", "col": 4, "resolved": true, "detail": "settled in review" }
   ],
   "edges": [
     ["X1", "C1"], ["C1", "E1"], ["E1", "A1"], ["X1", "C2"],
