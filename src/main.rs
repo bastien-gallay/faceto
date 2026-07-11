@@ -162,8 +162,19 @@ fn cmd_render(model_path: &str) {
     warn_if_empty(&model, path);
     let svg = render::render_svg(&model, &render::View::none());
     let html = render::render_html(&svg, &model.title);
-    let dir = dir_of(path);
-    let stem = output_stem(path);
+    let (svg_path, html_path) = write_board_files(&dir_of(path), &output_stem(path), &svg, &html);
+    println!(
+        "rendered {} elements → {} + {}",
+        model.elements.len(),
+        svg_path.display(),
+        html_path.display()
+    );
+}
+
+/// Write a rendered board's SVG + HTML beside a source, under `stem` (`<stem>.svg` / `<stem>.html`).
+/// Both the plain `render` path and the `--base` diff path funnel through here, so the write and its
+/// error/exit handling live in exactly one place. Returns the two paths for the caller's summary line.
+fn write_board_files(dir: &Path, stem: &str, svg: &str, html: &str) -> (PathBuf, PathBuf) {
     let svg_path = dir.join(format!("{stem}.svg"));
     let html_path = dir.join(format!("{stem}.html"));
     if let Err(e) = std::fs::write(&svg_path, format!("{svg}\n")) {
@@ -174,12 +185,7 @@ fn cmd_render(model_path: &str) {
         eprintln!("error writing {}: {e}", html_path.display());
         exit(1);
     }
-    println!(
-        "rendered {} elements → {} + {}",
-        model.elements.len(),
-        svg_path.display(),
-        html_path.display()
-    );
+    (svg_path, html_path)
 }
 
 /// Check a board against the ES-grammar rules and print any findings. **Warn-only**: a
