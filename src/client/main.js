@@ -1,4 +1,8 @@
-const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+// Escapes all five markup-significant chars — the quote pair matters because esc feeds attribute
+// contexts too (a link `href="…"`), not just text: a `"` in an authored URL (F-element-links) would
+// otherwise break out of the attribute and inject a live handler. Mirrors the Rust `esc`
+// (src/render/text.rs), so the client and server escape the same set.
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#x27;" }[c]));
 // A sticky's `data-links` (newline-joined URLs, F-element-links) → clickable chips for the modal.
 // Pure and side-effect-free (tested in tests/js). Only http/https/mailto open as anchors — any
 // other scheme (a `javascript:` URL a hand-authored model.json might carry) renders as inert text,

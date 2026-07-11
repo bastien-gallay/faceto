@@ -197,6 +197,9 @@ check("linkChips on empty/undefined yields no chips",
   linkChips("") === "" && linkChips(undefined) === "");
 check("linkChips escapes markup in a URL", linkChips("https://x?a=<b>") ===
   `<a class="chip" href="https://x?a=&lt;b&gt;" target="_blank" rel="noopener noreferrer">https://x?a=&lt;b&gt;</a>`);
+// A `"` in an authored URL must not break out of the href attribute (DOM XSS): esc quote-encodes it.
+check("linkChips neutralises a quote-breakout in the href", !linkChips('https://x"onmouseover="alert(1)').includes('"onmouseover='));
+check("esc quote-encodes \" and '", esc(`a"b'c`) === "a&quot;b&#x27;c");
 
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log("\nall board-logic checks passed");
