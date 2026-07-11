@@ -75,6 +75,7 @@ pub fn replay(events: &[Event]) -> Model {
                 col,
                 detail,
                 y,
+                links,
             } => {
                 if !m.elements.iter().any(|e| &e.id == id) {
                     m.elements.push(Element {
@@ -85,6 +86,7 @@ pub fn replay(events: &[Event]) -> Model {
                         detail: detail.clone(),
                         y: *y,
                         resolved: false,
+                        links: links.clone(),
                         diff: None,
                         was: None,
                     });
@@ -123,11 +125,12 @@ pub fn replay(events: &[Event]) -> Model {
                 m.elements.retain(|e| &e.id != id);
                 m.edges.retain(|e| &e.src != id && &e.dst != id);
             }
-            Event::EdgeAdded { src, dst } => {
+            Event::EdgeAdded { src, dst, label } => {
                 if !m.edges.iter().any(|e| &e.src == src && &e.dst == dst) {
                     m.edges.push(Edge {
                         src: src.clone(),
                         dst: dst.clone(),
+                        label: label.clone(),
                         status: None,
                     });
                 }

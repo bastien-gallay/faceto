@@ -134,7 +134,11 @@ fn edge_comment_to_events(v: &Json, kind: &str) -> Vec<Event> {
         return Vec::new();
     }
     match kind {
-        "connect" => vec![Event::EdgeAdded { src, dst }],
+        "connect" => vec![Event::EdgeAdded {
+            src,
+            dst,
+            label: None,
+        }],
         "disconnect" => vec![Event::EdgeRemoved { src, dst }],
         _ => Vec::new(),
     }
@@ -222,7 +226,7 @@ mod tests {
         let mk = |body: &str| comment_to_events(&json::parse(body).unwrap());
         assert!(
             matches!(&mk(r#"{"kind":"connect","src":"E1","dst":"E2"}"#)[..],
-                [Event::EdgeAdded { src, dst }] if src == "E1" && dst == "E2"),
+                [Event::EdgeAdded { src, dst, .. }] if src == "E1" && dst == "E2"),
         );
         assert!(
             matches!(&mk(r#"{"kind":"disconnect","src":"E1","dst":"E2"}"#)[..],
@@ -261,7 +265,7 @@ mod tests {
             &json::parse(r#"{"kind":"connect","src":" E1 ","dst":"E2 "}"#).unwrap(),
         );
         assert!(
-            matches!(&evs[..], [Event::EdgeAdded { src, dst }] if src == "E1" && dst == "E2"),
+            matches!(&evs[..], [Event::EdgeAdded { src, dst, .. }] if src == "E1" && dst == "E2"),
             "got {evs:?}"
         );
     }

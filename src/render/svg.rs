@@ -707,6 +707,25 @@ fn draw_edges(
                 c = EDGE_FLOW
             )),
         }
+        // An authored connection label (F-element-links), set small and muted at the edge midpoint
+        // so a wire reads as *what* it is, not just *that* it is — a white halo keeps it legible
+        // where it crosses a line. Suppressed on a fading "removed" diff edge (its endpoints are
+        // going away). Calm-instrument register: never a loud tag.
+        if let Some(lbl) = edge.label.as_deref().filter(|l| !l.is_empty()) {
+            if edge.status.as_deref() != Some("removed") {
+                let (sx, sy) = centers[si];
+                let (dx, dy) = centers[di];
+                p.push(format!(
+                    "<text class=\"edge-label\" x=\"{:.1}\" y=\"{:.1}\" font-size=\"10\" \
+                     text-anchor=\"middle\" fill=\"{c}\" stroke=\"#fff\" stroke-width=\"3\" \
+                     paint-order=\"stroke\" opacity=\"0.85\">{}</text>",
+                    (sx + dx) / 2.0,
+                    (sy + dy) / 2.0 - 3.0,
+                    esc(lbl),
+                    c = AXIS_LABEL,
+                ));
+            }
+        }
     }
 }
 
@@ -775,10 +794,18 @@ fn draw_stickies(
             Some(_) => format!(" data-y=\"{}\"", crate::model::y_key(e.y)),
             None => String::new(),
         };
+        // Reference URLs (F-element-links) ride the sticky as a newline-joined `data-links` (a URL
+        // has no raw newline) — the client splits it and renders clickable chips in the modal. They
+        // are surfaced on click, never painted on the calm board. Absent when the element has none.
+        let data_links = if e.links.is_empty() {
+            String::new()
+        } else {
+            format!(" data-links=\"{}\"", esc(&e.links.join("\n")))
+        };
         p.push(format!(
             "<g id=\"{}\" class=\"{}\" role=\"button\" tabindex=\"0\" aria-label=\"{}\" \
              data-hero=\"{}\" data-detail=\"{}\" data-kind=\"{}\" \
-             data-col=\"{}\" data-cx=\"{:.1}\" data-cy=\"{:.1}\"{} style=\"cursor:pointer\"{}>",
+             data-col=\"{}\" data-cx=\"{:.1}\" data-cy=\"{:.1}\"{}{} style=\"cursor:pointer\"{}>",
             esc(&e.id),
             cls,
             esc(&aria),
@@ -789,6 +816,7 @@ fn draw_stickies(
             cx,
             cy,
             data_y,
+            data_links,
             g_op
         ));
         if let (Some(_), Some(meta)) = (status, diff_meta) {
@@ -970,6 +998,7 @@ mod tests {
                 detail: None,
                 y: None,
                 resolved: false,
+                links: Vec::new(),
                 diff: None,
                 was: None,
             }],
@@ -1046,6 +1075,7 @@ mod tests {
                     detail: None,
                     y: None,
                     resolved: false,
+                    links: Vec::new(),
                     diff: None,
                     was: None,
                 })
@@ -1142,6 +1172,7 @@ mod tests {
             detail: None,
             y: None,
             resolved: false,
+            links: Vec::new(),
             diff: None,
             was: None,
         });
@@ -1274,11 +1305,13 @@ mod tests {
             Edge {
                 src: "E2".into(),
                 dst: "E3".into(),
+                label: None,
                 status: None,
             }, // wholly inside K2
             Edge {
                 src: "E1".into(),
                 dst: "E4".into(),
+                label: None,
                 status: None,
             }, // crosses K2, both ends visible
         ];
@@ -1510,9 +1543,52 @@ mod tests {
             detail: None,
             y: None,
             resolved: false,
+            links: Vec::new(),
             diff: None,
             was: None,
         }
+    }
+
+    // F-element-links: an edge `label` draws as a midpoint `edge-label` text; an element's `links`
+    // ride the sticky as `data-links` (surfaced in the modal), never painted on the board.
+    #[test]
+    fn edge_label_and_element_links_reach_the_svg() {
+        let mut src = el("C1", "command", 0);
+        src.links = vec!["https://tix/9".into(), "adr://2".into()];
+        let m = Model {
+            elements: vec![src, el("E1", "event", 1)],
+            edges: vec![Edge {
+                src: "C1".into(),
+                dst: "E1".into(),
+                label: Some("emits".into()),
+                status: None,
+            }],
+            ..Default::default()
+        };
+        let svg = rsvg(&m);
+        assert!(
+            svg.contains("class=\"edge-label\""),
+            "edge label text is drawn"
+        );
+        assert!(svg.contains(">emits</text>"), "the label reads its text");
+        // links ride the source sticky, newline-joined, and are not painted as board text.
+        assert!(svg.contains("data-links=\"https://tix/9\nadr://2\""));
+    }
+
+    // An edge with no authored label draws no `edge-label` text (the common case stays clean).
+    #[test]
+    fn an_unlabelled_edge_draws_no_label_text() {
+        let m = Model {
+            elements: vec![el("C1", "command", 0), el("E1", "event", 1)],
+            edges: vec![Edge {
+                src: "C1".into(),
+                dst: "E1".into(),
+                label: None,
+                status: None,
+            }],
+            ..Default::default()
+        };
+        assert!(!rsvg(&m).contains("edge-label"));
     }
 
     // Lever A (F-edge-routing): a crowded cell stacks its members by the mean lane of their edge
@@ -1535,11 +1611,13 @@ mod tests {
                 Edge {
                     src: "X1".into(),
                     dst: "E_lo".into(),
+                    label: None,
                     status: None,
                 },
                 Edge {
                     src: "E_hi".into(),
                     dst: "R1".into(),
+                    label: None,
                     status: None,
                 },
             ],
@@ -1583,11 +1661,13 @@ mod tests {
                 Edge {
                     src: "X1".into(),
                     dst: "C1".into(),
+                    label: None,
                     status: None,
                 },
                 Edge {
                     src: "X1".into(),
                     dst: "C2".into(),
+                    label: None,
                     status: None,
                 },
             ],
@@ -1626,6 +1706,7 @@ mod tests {
             edges.push(Edge {
                 src: "X1".into(),
                 dst: format!("C{k}"),
+                label: None,
                 status: None,
             });
         }
