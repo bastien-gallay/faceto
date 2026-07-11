@@ -2,7 +2,7 @@
 //!
 //!   faceto render  [SOURCE] [--base OTHER]  write <name>.svg + <name>.html (a diff overlay vs OTHER)
 //!   faceto lint    [SOURCE]           check the board against the ES-grammar rules (warn-only)
-//!   faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar
+//!   faceto serve   [SOURCE] [-p PORT] [--base OTHER]  serve the live board + comment sidecar
 //!   faceto export  [SOURCE] [--format mermaid]  print the board as Mermaid text (stdout)
 //!   faceto genesis [MODEL]            migrate a model.json into a <name>.event-log.jsonl
 //!   faceto compact [LOG]              fold a log to a snapshot, bounding replay length
@@ -37,7 +37,7 @@ fn main() {
             cmd_lint(&model);
         }
         "serve" => {
-            let (source, port) = parse_serve(&args[2..]);
+            let (source, port, base) = parse_serve(&args[2..]);
             let log = match serve_log_path(Path::new(&source)) {
                 Ok(p) => p,
                 Err(e) => {
@@ -45,7 +45,23 @@ fn main() {
                     exit(1);
                 }
             };
-            if let Err(e) = serve::serve(&log, port) {
+            // A launch-time `--base` fixes the overlay baseline for the whole session. Loaded
+            // read-only via `load_source` (never genesis'd or mutated) and paired with its stem +
+            // the served board's stem for the on-board legend/tooltip labels ("was" → "now").
+            let baseline = match base {
+                Some(b) => {
+                    let bp = Path::new(&b);
+                    match load_source(bp) {
+                        Ok(m) => Some((m, (output_stem(bp), output_stem(&log)))),
+                        Err(e) => {
+                            eprintln!("error: {e}");
+                            exit(1);
+                        }
+                    }
+                }
+                None => None,
+            };
+            if let Err(e) = serve::serve(&log, port, baseline) {
                 eprintln!("error: {e}");
                 exit(1);
             }
@@ -506,23 +522,41 @@ fn parse_render(args: &[String]) -> RenderArgs {
     RenderArgs { source, base }
 }
 
-fn parse_serve(args: &[String]) -> (String, u16) {
+/// `serve [SOURCE] [-p PORT] [--base OTHER]`. Positional source; `-p`/`--port` the port; `--base` an
+/// optional baseline board the live overlay diffs against (F-variants) — same flag and same
+/// direction as `render --base` (SOURCE is "now", `--base` the "was" side). A `--base` with no value
+/// fails loudly (exit 2).
+fn parse_serve(args: &[String]) -> (String, u16, Option<String>) {
     let mut model = "model.json".to_string();
     let mut port: u16 = 8753;
+    let mut base = None;
     let mut i = 0;
     while i < args.len() {
-        if matches!(args[i].as_str(), "-p" | "--port") {
-            if let Some(v) = args.get(i + 1).and_then(|s| s.parse().ok()) {
-                port = v;
+        match args[i].as_str() {
+            "-p" | "--port" => {
+                if let Some(v) = args.get(i + 1).and_then(|s| s.parse().ok()) {
+                    port = v;
+                }
+                i += 2;
             }
-            i += 2;
-        } else {
-            reject_flag(&args[i]);
-            model = args[i].clone();
-            i += 1;
+            "--base" => {
+                match args.get(i + 1) {
+                    Some(v) => base = Some(v.clone()),
+                    None => {
+                        eprintln!("--base needs a value (the baseline board to diff against)");
+                        exit(2);
+                    }
+                }
+                i += 2;
+            }
+            _ => {
+                reject_flag(&args[i]);
+                model = args[i].clone();
+                i += 1;
+            }
         }
     }
-    (model, port)
+    (model, port, base)
 }
 
 /// The output formats `export` can emit. Only `Mermaid` today; the enum exists so the `--format`
@@ -570,7 +604,7 @@ fn print_help() {
          USAGE:\n\
          \x20 faceto render  [SOURCE] [--base OTHER]  write <name>.svg + <name>.html (diff overlay vs OTHER)\n\
          \x20 faceto lint    [SOURCE]            check the board against the ES-grammar rules (warn-only)\n\
-         \x20 faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar (default :8753)\n\
+         \x20 faceto serve   [SOURCE] [-p PORT] [--base OTHER]  serve the live board + comment sidecar (default :8753)\n\
          \x20 faceto export  [SOURCE] [--format mermaid]  print the board as Mermaid text to stdout (lossy)\n\
          \x20 faceto genesis [MODEL]             migrate a model.json into a <name>.event-log.jsonl\n\
          \x20 faceto compact [LOG]               fold a log to a snapshot, bounding replay (default model.event-log.jsonl)\n\
@@ -626,6 +660,28 @@ mod tests {
         let r = parse_render(&args(&["--base", "before.jsonl", "after.jsonl"]));
         assert_eq!(r.source, "after.jsonl");
         assert_eq!(r.base.as_deref(), Some("before.jsonl"));
+    }
+
+    #[test]
+    fn parse_serve_reads_port_and_optional_base() {
+        // Defaults: model.json, :8753, no overlay baseline.
+        let (src, port, base) = parse_serve(&args(&[]));
+        assert_eq!((src.as_str(), port), ("model.json", 8753));
+        assert!(base.is_none());
+
+        // `--base` sets the baseline and composes with `-p`, in any order.
+        let (src, port, base) = parse_serve(&args(&[
+            "after.jsonl",
+            "-p",
+            "9000",
+            "--base",
+            "before.jsonl",
+        ]));
+        assert_eq!((src.as_str(), port), ("after.jsonl", 9000));
+        assert_eq!(base.as_deref(), Some("before.jsonl"));
+        let (src, port, base) = parse_serve(&args(&["--base", "before.jsonl", "after.jsonl"]));
+        assert_eq!((src.as_str(), port), ("after.jsonl", 8753));
+        assert_eq!(base.as_deref(), Some("before.jsonl"));
     }
 
     #[test]

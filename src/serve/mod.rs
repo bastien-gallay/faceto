@@ -58,6 +58,10 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub(crate) struct Ctx {
     /// The event log — the single source of truth this server reads and appends to.
     pub(crate) model_path: PathBuf,
+    /// A launch-time `--base` overlay baseline (F-variants): a fixed board every render is diffed
+    /// against, plus its ("was", "now") legend labels. `None` for a plain live board. Loaded once,
+    /// read-only — the baseline is a static comparison input, never part of the log.
+    pub(crate) baseline: Option<(Model, (String, String))>,
     cache: Mutex<Cache>,
     /// Serializes appends to the log (H4): concurrent `POST /comment` handlers run on
     /// separate threads, so without this two events could interleave mid-line. Holding
@@ -66,10 +70,12 @@ pub(crate) struct Ctx {
 }
 
 impl Ctx {
-    /// A context over an event log, with an empty recent-model ring and a free appends lock.
+    /// A context over an event log, with an empty recent-model ring, a free appends lock, and no
+    /// overlay baseline. `serve` sets `baseline` when launched with `--base`.
     fn new(model_path: PathBuf) -> Self {
         Ctx {
             model_path,
+            baseline: None,
             cache: Mutex::new(Cache {
                 map: HashMap::new(),
                 order: VecDeque::new(),
@@ -238,9 +244,16 @@ impl Ctx {
 
 /// Serve the live board for an event log. `main` guarantees `log_path` is an `event-log.jsonl`
 /// (resolving any `model.json` through `serve_log_path` first), so this server only ever reads and
-/// appends to the log — the single source of truth.
-pub fn serve(log_path: &Path, port: u16) -> Result<(), String> {
-    let ctx = Arc::new(Ctx::new(log_path.to_path_buf()));
+/// appends to the log — the single source of truth. `baseline` is an optional launch-time `--base`
+/// overlay board (F-variants): when set, every rendered board is diffed against it.
+pub fn serve(
+    log_path: &Path,
+    port: u16,
+    baseline: Option<(Model, (String, String))>,
+) -> Result<(), String> {
+    let mut ctx = Ctx::new(log_path.to_path_buf());
+    ctx.baseline = baseline;
+    let ctx = Arc::new(ctx);
 
     // Validate the log up front so a typo fails loudly, not per-request.
     let (_v, model) = ctx.current()?;
@@ -249,6 +262,9 @@ pub fn serve(log_path: &Path, port: u16) -> Result<(), String> {
         "faceto board live → http://127.0.0.1:{}  (Ctrl-C to stop)",
         port
     );
+    if let Some((_, (was, now))) = &ctx.baseline {
+        println!("  overlay: diffing “{now}” against baseline “{was}” (--base)");
+    }
     println!(
         "  {} elements · event-sourced · edits append to {}",
         model.elements.len(),

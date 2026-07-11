@@ -128,12 +128,29 @@ pub(crate) fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
     }
 }
 
-/// `GET /` (and `/index.html`) — the board page: current projection → SVG → HTML.
+/// Apply a launch-time `--base` overlay (F-variants): when a fixed baseline board is set, return the
+/// current board diffed against it (added/removed/moved/changed tagged, ready for the SVG overlay);
+/// with no baseline it is the identity — the plain current board. Pure `(&baseline, &current) ->
+/// Model`, so it unit-tests without a running server. The single seam both `route_page` and
+/// `route_board_svg` funnel through, so the first paint and every poll agree.
+fn overlay(
+    baseline: &Option<(model::Model, (String, String))>,
+    current: &model::Model,
+) -> model::Model {
+    match baseline {
+        Some((base, meta)) => model::diff_models(base, current, meta.clone()),
+        None => current.clone(),
+    }
+}
+
+/// `GET /` (and `/index.html`) — the board page: current projection → SVG → HTML. Under `--base` the
+/// projection is the diff overlay, so the first paint already shows the variant divergence.
 fn route_page(out: &mut TcpStream, ctx: &Ctx) -> std::io::Result<()> {
     match ctx.current() {
         Ok((_v, model)) => {
-            let svg = render::render_svg(&model, &render::View::none());
-            let html = render::render_html(&svg, &model.title);
+            let board = overlay(&ctx.baseline, &model);
+            let svg = render::render_svg(&board, &render::View::none());
+            let html = render::render_html(&svg, &board.title);
             send(out, 200, "text/html; charset=utf-8", html.as_bytes(), &[])
         }
         Err(e) => send(out, 500, "text/plain; charset=utf-8", e.as_bytes(), &[]),
@@ -147,10 +164,19 @@ fn route_page(out: &mut TcpStream, ctx: &Ctx) -> std::io::Result<()> {
 fn route_board_svg(out: &mut TcpStream, ctx: &Ctx, query: &str) -> std::io::Result<()> {
     match ctx.current() {
         Ok((version, model)) => {
-            let base = query_get(query, "base");
             let view = render::View {
                 collapsed: parse_collapse(query),
             };
+            // A launch-time `--base` fixes the overlay baseline for the whole session and takes
+            // precedence over the client's `?base=` ring diff: in variant-review mode the baseline
+            // *is* the given file, not "since you last looked". The collapse `View` still composes
+            // (diff → merged → render_svg(merged, view)), exactly as the ring path below does.
+            if ctx.baseline.is_some() {
+                let merged = overlay(&ctx.baseline, &model);
+                let svg = render::render_svg(&merged, &view) + "\n";
+                return send(out, 200, "image/svg+xml", svg.as_bytes(), &[]);
+            }
+            let base = query_get(query, "base");
             let old = base
                 .as_deref()
                 .filter(|b| *b != version)
@@ -374,6 +400,34 @@ mod tests {
             parse_collapse("base=abc&collapse=K2%2CK5%2CK9"),
             vec!["K2", "K5", "K9"]
         );
+    }
+
+    #[test]
+    fn overlay_is_the_identity_without_a_baseline_and_diffs_with_one() {
+        use crate::serve::testutil::model_of;
+        let current = model_of(
+            r#"{"title":"T","elements":[
+                {"id":"E1","type":"event","label":"Order placed","col":0},
+                {"id":"E2","type":"event","label":"Order shipped","col":1}
+            ]}"#,
+        );
+
+        // No baseline → the plain current board, untouched (no diff verdicts).
+        let plain = overlay(&None, &current);
+        assert!(plain.diff_meta.is_none());
+        assert!(plain.elements.iter().all(|e| e.diff.is_none()));
+
+        // With a baseline (E2 is new vs the base) → a diff overlay: E2 is tagged `added`.
+        let base = model_of(
+            r#"{"title":"T","elements":[
+                {"id":"E1","type":"event","label":"Order placed","col":0}
+            ]}"#,
+        );
+        let baseline = Some((base, ("before".to_string(), "after".to_string())));
+        let merged = overlay(&baseline, &current);
+        assert!(merged.diff_meta.is_some());
+        let e2 = merged.elements.iter().find(|e| e.id == "E2").unwrap();
+        assert_eq!(e2.diff.as_deref(), Some("added"));
     }
 
     #[test]
