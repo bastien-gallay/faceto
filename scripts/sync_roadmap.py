@@ -52,8 +52,28 @@ def gh_json(args: list[str]) -> dict | list:
     return json.loads(out.stdout)
 
 
-def board_by_issue() -> dict[int, dict] | None:
-    """issue number -> {'status', 'horizon'} from Project #2, or None if unreachable.
+def _reason(exc: Exception) -> str:
+    """A short, honest cause string for a failed `gh` fetch — so the degradation message
+    reflects what actually happened (missing scope vs no network vs no `gh`) instead of
+    always blaming `project` scope."""
+    if isinstance(exc, FileNotFoundError):
+        return "`gh` not found on PATH"
+    if isinstance(exc, subprocess.CalledProcessError):
+        err = (exc.stderr or "").strip().splitlines()
+        tail = err[-1] if err else ""
+        low = tail.lower()
+        if "project" in low and "scope" in low:
+            return "token lacks `project` scope"
+        if "tls" in low or "certificate" in low or "dial tcp" in low or "connection" in low:
+            return f"network/sandbox blocked `gh` ({tail})"
+        return tail or "`gh` exited non-zero"
+    if isinstance(exc, json.JSONDecodeError):
+        return "`gh` returned non-JSON output"
+    return str(exc)
+
+
+def board_by_issue() -> tuple[dict[int, dict] | None, str]:
+    """(issue number -> {'status', 'horizon'} from Project #2, ""), or (None, reason).
 
     Reading a *user* project needs a token with `project` scope, which CI's default
     GITHUB_TOKEN lacks — so a failure here is expected in CI and degrades to skipping the
@@ -63,28 +83,28 @@ def board_by_issue() -> dict[int, dict] | None:
         data = gh_json(
             ["project", "item-list", PROJECT, "--owner", OWNER, "--format", "json", "--limit", "300"]
         )
-    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
+    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
         # OSError covers a missing `gh` (FileNotFoundError) — degrade, don't crash.
-        return None
+        return None, _reason(exc)
     out: dict[int, dict] = {}
     for it in data.get("items", []):
         num = (it.get("content") or {}).get("number")
         if num is None:
             continue
         out[int(num)] = {"status": it.get("status"), "horizon": it.get("horizon")}
-    return out
+    return out, ""
 
 
-def open_issue_numbers() -> set[int] | None:
-    """Open issue numbers, or None if unreachable (repo-scoped GITHUB_TOKEN can read these)."""
+def open_issue_numbers() -> tuple[set[int] | None, str]:
+    """(open issue numbers, ""), or (None, reason) if unreachable (repo-scoped token suffices)."""
     try:
         data = gh_json(
             ["issue", "list", "--repo", REPO, "--state", "open", "--limit", "300", "--json", "number"]
         )
-    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
+    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
         # OSError covers a missing `gh` (FileNotFoundError) — degrade, don't crash.
-        return None
-    return {int(i["number"]) for i in data}
+        return None, _reason(exc)
+    return {int(i["number"]) for i in data}, ""
 
 
 def split_row(line: str) -> list[str] | None:
@@ -132,6 +152,23 @@ def selftest() -> int:
         refs = {int(x) for x in ANY_REF_RE.findall(cells[4])}
         if not {14, 19} <= refs:
             fails.append(f"issue refs not recovered from escaped-pipe Summary: {refs}")
+
+    # `_reason` must name the real cause, not always blame `project` scope
+    def _cpe(stderr: str) -> subprocess.CalledProcessError:
+        e = subprocess.CalledProcessError(1, ["gh"])
+        e.stderr = stderr
+        return e
+
+    reason_cases = [
+        (FileNotFoundError(), "not found"),
+        (_cpe("error: your token has not been granted the required scopes: project"), "scope"),
+        (_cpe('Post "https://api.github.com/graphql": tls: failed to verify certificate'), "network"),
+    ]
+    for exc, want in reason_cases:
+        got = _reason(exc)
+        if want not in got:
+            fails.append(f"_reason({exc!r}) = {got!r}, expected to contain {want!r}")
+
     for f in fails:
         print("selftest FAIL:", f)
     print("selftest OK" if not fails else f"selftest: {len(fails)} failure(s)")
@@ -142,12 +179,12 @@ def main() -> int:
     if "--selftest" in sys.argv[1:]:
         return selftest()
     check = "--check" in sys.argv[1:]
-    board = board_by_issue()
-    open_issues = open_issue_numbers()
+    board, board_err = board_by_issue()
+    open_issues, issues_err = open_issue_numbers()
     if board is None:
-        print("· board unreachable (needs `project` scope) — skipping column sync.")
+        print(f"· board unreachable ({board_err}) — skipping column sync.")
     if open_issues is None:
-        print("· issues unreachable — skipping orphan-issue check.")
+        print(f"· issues unreachable ({issues_err}) — skipping orphan-issue check.")
 
     lines = ROADMAP.read_text().splitlines(keepends=True)
     referenced: set[int] = set()

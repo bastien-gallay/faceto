@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>faceto — priority map</title>
+</head>
+<body>
+<style>
+  :root{
+    --paper:#fbfbfd; --surface:#ffffff; --ink:#222226; --muted:#6b6b76; --muted-2:#9195a1;
+    --accent:#1A6FAE; --accent-ink:#14507e;
+    --rule:#e6e6ee; --rule-2:#d3d6e0; --cell:#f4f5f8; --cell-do:#eef4fa;
+    --now-bg:#1A6FAE; --now-ink:#ffffff;
+    --next-bg:#dbe8f3; --next-ink:#14507e; --next-bd:#a9c6de;
+    --later-bd:#cbd2de; --later-ink:#5b6577;
+    --parked-bd:#d6dae2; --parked-ink:#9aa0ac;
+    --sev-crit:#C0392B; --sev-major:#D98A00; --sev-minor:#C9A227;
+    --serif:'Iowan Old Style','Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    --shadow:0 1px 2px rgba(20,30,50,.05),0 6px 20px rgba(20,30,50,.05);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#14161b; --surface:#1b1e25; --ink:#e9eaf0; --muted:#a2a7b2; --muted-2:#767c88;
+      --accent:#5aa0da; --accent-ink:#bcd8f2;
+      --rule:#2a2e38; --rule-2:#353a46; --cell:#1f232b; --cell-do:#212a34;
+      --now-bg:#4a90d0; --now-ink:#0b0f14;
+      --next-bg:#26384a; --next-ink:#bcd6ee; --next-bd:#3c5772;
+      --later-bd:#3a4150; --later-ink:#aab2c0;
+      --parked-bd:#333a46; --parked-ink:#7b828f;
+      --sev-crit:#e0685c; --sev-major:#e0a53a; --sev-minor:#d8bf5a;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.28);
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#fbfbfd; --surface:#ffffff; --ink:#222226; --muted:#6b6b76; --muted-2:#9195a1;
+    --accent:#1A6FAE; --accent-ink:#14507e; --rule:#e6e6ee; --rule-2:#d3d6e0; --cell:#f4f5f8; --cell-do:#eef4fa;
+    --now-bg:#1A6FAE; --now-ink:#ffffff; --next-bg:#dbe8f3; --next-ink:#14507e; --next-bd:#a9c6de;
+    --later-bd:#cbd2de; --later-ink:#5b6577; --parked-bd:#d6dae2; --parked-ink:#9aa0ac;
+    --sev-crit:#C0392B; --sev-major:#D98A00; --sev-minor:#C9A227;
+  }
+  :root[data-theme="dark"]{
+    --paper:#14161b; --surface:#1b1e25; --ink:#e9eaf0; --muted:#a2a7b2; --muted-2:#767c88;
+    --accent:#5aa0da; --accent-ink:#bcd8f2; --rule:#2a2e38; --rule-2:#353a46; --cell:#1f232b; --cell-do:#212a34;
+    --now-bg:#4a90d0; --now-ink:#0b0f14; --next-bg:#26384a; --next-ink:#bcd6ee; --next-bd:#3c5772;
+    --later-bd:#3a4150; --later-ink:#aab2c0; --parked-bd:#333a46; --parked-ink:#7b828f;
+    --sev-crit:#e0685c; --sev-major:#e0a53a; --sev-minor:#d8bf5a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+    line-height:1.5;-webkit-font-smoothing:antialiased;padding:clamp(18px,4vw,44px)}
+  .wrap{max-width:1080px;margin:0 auto}
+  header.masthead{margin-bottom:26px}
+  .kicker{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted-2);font-weight:600}
+  h1{font-family:var(--serif);font-weight:700;font-size:clamp(28px,4.4vw,40px);line-height:1.08;
+    margin:.28em 0 .12em;letter-spacing:-.01em;text-wrap:balance}
+  .lede{color:var(--muted);max-width:60ch;font-size:15px}
+  .lede b{color:var(--ink);font-weight:600}
+  .axis-caption{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+    font-size:11.5px;color:var(--muted-2);margin:22px 2px 8px;letter-spacing:.02em}
+  .axis-caption .eff-arrow{font-weight:600;color:var(--muted)}
+
+  .matrix{border:1px solid var(--rule);border-radius:14px;overflow:hidden;background:var(--surface);
+    box-shadow:var(--shadow)}
+  .grid{display:grid;grid-template-columns:minmax(150px,1.05fr) repeat(3,minmax(0,1.4fr))}
+  .ghead{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-2);font-weight:600;
+    padding:11px 14px;border-bottom:1px solid var(--rule);background:var(--cell)}
+  .ghead.eff{text-align:center;border-left:1px solid var(--rule)}
+  .ghead.eff small{display:block;text-transform:none;letter-spacing:0;color:var(--muted-2);font-weight:400;font-size:10.5px;margin-top:2px}
+  .rowlabel{padding:13px 14px;border-bottom:1px solid var(--rule);display:flex;flex-direction:column;gap:3px;
+    background:linear-gradient(180deg,var(--surface),var(--cell))}
+  .rowlabel .cls{display:flex;align-items:center;gap:8px;font-weight:650;font-size:14px}
+  .rowlabel .cls .em{font-size:16px;line-height:1}
+  .rowlabel .gloss{font-size:11.5px;color:var(--muted);line-height:1.35}
+  .rowlabel .cnt{font-size:10.5px;color:var(--muted-2);font-variant-numeric:tabular-nums}
+  .cell{border-bottom:1px solid var(--rule);border-left:1px solid var(--rule);padding:10px;
+    display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start;min-height:64px;background:var(--cell)}
+  .cell.do{background:var(--cell-do)}
+  .grid > .rowlabel:last-of-type,.grid > .cell.lastrow{border-bottom:none}
+
+  .chip{position:relative;display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:999px;
+    font-size:12px;font-weight:550;cursor:default;white-space:nowrap;border:1px solid transparent;
+    transition:transform .12s ease,box-shadow .12s ease}
+  .chip .num{font-variant-numeric:tabular-nums;opacity:.72;font-weight:600}
+  .chip:hover{transform:translateY(-1px);box-shadow:var(--shadow);z-index:3}
+  .chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px;transform:translateY(-1px);box-shadow:var(--shadow);z-index:3}
+  .chip.now{background:var(--now-bg);color:var(--now-ink);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+  .chip.next{background:var(--next-bg);color:var(--next-ink);border-color:var(--next-bd)}
+  .chip.later{background:transparent;color:var(--later-ink);border-color:var(--later-bd)}
+  .chip.parked{background:transparent;color:var(--parked-ink);border:1px dashed var(--parked-bd)}
+
+  .legend{display:flex;flex-wrap:wrap;gap:16px 22px;align-items:center;margin:16px 2px 0;font-size:12px;color:var(--muted)}
+  .legend .grp{display:flex;align-items:center;gap:8px}
+  .legend .sw{width:26px;height:15px;border-radius:999px;display:inline-block}
+  .sw.now{background:var(--now-bg);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 22%,transparent)}
+  .sw.next{background:var(--next-bg);border:1px solid var(--next-bd)}
+  .sw.later{background:transparent;border:1px solid var(--later-bd)}
+  .sw.parked{background:transparent;border:1px dashed var(--parked-bd)}
+
+  .note{margin:22px 2px 0;font-size:12.5px;color:var(--muted);max-width:74ch}
+  .note b{color:var(--ink);font-weight:600}
+
+  section.bugs{margin-top:34px}
+  .sec-h{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}
+  .sec-h h2{font-family:var(--serif);font-weight:700;font-size:20px;margin:0}
+  .sec-h .sub{font-size:12px;color:var(--muted-2)}
+  .bugwrap{border:1px solid var(--rule);border-radius:12px;overflow:hidden;background:var(--surface);margin-top:10px;box-shadow:var(--shadow)}
+  .buggrid{display:grid;grid-template-columns:minmax(130px,.8fr) repeat(3,1fr)}
+  .buggrid .cell{min-height:52px}
+  .sevlabel{padding:11px 14px;border-bottom:1px solid var(--rule);display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;
+    background:linear-gradient(180deg,var(--surface),var(--cell))}
+  .sevdot{width:10px;height:10px;border-radius:50%}
+  .chip.fix{background:transparent;font-weight:600}
+  .empty{color:var(--muted-2);font-size:11px;font-style:italic;align-self:center}
+
+  .tip{position:fixed;z-index:50;pointer-events:none;opacity:0;transition:opacity .12s;
+    background:var(--surface);color:var(--ink);border:1px solid var(--rule-2);border-radius:10px;
+    padding:9px 11px;font-size:12px;box-shadow:var(--shadow);max-width:260px;line-height:1.45}
+  .tip .t-id{font-weight:650;margin-bottom:3px}
+  .tip .t-meta{color:var(--muted);font-size:11px}
+  .tip .t-areas{margin-top:4px;display:flex;flex-wrap:wrap;gap:4px}
+  .tip .t-areas span{background:var(--cell);border:1px solid var(--rule);border-radius:5px;padding:1px 5px;font-size:10px;color:var(--muted)}
+  footer{margin-top:30px;font-size:11px;color:var(--muted-2);border-top:1px solid var(--rule);padding-top:12px}
+  @media (max-width:640px){
+    .rowlabel .gloss{display:none}
+    .grid{grid-template-columns:minmax(96px,1fr) repeat(3,minmax(0,1.5fr))}
+    .chip{font-size:11px;padding:3px 7px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <div class="kicker">faceto · roadmap</div>
+    <h1>Priority map — leverage &times; effort</h1>
+    <p class="lede">Every open item placed by <b>what kind of leverage it delivers</b> (down) and
+    <b>how much it costs</b> (across). Fill = <b>Horizon</b>, the commitment stage. Read
+    <b>top-left&nbsp;&rarr;&nbsp;bottom-right</b>: small differentiators first, big bets last.
+    Bugs live in their own strip below — they jump the queue on severity, not leverage.</p>
+  </header>
+
+  <div class="axis-caption">
+    <span>&#9701; do first — high leverage, low effort</span>
+    <span class="eff-arrow">effort &rarr;</span>
+    <span>defer / park &#9702;</span>
+  </div>
+
+  <div class="matrix"><div class="grid" id="grid"></div></div>
+
+  <div class="legend" id="legend">
+    <span class="grp" style="color:var(--ink);font-weight:600">Horizon</span>
+    <span class="grp"><span class="sw now"></span>Now (crowned)</span>
+    <span class="grp"><span class="sw next"></span>Next</span>
+    <span class="grp"><span class="sw later"></span>Later</span>
+    <span class="grp"><span class="sw parked"></span>Parked</span>
+  </div>
+
+  <p class="note"><b>How to read the order.</b> The recommended sequence is the diagonal sweep: the
+  <b>Now</b> band is crowned in the top rows at small effort — <b>#90 extract</b>, <b>#91 variants</b>,
+  <b>#97 context-pack</b>, the AI-loop core no competitor offers. Enablers and table-stakes come next;
+  polish batches when a seam is already open; bets get a <b>timeboxed probe, not a full build</b>.
+  A cell can hold several items — they share a (class, effort) rank and are ordered by Horizon.</p>
+
+  <section class="bugs">
+    <div class="sec-h"><h2>Bug triage</h2><span class="sub">Type = Fix · placed by Severity &times; Effort — off the leverage map</span></div>
+    <div class="bugwrap"><div class="buggrid" id="buggrid"></div></div>
+    <p class="note">A <b>Fix</b> restores a contract; it carries no leverage Class. It jumps the queue on
+    <b>Severity &times; blast-radius</b> — a <b>&#128308; Critical</b> beats any feature, a <b>&#128993; Minor</b> waits.
+    No open Critical or Major bugs today.</p>
+  </section>
+
+  <footer>Canonical priority lives in Project&nbsp;#2 (Class / Effort / Type / Severity / Horizon fields).
+  Area is <code>area:*</code> repo labels. This map is generated from the same mapping · 2026-07-11.</footer>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+  const CLASSES = [
+    {k:"Differentiator", em:"⚡", gloss:"No competitor does it — the thesis edge."},
+    {k:"Enabler",        em:"🔑", gloss:"Unblocks other work / pays a seam."},
+    {k:"Table-stakes",   em:"📐", gloss:"Expected of any such tool; absence is a wart."},
+    {k:"Polish",         em:"✨", gloss:"Legibility & ergonomics delight."},
+    {k:"Bet",            em:"🎲", gloss:"Uncertain market — prototype to learn."},
+  ];
+  const EFFORT = ["S","M","L"];
+  // id, name, class, effort, type, severity, areas, horizon
+  const F = [
+    [90,"extract","Differentiator","M","Feature",null,["ai-loop","cli"],"Now"],
+    [91,"variants","Differentiator","S","Feature",null,["ai-loop","layout"],"Now"],
+    [97,"context-pack","Differentiator","S","Feature",null,["ai-loop","export","docs"],"Now"],
+    [92,"share-file","Differentiator","M","Feature",null,["collab","legibility"],"Later"],
+    [77,"model-export","Enabler","S","Feature",null,["export","cli","comments"],"Next"],
+    [79,"lane-flow","Enabler","M","Feature",null,["layout","format"],"Next"],
+    [102,"pitch-benefits","Table-stakes","S","Chore",null,["docs"],"Next"],
+    [16,"cli-help","Table-stakes","S","Feature",null,["cli"],"Next"],
+    [52,"editable-description","Table-stakes","S","Feature",null,["comments"],"Later"],
+    [21,"comment-lifecycle","Table-stakes","M","Feature",null,["comments"],"Next"],
+    [78,"commit-flow","Table-stakes","M","Feature",null,["comments","editing"],"Next"],
+    [69,"command-box","Table-stakes","M","Feature",null,["editing","cli"],"Next"],
+    [71,"theme","Table-stakes","M","Feature",null,["legibility"],"Next"],
+    [101,"mcp-server","Table-stakes","M","Feature",null,["ai-loop"],"Parked"],
+    [54,"focus-graph","Polish","S","Feature",null,["legibility"],"Next"],
+    [56,"deep-links","Polish","S","Feature",null,["legibility"],"Next"],
+    [68,"duplicate","Polish","S","Feature",null,["editing"],"Next"],
+    [48,"glyphs-on-select","Polish","S","Feature",null,["editing"],"Later"],
+    [49,"discoverable-split","Polish","S","Feature",null,["regions"],"Later"],
+    [51,"magnetic-row-snap","Polish","S","Feature",null,["layout"],"Later"],
+    [59,"hide-resolved-hotspots","Polish","S","Feature",null,["regions","legibility"],"Later"],
+    [88,"edge-remove","Polish","S","Feature",null,["edges"],"Later"],
+    [55,"side-panel","Polish","M","Feature",null,["legibility","comments"],"Later"],
+    [50,"frontier-width","Polish","M","Feature",null,["regions"],"Later"],
+    [58,"edge-ports","Polish","M","Feature",null,["edges"],"Later"],
+    [89,"edge-reconnect","Polish","M","Feature",null,["edges"],"Later"],
+    [72,"multi-select","Polish","M","Feature",null,["editing"],"Later"],
+    [93,"walkthrough","Polish","M","Feature",null,["legibility"],"Later"],
+    [61,"rich-notes","Polish","M","Feature",null,["comments","format"],"Parked"],
+    [100,"log-seeds","Bet","S","Feature",null,["format","ai-loop"],"Later"],
+    [73,"version-tags","Bet","M","Feature",null,["build"],"Later"],
+    [74,"narrative-export","Bet","M","Feature",null,["export"],"Later"],
+    [99,"eventcatalog-export","Bet","M","Feature",null,["export"],"Later"],
+    [98,"living-doc","Bet","L","Feature",null,["build","docs"],"Later"],
+    [60,"image-element","Bet","L","Feature",null,["format"],"Parked"],
+    // Fix — routed to the bug strip, not the leverage grid
+    [57,"editable-title","(fix)","S","Fix","Minor",["editing"],"Later"],
+  ];
+  const HORIZON_RANK = {Now:0,Next:1,Later:2,Parked:3};
+  const obj = r => ({id:r[0],name:r[1],cls:r[2],eff:r[3],type:r[4],sev:r[5],areas:r[6],hz:r[7]});
+
+  const tip = document.getElementById("tip");
+  function fillTip(d){
+    tip.innerHTML=`<div class="t-id">#${d.id} · ${d.name}</div>`+
+      `<div class="t-meta">${d.type==="Fix"?("Fix · "+d.sev+" severity"):(d.cls+" · "+d.eff+" effort")} · ${d.hz}</div>`+
+      `<div class="t-areas">${d.areas.map(a=>`<span>area:${a}</span>`).join("")}</div>`;
+  }
+  function moveTip(x,y){
+    const pad=14;
+    if(x+tip.offsetWidth>innerWidth-8) x=Math.max(8,x-tip.offsetWidth-pad);
+    if(y+tip.offsetHeight>innerHeight-8) y=Math.max(8,y-tip.offsetHeight-pad);
+    tip.style.left=x+"px"; tip.style.top=y+"px";
+  }
+  function wireTip(el,d){
+    // Mouse: follow the cursor. Keyboard: anchor under the focused chip — same tooltip either way.
+    el.addEventListener("mouseenter",()=>{fillTip(d);tip.style.opacity="1";});
+    el.addEventListener("mousemove",e=>moveTip(e.clientX+14,e.clientY+14));
+    el.addEventListener("mouseleave",()=>{tip.style.opacity="0";});
+    el.addEventListener("focus",()=>{fillTip(d);tip.style.opacity="1";const r=el.getBoundingClientRect();moveTip(r.left,r.bottom+6);});
+    el.addEventListener("blur",()=>{tip.style.opacity="0";});
+  }
+  function chip(d,extraClass){
+    const c=document.createElement("span");
+    c.className="chip "+(extraClass||d.hz.toLowerCase());
+    c.innerHTML=`<span class="num">#${d.id}</span>${d.name}`;
+    c.tabIndex=0; wireTip(c,d);
+    return c;
+  }
+
+  // ---- main grid ----
+  const grid=document.getElementById("grid");
+  grid.appendChild(el("div","ghead","Class ↓"));
+  EFFORT.forEach(e=>{
+    const labels={S:"small",M:"medium",L:"large"};
+    grid.appendChild(el("div","ghead eff",`${e}<small>${labels[e]}</small>`));
+  });
+  const feats=F.map(obj).filter(d=>d.type!=="Fix");
+  CLASSES.forEach((C,ri)=>{
+    const inClass=feats.filter(d=>d.cls===C.k);
+    const rl=el("div","rowlabel",
+      `<span class="cls"><span class="em">${C.em}</span>${C.k}</span>`+
+      `<span class="gloss">${C.gloss}</span>`+
+      `<span class="cnt">${inClass.length} item${inClass.length===1?"":"s"}</span>`);
+    grid.appendChild(rl);
+    EFFORT.forEach((e,ci)=>{
+      const cell=el("div","cell");
+      if(ri<=1 && ci===0) cell.classList.add("do"); // top-left do-first tint
+      if(ri===CLASSES.length-1) cell.classList.add("lastrow");
+      inClass.filter(d=>d.eff===e)
+        .sort((a,b)=>HORIZON_RANK[a.hz]-HORIZON_RANK[b.hz]||a.id-b.id)
+        .forEach(d=>cell.appendChild(chip(d)));
+      grid.appendChild(cell);
+    });
+  });
+
+  // ---- bug strip ----
+  const SEV=[{k:"Critical",em:"🔴"},{k:"Major",em:"🟠"},{k:"Minor",em:"🟡"}];
+  const bg=document.getElementById("buggrid");
+  bg.appendChild(el("div","ghead","Severity ↓"));
+  EFFORT.forEach(e=>bg.appendChild(el("div","ghead eff",e)));
+  const fixes=F.map(obj).filter(d=>d.type==="Fix");
+  const sevColor={Critical:"var(--sev-crit)",Major:"var(--sev-major)",Minor:"var(--sev-minor)"};
+  SEV.forEach((S,ri)=>{
+    bg.appendChild(el("div","sevlabel",`<span class="sev-em">${S.em}</span> ${S.k}`));
+    EFFORT.forEach((e,ci)=>{
+      const cell=el("div","cell");
+      if(ri===SEV.length-1) cell.classList.add("lastrow");
+      const here=fixes.filter(d=>d.sev===S.k&&d.eff===e);
+      if(here.length===0) cell.appendChild(el("span","empty","—"));
+      here.forEach(d=>{
+        const c=chip(d,"fix later");
+        c.style.borderColor=sevColor[S.k]; c.style.color=sevColor[S.k];
+        cell.appendChild(c);
+      });
+      bg.appendChild(cell);
+    });
+  });
+
+  function el(tag,cls,html){const n=document.createElement(tag);if(cls)n.className=cls;if(html!=null)n.innerHTML=html;return n;}
+</script>
+</body>
+</html>
