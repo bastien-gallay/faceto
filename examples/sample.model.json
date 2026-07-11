@@ -1,6 +1,5 @@
 {
   "title": "faceto — sample board",
-  "lanes": ["actor", "command", "aggregate", "event", "policy", "readmodel", "external", "hotspot"],
   "phases": [
     { "id": "K1", "label": "begin", "fromCol": 0, "toCol": 1 },
     { "id": "K2", "label": "work", "fromCol": 2, "toCol": 4 }
