@@ -105,8 +105,15 @@ function bindStickies() {
 }
 
 function paint() {
-  $("#status").textContent = serverLive ? "● live (server)" : "○ offline (localStorage)";
-  $("#status").className = serverLive ? "live" : "";
+  // In a read-only variant overlay the pill announces the review mode (still live/offline aware),
+  // so the user knows why the edit affordances are gone.
+  if (READONLY) {
+    $("#status").textContent = serverLive ? "● variant · read-only" : "○ variant · read-only";
+    $("#status").className = "variant";
+  } else {
+    $("#status").textContent = serverLive ? "● live (server)" : "○ offline (localStorage)";
+    $("#status").className = serverLive ? "live" : "";
+  }
   document.querySelectorAll(".sticky").forEach((g) => g.classList.remove("has-note"));
   // Structural ops (move/add/drop) aren't feedback on an existing box — keep them out of the note
   // badges, counts and prior-comment list. (Offline, a stashed `add`/`drop` lives only in
