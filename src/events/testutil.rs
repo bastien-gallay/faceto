@@ -28,6 +28,7 @@ pub(crate) fn genesis() -> (Vec<Event>, Vec<&'static str>) {
             col: Some(0),
             detail: None,
             y: None,
+            links: Vec::new(),
         })
         .collect();
     (evs, ids)

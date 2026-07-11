@@ -89,6 +89,9 @@ pub enum Event {
         /// band interior in `[0, 1]`, `None` = auto-stacked. Carried on add so `compact`/genesis
         /// round-trips a placed board (additive field — an old log simply never has it).
         y: Option<f64>,
+        /// Attached reference URLs (F-element-links). Carried on add so `compact`/genesis round-trips
+        /// them; additive — an old log has no `links` and replays with an empty list.
+        links: Vec<String>,
     },
     ElementRenamed {
         id: String,
@@ -116,6 +119,9 @@ pub enum Event {
     EdgeAdded {
         src: String,
         dst: String,
+        /// Optional human label for the connection (F-element-links). Additive — an old log has no
+        /// `label` and replays with `None`.
+        label: Option<String>,
     },
     EdgeRemoved {
         src: String,

@@ -181,6 +181,7 @@ impl Ctx {
                 col,
                 detail,
                 y: None,
+                links: Vec::new(),
             })
         })
     }

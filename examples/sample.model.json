@@ -9,16 +9,17 @@
     { "id": "C1", "type": "command", "label": "start the day", "col": 0 },
     { "id": "A1", "type": "aggregate", "label": "DayPlan", "col": 1 },
     { "id": "E1", "type": "event", "label": "DayStarted (DayPlan scaffolded)", "col": 1 },
-    { "id": "C2", "type": "command", "label": "add an item", "col": 2 },
+    { "id": "C2", "type": "command", "label": "add an item", "col": 2, "links": ["https://github.com/bastien-gallay/faceto/issues/96", "https://example.com/docs/adding-items"] },
     { "id": "E2", "type": "event", "label": "ItemAdded", "col": 2 },
     { "id": "P1", "type": "policy", "label": "when ItemAdded, project forward", "col": 3 },
     { "id": "E3", "type": "event", "label": "UnfinishedWorkProjectedForward", "col": 3 },
     { "id": "R1", "type": "readmodel", "label": "Today view", "col": 4 },
     { "id": "H1", "type": "hotspot", "label": "TopicCreated (item added to a non-existent topic)", "col": 3 },
-    { "id": "H2", "type": "hotspot", "label": "resolved example", "col": 4, "resolved": true, "resolution": "settled in review" }
+    { "id": "H2", "type": "hotspot", "label": "resolved example", "col": 4, "resolved": true, "detail": "settled in review" }
   ],
   "edges": [
-    ["X1", "C1"], ["C1", "E1"], ["E1", "A1"], ["X1", "C2"], ["C2", "E2"],
+    ["X1", "C1"], ["C1", "E1"], ["E1", "A1"], ["X1", "C2"],
+    { "src": "C2", "dst": "E2", "label": "emits" },
     ["E2", "P1"], ["P1", "E3"], ["E3", "R1"], ["H1", "E2"]
   ]
 }
