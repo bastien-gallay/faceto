@@ -139,6 +139,31 @@ overlay against the version you were just looking at** — no git, no page reloa
 reworded or relocated sticky reads as **changed** / **moved**, not drop-plus-add. **Plain** clears
 the overlay and re-baselines.
 
+## Context pack for a coding agent
+
+The board you built in the workshop *is* the domain model — so hand it to your coding agent
+instead of re-explaining it every session. `export --format context` prints a structured markdown
+pack: the ubiquitous language (every sticky grouped by lane), the flows, the bounded contexts, the
+open questions (unresolved hotspots + grammar findings), and the board diagram embedded as Mermaid.
+
+```bash
+faceto export orders.event-log.jsonl --format context > docs/DOMAIN.md
+```
+
+Then reference it from your repo's `AGENTS.md` (the convention every agent already reads):
+
+```markdown
+## Domain model
+
+The event-storming model for this system lives in [`docs/DOMAIN.md`](docs/DOMAIN.md) — the
+ubiquitous language, flows and open questions. Regenerate it with
+`faceto export <board>.event-log.jsonl --format context > docs/DOMAIN.md`.
+```
+
+Unlike a frozen prose spec, the pack is regenerated from a living, event-sourced model — diffable,
+lintable, and one the agent can propose changes to while you decide. (`--format mermaid` emits just
+the diagram; run `faceto export --help` for the full list.)
+
 ## The eight lanes
 
 `type` selects both the lane (a fixed top-to-bottom order) and the colour:

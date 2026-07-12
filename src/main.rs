@@ -3,7 +3,7 @@
 //!   faceto render  [SOURCE] [--base OTHER]  write <name>.svg + <name>.html (a diff overlay vs OTHER)
 //!   faceto lint    [SOURCE]           check the board against the ES-grammar rules (warn-only)
 //!   faceto serve   [SOURCE] [-p PORT] [--base OTHER]  serve the live board + comment sidecar
-//!   faceto export  [SOURCE] [--format mermaid]  print the board as Mermaid text (stdout)
+//!   faceto export  [SOURCE] [--format mermaid|context]  print the board (mermaid, or a context pack) to stdout
 //!   faceto genesis [MODEL]            migrate a model.json into a <name>.event-log.jsonl
 //!   faceto compact [LOG]              fold a log to a snapshot, bounding replay length
 //!
@@ -330,9 +330,15 @@ fn cmd_export(source: &str, format: Format) {
     warn_if_empty(&model, path);
     let out = match format {
         Format::Mermaid => render::render_mermaid(&model),
+        Format::Context => render::render_context(&model),
     };
     print!("{out}");
-    eprintln!("{}", render::DEGRADATION_NOTICE);
+    // The stderr notice is format-specific: a Mermaid export is wholesale lossy, while the context
+    // pack is lossless prose whose only lossy part is its *embedded* diagram — no need to shout.
+    match format {
+        Format::Mermaid => eprintln!("{}", render::DEGRADATION_NOTICE),
+        Format::Context => {}
+    }
 }
 
 /// Migrate a `model.json` into the genesis batch of a `<name>.event-log.jsonl` written alongside it —
@@ -563,12 +569,13 @@ fn parse_serve(args: &[String]) -> (String, u16, Option<String>) {
     (model, port, base)
 }
 
-/// The output formats `export` can emit. Only `Mermaid` today; the enum exists so the `--format`
-/// dispatch grows without reshaping — F-model-export's `model` and F-narrative-export's `narrative`
-/// slot in here.
+/// The output formats `export` can emit. `Mermaid` is a lossy diagram; `Context` is a rich
+/// markdown+Mermaid context pack for a coding agent. The enum grows without reshaping —
+/// F-model-export's `model` and F-narrative-export's `narrative` slot in here.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Format {
     Mermaid,
+    Context,
 }
 
 /// `export [SOURCE] [--format FMT]`. Positional source defaults to `model.json`; `--format` defaults
@@ -582,12 +589,13 @@ fn parse_export(args: &[String]) -> (String, Format) {
         if matches!(args[i].as_str(), "-f" | "--format") {
             match args.get(i + 1).map(String::as_str) {
                 Some("mermaid") => format = Format::Mermaid,
+                Some("context") => format = Format::Context,
                 Some(other) => {
-                    eprintln!("unknown export format: {other}\n(supported: mermaid)");
+                    eprintln!("unknown export format: {other}\n(supported: mermaid, context)");
                     exit(2);
                 }
                 None => {
-                    eprintln!("--format needs a value\n(supported: mermaid)");
+                    eprintln!("--format needs a value\n(supported: mermaid, context)");
                     exit(2);
                 }
             }
@@ -609,7 +617,7 @@ fn print_help() {
          \x20 faceto render  [SOURCE] [--base OTHER]  write <name>.svg + <name>.html (diff overlay vs OTHER)\n\
          \x20 faceto lint    [SOURCE]            check the board against the ES-grammar rules (warn-only)\n\
          \x20 faceto serve   [SOURCE] [-p PORT] [--base OTHER]  serve the live board + comment sidecar (default :8753)\n\
-         \x20 faceto export  [SOURCE] [--format mermaid]  print the board as Mermaid text to stdout (lossy)\n\
+         \x20 faceto export  [SOURCE] [--format mermaid|context]  print the board to stdout (mermaid diagram, or a markdown context pack for a coding agent)\n\
          \x20 faceto genesis [MODEL]             migrate a model.json into a <name>.event-log.jsonl\n\
          \x20 faceto compact [LOG]               fold a log to a snapshot, bounding replay (default model.event-log.jsonl)\n\
          \x20 faceto help | version\n\
@@ -719,6 +727,26 @@ mod tests {
         assert_eq!(tally, "1 added, 1 removed, 0 moved, 1 changed");
         // HTML wraps the same SVG (the file `render --base` writes).
         assert!(html.contains("<svg"));
+    }
+
+    #[test]
+    fn parse_export_selects_source_and_format() {
+        // Default: model.json, mermaid.
+        assert_eq!(parse_export(&[]), ("model.json".into(), Format::Mermaid));
+        // Positional source only.
+        assert_eq!(
+            parse_export(&["board.jsonl".into()]),
+            ("board.jsonl".into(), Format::Mermaid)
+        );
+        // --format context (and the -f alias) select the context pack; source keeps its default.
+        assert_eq!(
+            parse_export(&["--format".into(), "context".into()]),
+            ("model.json".into(), Format::Context)
+        );
+        assert_eq!(
+            parse_export(&["b.jsonl".into(), "-f".into(), "mermaid".into()]),
+            ("b.jsonl".into(), Format::Mermaid)
+        );
     }
 
     #[test]
