@@ -156,8 +156,9 @@ fn ubiquitous_language(out: &mut String, live: &[&Element]) {
     out.push_str("## Ubiquitous language\n\n");
     let mut any = false;
     for &kind in LANES.iter() {
-        let in_lane: Vec<&&Element> = live.iter().filter(|e| e.kind == kind).collect();
-        if in_lane.is_empty() {
+        // Peek before printing the heading so an empty lane is skipped without allocating a Vec.
+        let mut in_lane = live.iter().filter(|e| e.kind == kind).peekable();
+        if in_lane.peek().is_none() {
             continue;
         }
         any = true;
@@ -187,7 +188,8 @@ fn ubiquitous_language(out: &mut String, live: &[&Element]) {
 }
 
 fn flows(out: &mut String, model: &Model, by_id: &HashMap<&str, &Element>) {
-    let mut lines = Vec::new();
+    // Build the body first so the "## Flows" heading is only emitted when at least one edge is live.
+    let mut body = String::new();
     for edge in &model.edges {
         let (Some(src), Some(dst)) = (by_id.get(edge.src.as_str()), by_id.get(edge.dst.as_str()))
         else {
@@ -197,20 +199,18 @@ fn flows(out: &mut String, model: &Model, by_id: &HashMap<&str, &Element>) {
             Some(l) if !l.is_empty() => format!(" →({}) ", md_esc(l)),
             _ => " → ".to_string(),
         };
-        lines.push(format!(
+        body.push_str(&format!(
             "- {}{}{}\n",
             md_esc(&src.label),
             arrow,
             md_esc(&dst.label)
         ));
     }
-    if lines.is_empty() {
+    if body.is_empty() {
         return;
     }
     out.push_str("## Flows\n\n");
-    for l in lines {
-        out.push_str(&l);
-    }
+    out.push_str(&body);
     out.push('\n');
 }
 

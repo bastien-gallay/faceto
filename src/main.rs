@@ -1,8 +1,8 @@
 //! faceto — a typed file → a visual workshop board you think through with an LLM.
 //!
-//!   faceto render  [SOURCE]           write <name>.svg + <name>.html next to SOURCE
+//!   faceto render  [SOURCE] [--base OTHER]  write <name>.svg + <name>.html (a diff overlay vs OTHER)
 //!   faceto lint    [SOURCE]           check the board against the ES-grammar rules (warn-only)
-//!   faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar
+//!   faceto serve   [SOURCE] [-p PORT] [--base OTHER]  serve the live board + comment sidecar
 //!   faceto export  [SOURCE] [--format mermaid|context]  print the board (mermaid, or a context pack) to stdout
 //!   faceto genesis [MODEL]            migrate a model.json into a <name>.event-log.jsonl
 //!   faceto compact [LOG]              fold a log to a snapshot, bounding replay length
@@ -27,15 +27,17 @@ fn main() {
     let cmd = args.get(1).map(String::as_str).unwrap_or("help");
     match cmd {
         "render" => {
-            let model = parse_render(&args[2..]);
-            cmd_render(&model);
+            let render_args = parse_render(&args[2..]);
+            cmd_render(&render_args);
         }
         "lint" => {
-            let model = parse_render(&args[2..]);
+            // lint takes only a source (no `--base` diff); reuse the positional parse and ignore
+            // any baseline — `--base` is meaningless for a grammar check of one board.
+            let model = parse_render(&args[2..]).source;
             cmd_lint(&model);
         }
         "serve" => {
-            let (source, port) = parse_serve(&args[2..]);
+            let (source, port, base) = parse_serve(&args[2..]);
             let log = match serve_log_path(Path::new(&source)) {
                 Ok(p) => p,
                 Err(e) => {
@@ -43,7 +45,29 @@ fn main() {
                     exit(1);
                 }
             };
-            if let Err(e) = serve::serve(&log, port) {
+            // A launch-time `--base` fixes the overlay baseline for the whole session. Loaded
+            // read-only via `load_source` (never genesis'd or mutated) and paired with its stem +
+            // the served board's stem for the on-board legend/tooltip labels ("was" → "now").
+            let baseline = match base {
+                Some(b) => {
+                    let bp = Path::new(&b);
+                    match load_source(bp) {
+                        Ok(m) => {
+                            // Warn on an empty/mis-suffixed baseline, same as `render --base` warns
+                            // both sides — otherwise a wrong `--base` file silently reads every
+                            // current element as "added".
+                            warn_if_empty(&m, bp);
+                            Some((m, (output_stem(bp), output_stem(&log))))
+                        }
+                        Err(e) => {
+                            eprintln!("error: {e}");
+                            exit(1);
+                        }
+                    }
+                }
+                None => None,
+            };
+            if let Err(e) = serve::serve(&log, port, baseline) {
                 eprintln!("error: {e}");
                 exit(1);
             }
@@ -150,8 +174,8 @@ fn output_stem(source: &Path) -> String {
         .to_string()
 }
 
-fn cmd_render(model_path: &str) {
-    let path = Path::new(model_path);
+fn cmd_render(args: &RenderArgs) {
+    let path = Path::new(&args.source);
     let model = match load_source(path) {
         Ok(m) => m,
         Err(e) => {
@@ -160,10 +184,82 @@ fn cmd_render(model_path: &str) {
         }
     };
     warn_if_empty(&model, path);
-    let svg = render::render_svg(&model, &render::View::none());
-    let html = render::render_html(&svg, &model.title);
     let dir = dir_of(path);
     let stem = output_stem(path);
+
+    match &args.base {
+        // Plain render: the board as-is.
+        None => {
+            let svg = render::render_svg(&model, &render::View::none());
+            let html = render::render_html(&svg, &model.title, false);
+            let (svg_path, html_path) = write_board_files(&dir, &stem, &svg, &html);
+            println!(
+                "rendered {} elements → {} + {}",
+                model.elements.len(),
+                svg_path.display(),
+                html_path.display()
+            );
+        }
+        // Cross-file diff (F-variants): overlay `source` against the `--base` baseline. Both sides
+        // load read-only via `load_source`, so a `model.json` *or* a log works on either side and
+        // the baseline is never genesis'd or mutated. Output keeps the *source* stem — the variant
+        // is the subject.
+        Some(base_source) => {
+            let base_path = Path::new(base_source);
+            let base_model = match load_source(base_path) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    exit(1);
+                }
+            };
+            warn_if_empty(&base_model, base_path);
+            let meta = (output_stem(base_path), stem.clone());
+            let (svg, html, tally) = render_diff(&base_model, &model, meta);
+            let (svg_path, html_path) = write_board_files(&dir, &stem, &svg, &html);
+            println!(
+                "rendered diff of {} vs {} — {} → {} + {}",
+                stem,
+                output_stem(base_path),
+                tally,
+                svg_path.display(),
+                html_path.display()
+            );
+        }
+    }
+}
+
+/// The whole render surface of F-variants' cross-file diff: `diff_models(base, new)` then SVG + HTML,
+/// plus a one-line tally of the change (added/removed/moved/changed element counts) for the summary.
+/// Pure `(Model, Model) -> (svg, html, tally)` — no disk — so it unit-tests directly. `meta` labels
+/// the two sides for the on-board legend and tooltips (`base` = "was", `new` = "now").
+fn render_diff(
+    base: &model::Model,
+    new: &model::Model,
+    meta: (String, String),
+) -> (String, String, String) {
+    let merged = model::diff_models(base, new, meta);
+    let (mut added, mut removed, mut moved, mut changed) = (0, 0, 0, 0);
+    for e in &merged.elements {
+        match e.diff.as_deref() {
+            Some("added") => added += 1,
+            Some("removed") => removed += 1,
+            Some("moved") => moved += 1,
+            Some("changed") => changed += 1,
+            _ => {}
+        }
+    }
+    let tally = format!("{added} added, {removed} removed, {moved} moved, {changed} changed");
+    let svg = render::render_svg(&merged, &render::View::none());
+    // A cross-file diff is a review artifact → render read-only (variant = true).
+    let html = render::render_html(&svg, &merged.title, true);
+    (svg, html, tally)
+}
+
+/// Write a rendered board's SVG + HTML beside a source, under `stem` (`<stem>.svg` / `<stem>.html`).
+/// Both the plain `render` path and the `--base` diff path funnel through here, so the write and its
+/// error/exit handling live in exactly one place. Returns the two paths for the caller's summary line.
+fn write_board_files(dir: &Path, stem: &str, svg: &str, html: &str) -> (PathBuf, PathBuf) {
     let svg_path = dir.join(format!("{stem}.svg"));
     let html_path = dir.join(format!("{stem}.html"));
     if let Err(e) = std::fs::write(&svg_path, format!("{svg}\n")) {
@@ -174,12 +270,7 @@ fn cmd_render(model_path: &str) {
         eprintln!("error writing {}: {e}", html_path.display());
         exit(1);
     }
-    println!(
-        "rendered {} elements → {} + {}",
-        model.elements.len(),
-        svg_path.display(),
-        html_path.display()
-    );
+    (svg_path, html_path)
 }
 
 /// Check a board against the ES-grammar rules and print any findings. **Warn-only**: a
@@ -406,33 +497,76 @@ fn reject_flag(arg: &str) {
     }
 }
 
-/// `render [SOURCE]`. The positional is the source; anything flag-shaped is rejected loudly.
-fn parse_render(args: &[String]) -> String {
-    let mut model = "model.json".to_string();
-    for arg in args {
-        reject_flag(arg);
-        model = arg.clone();
-    }
-    model
+/// Parsed `render [SOURCE] [--base OTHER]`: the positional `source` (the "now" board) and an
+/// optional `base` to diff against (F-variants). `--base` names the *baseline* board; the overlay
+/// then shows `source`'s added/removed/moved/changed *against* it, so the positional is always the
+/// subject and `--base` the "was" side — the same direction `serve --base` uses.
+struct RenderArgs {
+    source: String,
+    base: Option<String>,
 }
 
-fn parse_serve(args: &[String]) -> (String, u16) {
-    let mut model = "model.json".to_string();
-    let mut port: u16 = 8753;
+/// `render [SOURCE] [--base OTHER]`. The positional is the source; `--base` takes the baseline path.
+/// A `--base` with no value fails loudly (exit 2), mirroring `parse_export`'s `--format`; any other
+/// flag-shaped arg is still rejected by `reject_flag`.
+fn parse_render(args: &[String]) -> RenderArgs {
+    let mut source = "model.json".to_string();
+    let mut base = None;
     let mut i = 0;
     while i < args.len() {
-        if matches!(args[i].as_str(), "-p" | "--port") {
-            if let Some(v) = args.get(i + 1).and_then(|s| s.parse().ok()) {
-                port = v;
+        if args[i] == "--base" {
+            match args.get(i + 1) {
+                Some(v) => base = Some(v.clone()),
+                None => {
+                    eprintln!("--base needs a value (the baseline board to diff against)");
+                    exit(2);
+                }
             }
             i += 2;
         } else {
             reject_flag(&args[i]);
-            model = args[i].clone();
+            source = args[i].clone();
             i += 1;
         }
     }
-    (model, port)
+    RenderArgs { source, base }
+}
+
+/// `serve [SOURCE] [-p PORT] [--base OTHER]`. Positional source; `-p`/`--port` the port; `--base` an
+/// optional baseline board the live overlay diffs against (F-variants) — same flag and same
+/// direction as `render --base` (SOURCE is "now", `--base` the "was" side). A `--base` with no value
+/// fails loudly (exit 2).
+fn parse_serve(args: &[String]) -> (String, u16, Option<String>) {
+    let mut model = "model.json".to_string();
+    let mut port: u16 = 8753;
+    let mut base = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-p" | "--port" => {
+                if let Some(v) = args.get(i + 1).and_then(|s| s.parse().ok()) {
+                    port = v;
+                }
+                i += 2;
+            }
+            "--base" => {
+                match args.get(i + 1) {
+                    Some(v) => base = Some(v.clone()),
+                    None => {
+                        eprintln!("--base needs a value (the baseline board to diff against)");
+                        exit(2);
+                    }
+                }
+                i += 2;
+            }
+            _ => {
+                reject_flag(&args[i]);
+                model = args[i].clone();
+                i += 1;
+            }
+        }
+    }
+    (model, port, base)
 }
 
 /// The output formats `export` can emit. `Mermaid` is a lossy diagram; `Context` is a rich
@@ -480,9 +614,9 @@ fn print_help() {
         "faceto {} — a typed file → a visual workshop board you think through with an LLM\n\
          \n\
          USAGE:\n\
-         \x20 faceto render  [SOURCE]            write <name>.svg + <name>.html next to SOURCE\n\
+         \x20 faceto render  [SOURCE] [--base OTHER]  write <name>.svg + <name>.html (diff overlay vs OTHER)\n\
          \x20 faceto lint    [SOURCE]            check the board against the ES-grammar rules (warn-only)\n\
-         \x20 faceto serve   [SOURCE] [-p PORT]  serve the live board + comment sidecar (default :8753)\n\
+         \x20 faceto serve   [SOURCE] [-p PORT] [--base OTHER]  serve the live board + comment sidecar (default :8753)\n\
          \x20 faceto export  [SOURCE] [--format mermaid|context]  print the board to stdout (mermaid diagram, or a markdown context pack for a coding agent)\n\
          \x20 faceto genesis [MODEL]             migrate a model.json into a <name>.event-log.jsonl\n\
          \x20 faceto compact [LOG]               fold a log to a snapshot, bounding replay (default model.event-log.jsonl)\n\
@@ -508,6 +642,91 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Build a `Model` straight from a JSON board literal (no disk), for the diff-render tests.
+    fn model_of(json: &str) -> model::Model {
+        model::from_json(&crate::json::parse(json).unwrap())
+    }
+
+    fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_render_reads_source_and_optional_base() {
+        // No args → default source, no baseline (plain render).
+        let r = parse_render(&args(&[]));
+        assert_eq!(r.source, "model.json");
+        assert!(r.base.is_none());
+
+        // A bare positional is the source; still no baseline.
+        let r = parse_render(&args(&["after.jsonl"]));
+        assert_eq!(r.source, "after.jsonl");
+        assert!(r.base.is_none());
+
+        // `--base OTHER` sets the baseline; order-independent from the positional.
+        let r = parse_render(&args(&["after.jsonl", "--base", "before.jsonl"]));
+        assert_eq!(r.source, "after.jsonl");
+        assert_eq!(r.base.as_deref(), Some("before.jsonl"));
+        let r = parse_render(&args(&["--base", "before.jsonl", "after.jsonl"]));
+        assert_eq!(r.source, "after.jsonl");
+        assert_eq!(r.base.as_deref(), Some("before.jsonl"));
+    }
+
+    #[test]
+    fn parse_serve_reads_port_and_optional_base() {
+        // Defaults: model.json, :8753, no overlay baseline.
+        let (src, port, base) = parse_serve(&args(&[]));
+        assert_eq!((src.as_str(), port), ("model.json", 8753));
+        assert!(base.is_none());
+
+        // `--base` sets the baseline and composes with `-p`, in any order.
+        let (src, port, base) = parse_serve(&args(&[
+            "after.jsonl",
+            "-p",
+            "9000",
+            "--base",
+            "before.jsonl",
+        ]));
+        assert_eq!((src.as_str(), port), ("after.jsonl", 9000));
+        assert_eq!(base.as_deref(), Some("before.jsonl"));
+        let (src, port, base) = parse_serve(&args(&["--base", "before.jsonl", "after.jsonl"]));
+        assert_eq!((src.as_str(), port), ("after.jsonl", 8753));
+        assert_eq!(base.as_deref(), Some("before.jsonl"));
+    }
+
+    #[test]
+    fn render_diff_tags_added_removed_and_changed_in_the_svg() {
+        // A base board and a variant on stable ids: E2 added, E1 relabeled (changed), C1 removed.
+        let base = model_of(
+            r#"{"title":"T","elements":[
+                {"id":"E1","type":"event","label":"Placed","col":0},
+                {"id":"C1","type":"command","label":"Place","col":0}
+            ]}"#,
+        );
+        let variant = model_of(
+            r#"{"title":"T","elements":[
+                {"id":"E1","type":"event","label":"Order placed","col":0},
+                {"id":"E2","type":"event","label":"Order shipped","col":1}
+            ]}"#,
+        );
+        let (svg, html, tally) = render_diff(&base, &variant, ("before".into(), "after".into()));
+
+        // The overlay carries every diff verdict as an SVG class the stylesheet colours.
+        assert!(svg.contains("added"), "added element missing from overlay");
+        assert!(
+            svg.contains("removed"),
+            "removed element missing from overlay"
+        );
+        assert!(
+            svg.contains("changed"),
+            "changed element missing from overlay"
+        );
+        // The tally counts them for the CLI summary line.
+        assert_eq!(tally, "1 added, 1 removed, 0 moved, 1 changed");
+        // HTML wraps the same SVG (the file `render --base` writes).
+        assert!(html.contains("<svg"));
     }
 
     #[test]

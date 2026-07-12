@@ -1,5 +1,10 @@
 const LS_KEY = "facetoComments";
-const CFG = __CONFIG__;   // { colW, stickyW, stickyH, regionTab… } — geometry constants, from render.rs
+const CFG = __CONFIG__;   // { colW, stickyW, stickyH, regionTab…, variant } — from render.rs
+// A `--base` diff overlay (render/serve --base) is a read-only *review* surface: the DOM carries
+// baseline-only "removed" ghosts, so no structural edit may land on it. READONLY gates every
+// mutation entry point (keyboard shortcuts, mouse affordances via the `.variant` body class in CSS),
+// while reading — collapse, scroll, comment sidebar, live re-render — stays available.
+const READONLY = !!CFG.variant;
 // Structural ops change the board itself, not feedback on a box — kept out of the note badges,
 // counts and prior-comment list (and never resynced offline; the log is the truth). `rename`
 // belongs here: it edits the model's label, it is not a note — counting it as feedback painted
