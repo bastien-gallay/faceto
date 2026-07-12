@@ -15,41 +15,93 @@
 
 use crate::lint::lint;
 use crate::model::{region_of, Element, Model};
+use std::collections::{HashMap, HashSet};
 
 use super::mermaid::render_mermaid;
 use super::style::LANES;
 use super::text::split_label;
 
-/// Human-facing plural heading for each lane `type`, index-aligned with `LANES`. The context pack
-/// speaks the ubiquitous language in words, not the wire `type` string.
+/// Human-facing plural headings, **index-aligned with `LANES`** so the count is tied to the grammar
+/// (mirrors `style::LANE_PREFIXES`): the `[_; LANES.len()]` size means adding a lane to `LANES`
+/// forces this array to grow too or the crate fails to compile — no silent heading drift.
+const LANE_HEADINGS: [&str; LANES.len()] = [
+    "Actors",
+    "Commands",
+    "Aggregates",
+    "Events",
+    "Policies",
+    "Read models",
+    "External systems",
+    "Hotspots",
+];
+
+/// The plural heading for a lane `type`. `LANES` is the single source of truth for the order;
+/// `"Other"` is unreachable in practice (callers only pass on-grammar kinds) but keeps this total.
 fn lane_heading(kind: &str) -> &'static str {
-    match kind {
-        "actor" => "Actors",
-        "command" => "Commands",
-        "aggregate" => "Aggregates",
-        "event" => "Events",
-        "policy" => "Policies",
-        "readmodel" => "Read models",
-        "external" => "External systems",
-        "hotspot" => "Hotspots",
-        _ => "Other", // off-grammar types are filtered out before this; be safe
-    }
+    LANES
+        .iter()
+        .position(|&l| l == kind)
+        .map(|i| LANE_HEADINGS[i])
+        .unwrap_or("Other")
 }
 
 /// Escape the markdown-active characters that would otherwise break inline prose or bullet text.
-/// Board labels are authored freely (they can contain `*`, `_`, backticks, brackets), and they land
-/// inside `**bold**` spans and `- ` bullets, so an un-escaped `*` or `[` could corrupt the rendered
-/// markdown. Backslash is doubled first so it can never combine with a following escape. This is
-/// *not* `text::esc` (HTML entities) nor `mermaid_esc` (Mermaid quoted strings) — a third context.
+/// Board labels are authored freely (they can contain `*`, `_`, backticks, brackets, and even
+/// newlines), and they land inside `**bold**` spans, `# ` headings and `- ` bullets — so an
+/// un-escaped `*`/`[` could corrupt inline markup, and a raw newline would split the heading or
+/// bullet across lines. Newlines collapse to a space (as `mermaid_esc` does); the metachars are
+/// backslash-escaped, with `\` doubled first so it can never combine with a following escape. This
+/// is *not* `text::esc` (HTML entities) nor `mermaid_esc` (Mermaid quoted strings) — a third context.
 fn md_esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        if matches!(c, '\\' | '`' | '*' | '_' | '[' | ']') {
-            out.push('\\');
+        match c {
+            '\n' | '\r' => out.push(' '),
+            '\\' | '`' | '*' | '_' | '[' | ']' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
         }
-        out.push(c);
     }
     out
+}
+
+/// Escape a URL for a CommonMark angle-bracket link destination (`(<...>)`). Such a destination may
+/// hold spaces and most punctuation, but not an unescaped `<`/`>` or a line break — so a malformed
+/// link can never leak into and corrupt the surrounding markdown. Backslash-escapes are recognised
+/// inside `<...>`, so `\`/`<`/`>` are backslash-escaped and line breaks dropped (a valid URL has
+/// none of these raw anyway).
+fn md_url_dest(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\n' | '\r' => {}
+            '\\' | '<' | '>' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// The shortest backtick fence (≥3) that can wrap `content` without a run of backticks *inside* it
+/// prematurely closing the fence. CommonMark requires the opening fence be longer than any internal
+/// run, so a label carrying ``` ``` ``` can't break the embedded ```` ```mermaid ```` block.
+fn backtick_fence(content: &str) -> String {
+    let mut longest = 0usize;
+    let mut run = 0usize;
+    for c in content.chars() {
+        if c == '`' {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    "`".repeat(longest.max(2) + 1)
 }
 
 /// Render a board to a markdown+Mermaid context pack. Deterministic and pure. Sections, in order:
@@ -66,21 +118,19 @@ pub fn render_context(model: &Model) -> String {
         .filter(|e| LANES.contains(&e.kind.as_str()))
         .collect();
 
+    // Index live elements by id once, so flows resolve endpoints in O(1) rather than scanning.
+    let by_id: HashMap<&str, &Element> = live.iter().map(|&e| (e.id.as_str(), e)).collect();
+
     let mut out = String::new();
 
     header(&mut out, model);
     ubiquitous_language(&mut out, &live);
-    flows(&mut out, model, &live);
+    flows(&mut out, model, &by_id);
     regions(&mut out, model, &live);
     open_questions(&mut out, model, &live);
     diagram(&mut out, model);
 
     out
-}
-
-/// The label of a live element by id (for referring to elements by name in prose).
-fn label_of<'a>(live: &[&'a Element], id: &str) -> Option<&'a str> {
-    live.iter().find(|e| e.id == id).map(|e| e.label.as_str())
 }
 
 fn header(out: &mut String, model: &Model) {
@@ -120,7 +170,13 @@ fn ubiquitous_language(out: &mut String, live: &[&Element]) {
             }
             out.push('\n');
             for link in &e.links {
-                out.push_str(&format!("  - <{link}>\n"));
+                // A proper `[text](<dest>)` link: the angle-bracket destination tolerates spaces and
+                // punctuation, and both halves are sanitised so a malformed link can't break the doc.
+                out.push_str(&format!(
+                    "  - [{}](<{}>)\n",
+                    md_esc(link),
+                    md_url_dest(link)
+                ));
             }
         }
         out.push('\n');
@@ -130,17 +186,23 @@ fn ubiquitous_language(out: &mut String, live: &[&Element]) {
     }
 }
 
-fn flows(out: &mut String, model: &Model, live: &[&Element]) {
+fn flows(out: &mut String, model: &Model, by_id: &HashMap<&str, &Element>) {
     let mut lines = Vec::new();
     for edge in &model.edges {
-        let (Some(src), Some(dst)) = (label_of(live, &edge.src), label_of(live, &edge.dst)) else {
+        let (Some(src), Some(dst)) = (by_id.get(edge.src.as_str()), by_id.get(edge.dst.as_str()))
+        else {
             continue; // skip edges whose endpoints aren't both live (parity with mermaid)
         };
         let arrow = match edge.label.as_deref() {
             Some(l) if !l.is_empty() => format!(" →({}) ", md_esc(l)),
             _ => " → ".to_string(),
         };
-        lines.push(format!("- {}{}{}\n", md_esc(src), arrow, md_esc(dst)));
+        lines.push(format!(
+            "- {}{}{}\n",
+            md_esc(&src.label),
+            arrow,
+            md_esc(&dst.label)
+        ));
     }
     if lines.is_empty() {
         return;
@@ -156,6 +218,18 @@ fn regions(out: &mut String, model: &Model, live: &[&Element]) {
     if model.phases.is_empty() {
         return;
     }
+    // Assign each placed element to its region in one pass: region_of is O(phases), so doing it
+    // once per element here is O(V·P) instead of O(V·P²) if re-derived inside the per-phase loop.
+    // Insertion preserves live (model) order within each region, matching the vocabulary ordering.
+    let mut members: HashMap<&str, Vec<&Element>> = HashMap::new();
+    for &e in live {
+        if let Some(c) = e.col {
+            if let Some(r) = region_of(model, c) {
+                members.entry(r.id.as_str()).or_default().push(e);
+            }
+        }
+    }
+
     out.push_str("## Regions (bounded contexts)\n\n");
     for p in &model.phases {
         out.push_str(&format!(
@@ -164,22 +238,15 @@ fn regions(out: &mut String, model: &Model, live: &[&Element]) {
             p.from_col,
             p.to_col
         ));
-        let members: Vec<&&Element> = live
-            .iter()
-            .filter(|e| {
-                e.col.is_some_and(|c| {
-                    region_of(model, c).map(|r| r.id.as_str()) == Some(p.id.as_str())
-                })
-            })
-            .collect();
-        if members.is_empty() {
-            out.push_str("_(no elements)_\n\n");
-            continue;
+        match members.get(p.id.as_str()) {
+            None => out.push_str("_(no elements)_\n\n"),
+            Some(members) => {
+                for e in members {
+                    out.push_str(&format!("- **{}** `{}`\n", md_esc(&e.label), e.id));
+                }
+                out.push('\n');
+            }
         }
-        for e in members {
-            out.push_str(&format!("- **{}** `{}`\n", md_esc(&e.label), e.id));
-        }
-        out.push('\n');
     }
 }
 
@@ -191,7 +258,7 @@ fn open_questions(out: &mut String, model: &Model, live: &[&Element]) {
         .collect();
 
     // Feeder 2: lint findings, suppressing any on a resolved element (mirrors serve's sidebar).
-    let resolved: std::collections::HashSet<&str> = model
+    let resolved: HashSet<&str> = model
         .elements
         .iter()
         .filter(|e| e.resolved)
@@ -232,10 +299,14 @@ fn open_questions(out: &mut String, model: &Model, live: &[&Element]) {
 }
 
 fn diagram(out: &mut String, model: &Model) {
+    let mermaid = render_mermaid(model);
+    // Mermaid node text isn't markdown-escaped, so a label carrying backticks could otherwise close
+    // the fence early; size the fence to the longest internal run so it always wraps cleanly.
+    let fence = backtick_fence(&mermaid);
     out.push_str("## Diagram\n\n");
-    out.push_str("```mermaid\n");
-    out.push_str(&render_mermaid(model));
-    out.push_str("```\n");
+    out.push_str(&format!("{fence}mermaid\n"));
+    out.push_str(&mermaid);
+    out.push_str(&format!("{fence}\n"));
 }
 
 #[cfg(test)]
@@ -467,5 +538,55 @@ flowchart LR
         );
         let out = render_context(&m);
         assert!(out.contains(r"a\*b\_c\[d\]"), "label escaped:\n{out}");
+    }
+
+    #[test]
+    fn newline_in_label_or_title_collapses_to_space() {
+        // A newline would otherwise split the heading / bullet across lines.
+        let m = model_of(
+            r#"{ "title": "line1\nline2", "elements": [
+                { "id": "C1", "type": "command", "label": "add\nitem", "col": 0 }
+            ], "edges": [] }"#,
+        );
+        let out = render_context(&m);
+        assert!(
+            out.contains("# Context: line1 line2"),
+            "title one line:\n{out}"
+        );
+        assert!(
+            out.contains("- **add item** `C1`"),
+            "bullet one line:\n{out}"
+        );
+    }
+
+    #[test]
+    fn backticks_in_label_do_not_break_the_mermaid_fence() {
+        // A triple-backtick label must not prematurely close the embedded ```mermaid fence.
+        let m = model_of(
+            r#"{ "title": "t", "elements": [
+                { "id": "C1", "type": "command", "label": "see ```code```", "col": 0 }
+            ], "edges": [] }"#,
+        );
+        let out = render_context(&m);
+        // The fence must be longer than the 3-backtick run inside, i.e. at least ````.
+        assert!(out.contains("````mermaid\n"), "widened fence:\n{out}");
+        assert!(
+            out.trim_end().ends_with("````"),
+            "matching close fence:\n{out}"
+        );
+    }
+
+    #[test]
+    fn link_with_spaces_becomes_a_valid_angle_bracket_link() {
+        let m = model_of(
+            r#"{ "title": "t", "elements": [
+                { "id": "C1", "type": "command", "label": "add", "col": 0, "links": ["https://x.com/a b"] }
+            ], "edges": [] }"#,
+        );
+        let out = render_context(&m);
+        assert!(
+            out.contains("- [https://x.com/a b](<https://x.com/a b>)"),
+            "sanitised link:\n{out}"
+        );
     }
 }
