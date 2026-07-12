@@ -79,6 +79,10 @@ function keyTarget() {
   return ae?.classList?.contains("sticky") ? ae.id : hoverId;
 }
 document.addEventListener("keydown", (e) => {
+  // Read-only variant overlay: no structural-edit shortcut fires (undo, move, rename, add, remove,
+  // comment, connect). Help (?) and Escape still work; region collapse (z) rides region.js's own
+  // tab-level handler, so it is unaffected by this early return.
+  if (READONLY && e.key !== "?" && e.key !== "Escape") return;
   // Undo is the one modified shortcut we own: Ctrl/Cmd+Z appends the inverse of the last own
   // move/rename. Text fields keep their native undo; Shift (redo) passes through untouched.
   if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
@@ -189,5 +193,13 @@ $("#export").addEventListener("click", async () => {
   a.download = "faceto-comments.json";
   a.click();
 });
+
+// A `--base` diff overlay is a read-only review surface: tag the body so CSS disables every
+// structural-edit affordance (drag, hover glyphs, connect dot, frontier/tab edits), and mark the
+// board's a11y role. The SVG's own "was → now" subtitle already names the two sides.
+if (READONLY) {
+  document.body.classList.add("variant");
+  $("#board").setAttribute("aria-label", "variant diff overlay — read-only review; edits are disabled");
+}
 
 load();

@@ -287,9 +287,6 @@ pub fn normalize(phases: &mut [Phase]) {
 /// (`normalize`), at most one band covers a column; the `min_by_key` is a defensive total-order
 /// tiebreak that a partition never needs. Pure; `None` when no band covers it (only possible before
 /// the first phase exists).
-// Allowed dead-code until Stage 5/6 (serve/client) consume it — render derives pivotal/membership
-// from geometry directly, so this convenience accessor lands with its first caller there.
-#[allow(dead_code)]
 pub fn region_of(m: &Model, col: i64) -> Option<&Phase> {
     m.phases
         .iter()
