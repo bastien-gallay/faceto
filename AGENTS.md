@@ -4,8 +4,8 @@
 
 Canonical guide for any coding agent or tool working in this repo — the single source of
 truth it orients you and holds the project's standing guidance. Claude Code reads it via
-`@AGENTS.md` in [`CLAUDE.md`](CLAUDE.md); other tools read this file directly. Keep the
-substance here so the two tools can't drift.
+`@AGENTS.md` in [`CLAUDE.md`](CLAUDE.md); Google Antigravity (Gemini) loads it automatically
+as a project-level rule file. Keep the substance here so the tools don't drift.
 
 ## What this is
 
