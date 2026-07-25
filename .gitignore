@@ -35,3 +35,8 @@ comments.jsonl
 
 # typst briefs are tracked as .typ source; the rendered PDF is derived
 docs/*.pdf
+
+# the mdBook output, and the live sample board the tour embeds (both rendered at build time
+# from tracked sources — docs/src/ and examples/sample.model.json)
+/docs/book/
+/docs/src/assets/sample.html

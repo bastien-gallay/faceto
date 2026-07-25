@@ -1,0 +1,33 @@
+[book]
+title = "faceto"
+authors = ["Bastien Gallay and contributors"]
+description = "A typed file becomes an interactive event-storming board you think through with an LLM."
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+# A link to a page that does not exist must fail the build, not silently mint an empty
+# page. The chapter map in SUMMARY.md is a promise; this keeps it honest.
+create-missing = false
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/bastien-gallay/faceto"
+edit-url-template = "https://github.com/bastien-gallay/faceto/edit/main/docs/{path}"
+site-url = "/faceto/"
+additional-css = ["theme/css/faceto.css"]
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true
+
+[output.html.playground]
+editable = false
+copyable = true

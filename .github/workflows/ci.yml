@@ -45,6 +45,7 @@ jobs:
       just: ${{ steps.filter.outputs.just }}
       js: ${{ steps.filter.outputs.js }}
       roadmap: ${{ steps.filter.outputs.roadmap }}
+      docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
@@ -75,6 +76,8 @@ jobs:
             roadmap:
               - 'ROADMAP.md'
               - 'scripts/sync_roadmap.py'
+            docs:
+              - 'docs/**'
 
   fmt:
     name: rustfmt
@@ -233,6 +236,23 @@ jobs:
         with:
           globs: '**/*.md'
           config: '.markdownlint-cli2.jsonc'
+
+  # The documentation book must build. `create-missing = false` in docs/book.toml turns a
+  # SUMMARY.md entry with no file into a build failure, so this job is the gate that keeps
+  # the chapter map honest — a promised page can never ship as a silent empty stub.
+  docs:
+    name: docs book
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/install-action@3d7d7cd5ac7f994c1892ae0c06165095b9139094 # v2.85.1
+        with:
+          tool: mdbook
+      # No sample board here: rendering it needs a full Rust build, and the tour's iframe
+      # degrades to an empty frame rather than a broken build. The deploy workflow renders it.
+      - run: mdbook build docs
 
   # Single-source-of-truth gate: ROADMAP.md must stay reconciled with issues (see its
   # "Single source of truth" section). The board (user Project #2) needs `project` scope,

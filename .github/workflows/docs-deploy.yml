@@ -1,0 +1,65 @@
+name: Deploy docs
+
+# The book is built and link-checked on every PR by CI's `docs` job; this workflow only
+# publishes what `main` already proved buildable.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'examples/**'
+      - '.github/workflows/docs-deploy.yml'
+  workflow_dispatch:
+
+# Least privilege by default; the deploy job widens it for itself only.
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+# Third-party actions are pinned to commit SHAs (version in the trailing comment),
+# same rule as ci.yml. Bump the SHA and the comment together; never use a mutable tag.
+jobs:
+  build:
+    name: build the book
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"
+      - uses: taiki-e/install-action@3d7d7cd5ac7f994c1892ae0c06165095b9139094 # v2.85.1
+        with:
+          tool: mdbook
+
+      # The tour embeds a real board, rendered by *this* build of faceto — not a screenshot,
+      # so it can never depict a layout the code no longer produces. Generated, never
+      # committed (see .gitignore).
+      - name: Render the sample board into the book assets
+        run: |
+          cargo build --release
+          ./target/release/faceto render examples/sample.model.json
+          cp examples/sample.html docs/src/assets/sample.html
+
+      - name: Build the book
+        run: mdbook build docs
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: docs/book
+
+  deploy:
+    name: deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

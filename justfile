@@ -88,6 +88,22 @@ demo-serve port="8753":
     echo "(Ctrl-C to stop; the temp dir and its event log are removed on exit.)"
     ./target/release/faceto serve "$work/board.model.json" -p {{ port }}
 
+# Build the documentation book into docs/book (mdbook required; not a Rust crate, so the
+# zero-dependency promise is untouched). Renders the sample board first so the tour's
+# embedded live board matches this build — exactly what docs-deploy.yml does in CI.
+docs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release
+    ./target/release/faceto render examples/sample.model.json
+    cp examples/sample.html docs/src/assets/sample.html
+    mdbook build docs
+    echo "✓ book built → docs/book/index.html"
+
+# Serve the book locally with live reload.
+docs-serve port="3000":
+    mdbook serve docs -p {{ port }} --open
+
 # Lint the GitHub Actions workflow files.
 actionlint:
     actionlint
