@@ -51,6 +51,7 @@ cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 npx markdownlint-cli2 "**/*.md"
+just docs                   # build the user manual (mdBook); fails on a promised page with no file
 
 faceto render examples/sample.model.json       # → sample.svg + sample.html next to the model
 faceto lint   examples/sample.model.json       # → ES-grammar findings (warn-only, exits 0)
@@ -123,7 +124,8 @@ the log). Seven modules, each one stage (`json`/`model`/`lint` are single files;
   script). `render_html` then
   does a two-stage fill: `__CONFIG__` into the script first (single-pass fill never re-scans an
   inserted value), then `__STYLE__` / `__SCRIPT__` / `__SVG__` / `__TITLE__` into the shell. The
-  client polls `/model-version`, swaps in diff/plain SVGs, and posts comments/structural ops (falling
+  client fetches `/model-version` on load and on **Reload** (there is no polling loop and no SSE —
+  `F-collab-sse` is the un-shipped push path), swaps in diff/plain SVGs, and posts comments/structural ops (falling
   back to `localStorage` when offline — offline structural ops are local-only, not resynced).
   Pure helpers are checked by `tests/js/board-logic.test.mjs` (plain node, no deps).
 
@@ -171,6 +173,53 @@ instrument**). The strategic principles, anti-references, and visual system live
 [`.claude/rules/ui-design.md`](.claude/rules/ui-design.md) (path-scoped: auto-loads in Claude Code
 when you edit `src/template.html` or `src/render/`). **Read all three before any UI work.**
 
+## Documentation is part of the feature (do not skip this)
+
+The user-facing surface is the **mdBook in [`docs/src/`](docs/src/)**, published to
+<https://bastien-gallay.github.io/faceto/>. `CHANGELOG.md` and `ROADMAP.md` are *not* user
+documentation — one is a release record, the other is the project's narrative. A user looking for
+"how do I fold a region" reads the book.
+
+**A change a user can notice is not done until the book says so, in the same PR.** That covers a
+new or changed CLI flag, a new gesture or keybinding, a new event kind or comment kind, a new
+model/log field, a new lint rule, a changed default, and any removal. It does *not* cover pure
+refactors, structural "tidy" commits, or internal renames a user cannot observe — those touch no
+page, by definition.
+
+Where each change lands:
+
+| You changed… | Update |
+| --- | --- |
+| a CLI verb, flag, default, or exit code | `docs/src/reference/cli/<verb>.md` (+ `cli.md` if the shared rules move) |
+| a keybinding or a mouse gesture | `docs/src/board/keyboard.md` **and** the in-app sheet in `src/template.html` |
+| an element/edge/region behaviour or guard | the matching `docs/src/board/*.md` page |
+| a lint rule (added, removed, level-gated) | `docs/src/reference/lint-rules.md` |
+| an `Event` variant or a `comment_to_events` kind | `docs/src/reference/event-log.md` **and** the write-contract table in [`.claude/skills/faceto-narrate/SKILL.md`](.claude/skills/faceto-narrate/SKILL.md) |
+| a `model.json` field | `docs/src/reference/model-format.md` + `docs/schema/*.schema.json` |
+| an export format | `docs/src/reference/cli/export.md` + `docs/src/agents/context-pack.md` |
+| an invariant, or the pipeline | `docs/src/architecture/` |
+
+Three traps this table exists to prevent, each one already met:
+
+- **The keyboard sheet is duplicated.** `src/template.html`'s `#help` dialog and
+  `docs/src/board/keyboard.md` are two hand-maintained lists of the same gestures. Change a
+  binding and you must change both — there is no generator keeping them honest yet.
+- **The narrate skill documents `comment_to_events`.** Its write-contract table is a hand-copy of
+  the code. Add a comment `kind` without updating it and the agent will not know the action
+  exists (this is exactly how the shipped `connect`/`disconnect` kinds went unlisted).
+- **The schemas are documentation too.** An additive model field that never reaches
+  `docs/schema/` silently stops being discoverable.
+
+Write against **the code, not the CHANGELOG** — the entry describes intent at merge time, the code
+describes present behaviour. Document what is shipped; when a feature is mid-reformulation, say so
+on the page and link the issue rather than describing an interface about to move. Internal
+artefacts (`docs/notes/`, `docs/F-*-plan.md`, `.personal/**`) stay out of `docs/src`: the book
+publishes decisions, not deliberations.
+
+`create-missing = false` in `docs/book.toml` plus CI's `docs book` job mean a `SUMMARY.md` entry
+with no file fails the build — a promised page can never ship as a silent empty stub. Build the
+book locally with `just docs` (or `just docs-serve` for live reload).
+
 ## Canonical docs (read these for depth)
 
 | For… | Read |
@@ -181,6 +230,8 @@ when you edit `src/template.html` or `src/render/`). **Read all three before any
 | CI jobs in full | [`docs/ci.md`](docs/ci.md) |
 | Product strategy, anti-references, the "calm instrument" register | [`PRODUCT.md`](PRODUCT.md) |
 | Visual system — colour grammar, typography, spacing, components, diff styling | [`DESIGN.md`](DESIGN.md) |
+| What a *user* is told the tool does (the published manual) | [`docs/src/`](docs/src/) → <https://bastien-gallay.github.io/faceto/> |
 
 Commit discipline in one line: **separate structural "tidy" commits from behavioural `feat`/`fix`
-ones** (Tidy First). No "Claude" signature in commit messages.
+ones** (Tidy First) — and a behavioural commit carries its documentation change with it, not in a
+follow-up. No "Claude" signature in commit messages.

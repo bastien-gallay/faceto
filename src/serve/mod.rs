@@ -92,7 +92,7 @@ impl Ctx {
         let version = fnv12(&raw);
         // Fast path: an unchanged log (same content hash) reuses the cached projection, so
         // `parse_log`+`replay` run only when a new event has actually landed — not on every page
-        // load or poll. Before this, the cache was a mere insertion guard and replay ran every call.
+        // load or refresh. Before this, the cache was a mere insertion guard and replay ran every call.
         if let Some(model) = self.cached(&version) {
             return Ok((version, model));
         }
@@ -115,9 +115,10 @@ impl Ctx {
         lock(&self.cache).map.get(version).cloned()
     }
 
-    /// Just the log's content hash — the value `/model-version` polls for. Hashing the raw bytes is
-    /// O(bytes) and deliberately skips `parse_log`+`replay`, so the client's once-a-second poll
-    /// never folds the whole log just to learn nothing changed.
+    /// Just the log's content hash — the value `/model-version` reports. Hashing the raw bytes is
+    /// O(bytes) and deliberately skips `parse_log`+`replay`, so a version check never folds the whole
+    /// log just to learn nothing changed. (The client fetches this on load and on Reload — there is
+    /// no polling loop; `F-collab-sse` is the un-shipped push path.)
     pub(crate) fn version(&self) -> Result<String, String> {
         let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
         Ok(fnv12(&raw))

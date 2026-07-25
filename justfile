@@ -11,8 +11,9 @@ export RUSTFLAGS := "-D warnings"
 default:
     @just --list
 
-# Run every CI gate in order (format → lint → test → docs → firewall → size → workflows → justfile).
-ci: fmt clippy test test-js md zero-deps binary-size actionlint lint-justfile
+# Run every CI gate in order (format → lint → test → markdown → book → firewall → size → workflows
+# → justfile). `docs` needs mdbook installed, like `md` needs markdownlint-cli2.
+ci: fmt clippy test test-js md docs zero-deps binary-size actionlint lint-justfile
     @echo "✓ all local CI gates passed"
 
 # Formatting is law: cargo fmt --all --check.
@@ -87,6 +88,22 @@ demo-serve port="8753":
     echo "serving a throwaway board from $work on http://127.0.0.1:{{ port }}"
     echo "(Ctrl-C to stop; the temp dir and its event log are removed on exit.)"
     ./target/release/faceto serve "$work/board.model.json" -p {{ port }}
+
+# Build the documentation book into docs/book (mdbook required; not a Rust crate, so the
+# zero-dependency promise is untouched). Renders the sample board first so the tour's
+# embedded live board matches this build — exactly what docs-deploy.yml does in CI.
+docs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release
+    ./target/release/faceto render examples/sample.model.json
+    cp examples/sample.html docs/src/assets/sample.html
+    mdbook build docs
+    echo "✓ book built → docs/book/index.html"
+
+# Serve the book locally with live reload.
+docs-serve port="3000":
+    mdbook serve docs -p {{ port }} --open
 
 # Lint the GitHub Actions workflow files.
 actionlint:

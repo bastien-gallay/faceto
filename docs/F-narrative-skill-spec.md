@@ -16,9 +16,9 @@ append-only log.
 
 Two shipped facts make this slice prompt-ware:
 
-- `serve.rs` `current()` (line 42) re-reads the log from disk on **every** request, and the
-  client polls `/model-version`. Any externally appended event repaints the live board as a
-  diff overlay within one poll tick.
+- `serve.rs` `current()` (line 42) re-reads the log from disk on **every** request, so any
+  externally appended event repaints the live board as a diff overlay on the next fetch — which
+  the user triggers with **Reload** (the client has no refresh loop: no poll, no SSE).
 - `POST /comment` already gives an external writer everything an MCP tool would: server-side
   id minting (`mint_id`, under the appends mutex), the non-blank-label guard, the off-grammar
   lane-type rejection, and atomic multi-line appends. `region-add` is covered too

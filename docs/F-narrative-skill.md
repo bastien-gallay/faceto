@@ -17,9 +17,10 @@ spec and locked decisions: [`F-narrative-skill-spec.md`](F-narrative-skill-spec.
 
 The write seam an MCP server would expose already exists twice:
 
-- `serve` re-reads the log from disk on **every** request and the client polls
-  `/model-version` (~1 Hz), so any externally appended event repaints the live board as a diff
-  overlay within one poll tick.
+- `serve` re-reads the log from disk on **every** request, so an externally appended event is
+  visible on the *next* request — the user presses **Reload** and sees it as a diff overlay.
+  (The client has no refresh loop: no poll, no SSE. `F-collab-sse` is the push path that would
+  make it land without the keystroke.)
 - `POST /comment` already provides everything a tool would: server-side id minting (under the
   appends mutex), the non-blank-label guard, the off-grammar lane-type rejection, and atomic
   multi-line appends. Regions and phase-splits are covered too.

@@ -137,20 +137,29 @@ re-buries the stuck modeller; three keeps momentum. Say the rest exist and offer
 and after an approved apply, re-run discovery on the changed board rather than pre-listing
 everything up front.
 
-**You cannot propose edges** (the arrows between elements). The write contract has no
-edge-adding action — an `add` always lands as a **disconnected node**. So when the gap is a
-*connection* ("no policy reacts to `PaymentTaken`"), place the new element at the `col`
-adjacent to its cause and **describe the intended arrow in prose** for the user to draw; never
-imply your `add` wired anything, and never invent an edge `kind` (it will 400).
+**Edges are proposable, but never in the same breath as the node.** `connect` / `disconnect`
+are real actions (see the write contract), so when the gap is a *connection* — "no policy
+reacts to `PaymentTaken`" — you can propose the arrow. Two constraints:
+
+- an `add` always lands as a **disconnected node** (the server mints its id and nothing else),
+  so wiring a *new* element is **two** proposals: the `add`, then — once the user has approved
+  it and you have read the minted id back from the log or the board — a `connect`;
+- `connect` / `disconnect` need **two ids you actually read**, and both must exist. A self-loop
+  or an unknown endpoint is rejected, and the edge is **directed**: `src` is the cause.
+
+When the missing piece is only the arrow between two elements that both already exist, that is
+the cheapest proposal on the board — one `connect`, no new vocabulary added to the user's model.
 
 Give each proposal a stable tag (`(1)`, `(2)`, `(3)`) so the user can approve by number.
 
 ### 3. Apply — one at a time, on approval only
 
 For each proposal the user explicitly approves: send **one** `POST /comment`, check the
-response, and report the outcome plainly (the polling board repaints within one tick, so the
-user sees it land as a diff overlay). Then continue to the next. If they approve nothing,
-that is a complete and successful session — the narrative alone did the job.
+response, and report the outcome plainly — **and tell them to press Reload**, because the board
+does not refresh on its own (there is no poll and no push; the append is live server-side, but
+the open page only re-fetches on Reload). It then lands as a diff overlay. Continue to the next.
+If they approve nothing, that is a complete and successful session — the narrative alone did
+the job.
 
 ## Write contract — `POST http://127.0.0.1:<port>/comment`
 
@@ -167,6 +176,8 @@ off-grammar type is a 400. Labels must be non-blank.
 | `resolve` | `elemId`, `text` (resolution) | — | `HotspotResolved` |
 | `drop` | `elemId` | — | `ElementRemoved` |
 | *(anything else with an `elemId`)* | `elemId`, `text` | — | `ElementAnnotated` (advisory note) |
+| `connect` | `src`, `dst` (distinct, both existing) | — | `EdgeAdded` — the directed arrow `src → dst` |
+| `disconnect` | `src`, `dst` | — | `EdgeRemoved` |
 | `region-add` | `text`, `fromCol`, `toCol` (`fromCol < toCol`) | — | `PhaseAdded` — **server mints the id** |
 | `phase-split` | `regionId`, `atCol` (strictly inside), `text` (right-half label) | — | `PhaseSplit` — **server mints the right half's id** |
 | `frontier-move` | `regionId`, `edge` (`"start"`\|`"end"`), `col` | — | `FrontierMoved` (the live resize path) |
@@ -200,9 +211,14 @@ curl -s -X POST http://127.0.0.1:8753/comment \
 curl -s -X POST http://127.0.0.1:8753/comment \
   -H 'Content-Type: application/json' \
   -d '{"kind":"resolve","elemId":"H1","text":"Handled by the Reservation policy"}'
+
+# Wire two elements that both already exist (both ids read from the log; src is the cause):
+curl -s -X POST http://127.0.0.1:8753/comment \
+  -H 'Content-Type: application/json' \
+  -d '{"kind":"connect","src":"E2","dst":"P1"}'
 ```
 
-## Edges
+## Edge cases
 
 - **Empty or genesis-only log** → skip the reverse narrative (there is no story yet) and run
   discovery as onboarding: *"an event storm usually starts with a domain event — what happens

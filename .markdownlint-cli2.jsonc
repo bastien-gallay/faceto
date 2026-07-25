@@ -8,5 +8,13 @@
     "MD024": { "siblings_only": true }
   },
   // .impeccable/critique/ holds generated design-review snapshots, not authored docs.
-  "ignores": ["target/**", "node_modules/**", ".impeccable/**"]
+  // docs/book/ is the mdBook output; docs/src/SUMMARY.md is mdBook's table of contents, whose
+  // part headers are H1s by specification (MD025) — it is structure, not prose.
+  "ignores": [
+    "target/**",
+    "node_modules/**",
+    ".impeccable/**",
+    "docs/book/**",
+    "docs/src/SUMMARY.md"
+  ]
 }

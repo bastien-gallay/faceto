@@ -43,7 +43,7 @@ fn read_line_capped<R: BufRead>(
 /// Serve one HTTP connection end to end: read the (capped) request line and headers, then route
 /// `(method, path)` to a response. One thread runs this per accepted connection. The routes are the
 /// board page (`GET /`), the re-rendered SVG (`GET /board.svg`, with optional `?base=`/`?collapse=`
-/// view params), the `/model-version` poll, the `/comments` sidebar, `/health`, and the
+/// view params), the `/model-version` check, the `/comments` sidebar, `/health`, and the
 /// `POST /comment` append. Over-long request lines / header floods short-circuit to `431` before
 /// routing; every other failure maps to a `4xx`/`5xx` from the route handler.
 pub(crate) fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
@@ -131,10 +131,10 @@ pub(crate) fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
 /// Apply a launch-time `--base` overlay (F-variants): when a fixed baseline board is set, return the
 /// current board diffed against it (added/removed/moved/changed tagged, ready for the SVG overlay);
 /// with no baseline it is the identity — the plain current board. Returns a `Cow` so the common
-/// no-baseline path (every page load / poll of an ordinary live board) *borrows* `current` instead
+/// no-baseline path (every page load / refresh of an ordinary live board) *borrows* `current` instead
 /// of deep-cloning a whole `Model`. Pure `(&baseline, &current)`, so it unit-tests without a running
 /// server. The single seam both `route_page` and `route_board_svg` funnel through, so the first paint
-/// and every poll agree.
+/// and every later fetch agree.
 fn overlay<'a>(
     baseline: &'a Option<(model::Model, (String, String))>,
     current: &'a model::Model,
@@ -206,7 +206,8 @@ fn route_board_svg(out: &mut TcpStream, ctx: &Ctx, query: &str) -> std::io::Resu
     }
 }
 
-/// `GET /model-version` — the log's content hash, the value the ~1 Hz client poll reads (replay-free).
+/// `GET /model-version` — the log's content hash, the value the client reads to tell a stale board
+/// from a fresh one (replay-free); fetched on load and on Reload, not on a timer.
 fn route_model_version(out: &mut TcpStream, ctx: &Ctx) -> std::io::Result<()> {
     match ctx.version() {
         Ok(version) => {
