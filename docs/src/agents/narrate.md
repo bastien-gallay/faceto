@@ -71,7 +71,7 @@ glass. You are the author of your model; it proposes, you decide.
 
 ## When it applies something
 
-The board is polling, so an approved proposal appears within a tick — as a **diff overlay**, ringed
-green. You see what the agent did in exactly the same vocabulary you see your own edits in. If it
-was wrong, remove it; the log keeps the record of both the proposal and your rejection, which is
-more than most review surfaces can say.
+Press **Reload** and the approved proposal appears as a **diff overlay**, ringed green — the board
+does not refresh on its own, so you choose when to look. You see what the agent did in exactly the
+same vocabulary you see your own edits in. If it was wrong, remove it; the log keeps the record of
+both the proposal and your rejection, which is more than most review surfaces can say.

@@ -23,12 +23,14 @@ faceto render orders.model.json
 Two files, named after the [board name](../cli.md#the-board-name):
 
 - `orders.svg` — the board as a standalone vector image;
-- `orders.html` — the same board wrapped in the interactive page (pan, focus, region folding).
+- `orders.html` — the same board wrapped in the interactive page (pan, focus, the shortcut sheet).
   It is fully self-contained: no server, no external assets, no network. Mail it, commit it,
   publish it.
 
-The HTML from `render` is a *reading* surface. Editing gestures need a server to append to —
-use [`serve`](./serve.md).
+The HTML from `render` is a *reading* surface. Anything that needs the server does nothing here:
+region folding and posting a note both go through an HTTP route that is not there, and an edit
+gesture changes what you see without being recorded anywhere. To edit a board, use
+[`serve`](./serve.md).
 
 ## `--base`: a cross-file diff
 

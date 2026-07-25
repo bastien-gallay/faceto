@@ -43,7 +43,7 @@ You can mail it to someone.
 
 ```bash
 faceto serve orders.model.json
-# seeded 6 events from orders.model.json → orders.event-log.jsonl
+# seeded 10 events from orders.model.json → orders.event-log.jsonl
 # serving http://127.0.0.1:8753
 ```
 

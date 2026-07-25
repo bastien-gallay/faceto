@@ -124,7 +124,8 @@ the log). Seven modules, each one stage (`json`/`model`/`lint` are single files;
   script). `render_html` then
   does a two-stage fill: `__CONFIG__` into the script first (single-pass fill never re-scans an
   inserted value), then `__STYLE__` / `__SCRIPT__` / `__SVG__` / `__TITLE__` into the shell. The
-  client polls `/model-version`, swaps in diff/plain SVGs, and posts comments/structural ops (falling
+  client fetches `/model-version` on load and on **Reload** (there is no polling loop and no SSE —
+  `F-collab-sse` is the un-shipped push path), swaps in diff/plain SVGs, and posts comments/structural ops (falling
   back to `localStorage` when offline — offline structural ops are local-only, not resynced).
   Pure helpers are checked by `tests/js/board-logic.test.mjs` (plain node, no deps).
 

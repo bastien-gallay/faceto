@@ -41,7 +41,7 @@ the same event. There is no state in which a column is orphaned or contested.
 | drag a frontier | the same, with the mouse | `FrontierMoved` |
 | hover a band, click the `+` | carve one region into two | `PhaseSplit` |
 | the `+` on a board with no regions | create the first one | `PhaseAdded` |
-| <kbd>Delete</kbd> on a tab | merge into the neighbour | `PhaseRemoved` |
+| <kbd>Delete</kbd> on a tab, twice | merge into the neighbour | `PhaseRemoved` |
 
 A frontier is a **boundary between two regions**, drawn once and grabbable — not two edges that
 happen to touch. Dragging it is one gesture with one meaning: this stage ends here, and the next

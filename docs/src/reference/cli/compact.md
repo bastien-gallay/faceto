@@ -15,8 +15,7 @@ no-op.
 
 ```bash
 faceto compact orders.event-log.jsonl
-# compacted 412 events → 15 (1 marker + 14 genesis) in orders.event-log.jsonl
-#   · prior log saved to orders.event-log.jsonl.bak
+# compacted 412 events → 15 (1 marker + 14 genesis) in orders.event-log.jsonl · prior log saved to orders.event-log.jsonl.bak
 ```
 
 ## What it keeps and what it drops

@@ -26,7 +26,7 @@ visual diff before it counts. That loop is why the model is typed in the first p
 
 **It runs offline, forever.** The shipped binary is pure Rust standard library: no runtime
 crates, no network calls, no telemetry. JSON parsing, the HTTP server and the content hashing are
-all hand-written. It is a few hundred kilobytes that will still run in ten years.
+all hand-written. It is under a megabyte, and it will still run in ten years.
 
 ## Who it's for
 

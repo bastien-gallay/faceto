@@ -12,7 +12,9 @@ faceto help | version
 
 ## SOURCE
 
-Every verb takes one positional `SOURCE`, defaulting to `./model.json`. It is either:
+Every verb takes one positional `SOURCE`, defaulting to `./model.json` — except
+[`compact`](./cli/compact.md), which operates on a log and defaults to `./model.event-log.jsonl`
+(the log a default `genesis` would have produced). A `SOURCE` is either:
 
 - a **model file** — any `.json` that is not a log, e.g. `orders.model.json`; or
 - an **event log** — `.jsonl` or `.log`, e.g. `orders.event-log.jsonl`.
@@ -41,9 +43,13 @@ A model and *its* log resolve to the **same** name, so `render` of either writes
 | --- | --- |
 | `0` | success — including `lint` findings, which are warnings, never a gate |
 | `1` | an operational error: unreadable source, malformed JSON, a refused write |
-| `2` | a usage error: unknown command, unknown flag, a flag missing its value |
+| `2` | a usage error: unknown command, unknown flag, `--base` or `--format` missing its value |
 
 An unknown flag always fails loudly rather than being misread as a file path.
+
+One flag is laxer than the rest: `serve -p` with a missing or unparseable value **silently keeps
+the default port 8753** instead of failing. Check the address the server prints rather than
+assuming your `-p` was honoured.
 
 ## Warnings
 

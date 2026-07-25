@@ -56,7 +56,7 @@ partition**: there are no holes and no overlaps, so resizing one re-borders its 
 | <kbd>Shift</kbd> + <kbd>←</kbd> <kbd>→</kbd> | resize — the neighbour re-borders atomically |
 | drag a frontier | the same, with the mouse; the outermost frontiers resize the whole board |
 | hover a band | split it in two |
-| <kbd>Delete</kbd> on a tab | merge into the neighbour — no columns are stranded |
+| <kbd>Delete</kbd> on a tab | merge into the neighbour — press again to confirm; no columns are stranded |
 | <kbd>z</kbd> or the ▸/▾ on the tab | fold the region to a thin band |
 
 Folding is a **reading lens**, private to you: it is stored in your browser, never in the model or

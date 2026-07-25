@@ -43,7 +43,7 @@ An excerpt, from `examples/sample.model.json`:
 
 ## Open questions
 
-- ⬦ **TopicCreated** `H1` — open hotspot
+- ⬦ **TopicCreated (item added to a non-existent topic)** `H1` — open hotspot
 ```
 
 Note what survives that a diagram export drops: the lanes (as the grouping of the vocabulary), the

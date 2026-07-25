@@ -1,13 +1,20 @@
 name: Deploy docs
 
-# The book is built and link-checked on every PR by CI's `docs` job; this workflow only
-# publishes what `main` already proved buildable.
+# The book is built on every PR by CI's `docs` job (which validates SUMMARY.md against the
+# files on disk — it does not check in-page links); this workflow publishes what `main`
+# already proved buildable.
+#
+# `src/**` and `Cargo.toml` are triggers because the tour embeds a board rendered by this
+# build of faceto: a change to the renderer must republish, or the published sample goes
+# stale against the code it claims to depict.
 on:
   push:
     branches: [main]
     paths:
       - 'docs/**'
       - 'examples/**'
+      - 'src/**'
+      - 'Cargo.toml'
       - '.github/workflows/docs-deploy.yml'
   workflow_dispatch:
 

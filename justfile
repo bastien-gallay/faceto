@@ -11,8 +11,9 @@ export RUSTFLAGS := "-D warnings"
 default:
     @just --list
 
-# Run every CI gate in order (format → lint → test → docs → firewall → size → workflows → justfile).
-ci: fmt clippy test test-js md zero-deps binary-size actionlint lint-justfile
+# Run every CI gate in order (format → lint → test → markdown → book → firewall → size → workflows
+# → justfile). `docs` needs mdbook installed, like `md` needs markdownlint-cli2.
+ci: fmt clippy test test-js md docs zero-deps binary-size actionlint lint-justfile
     @echo "✓ all local CI gates passed"
 
 # Formatting is law: cargo fmt --all --check.

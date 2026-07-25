@@ -42,7 +42,7 @@ therefore never be recorded somewhere that later gets overwritten.
 | `GET /board.svg` | the board, re-rendered from the log on every request |
 | `GET /board.svg?base=<version>` | the same board as a diff overlay against a cached version |
 | `GET /board.svg?collapse=<id,id>` | with those regions folded to bands |
-| `GET /model-version` | the current content hash — what the page polls to notice a change |
+| `GET /model-version` | the current content hash — how the page tells a stale board from a fresh one |
 | `GET /comments` | the comment sidecar, merged with the live lint findings |
 | `GET /health` | liveness |
 | `POST /comment` | append an edit or a note |
