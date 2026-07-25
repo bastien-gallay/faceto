@@ -11,6 +11,7 @@
 
 [![CI](https://github.com/bastien-gallay/faceto/actions/workflows/ci.yml/badge.svg)](https://github.com/bastien-gallay/faceto/actions/workflows/ci.yml)
 [![runtime deps: 0](https://img.shields.io/badge/runtime%20deps-0-1A6FAE)](#why-zero-dependencies)
+[![docs](https://img.shields.io/badge/docs-bastien--gallay.github.io%2Ffaceto-1A6FAE)](https://bastien-gallay.github.io/faceto/)
 
 **A simple typed file → a visual workshop board you think through with an LLM.**
 
@@ -25,6 +26,10 @@ the direction. Pure Rust standard library — **zero dependencies, offline, one 
 
 The name reads two ways, both true: **face-to**(-face — the thing you discuss *with* the model)
 and **facet-o** (many facets cut from one typed source).
+
+**📖 [Full documentation](https://bastien-gallay.github.io/faceto/)** — the board guide, the CLI
+reference, and how to wire a board into a coding agent. This README is the tour; the book is the
+manual.
 
 *Jump to* — [install](#install) · [the model file](#the-model-file) · [event log](#the-event-log-is-the-source-of-truth) · [the eight lanes](#the-eight-lanes) · [why zero deps](#why-zero-dependencies)
 
