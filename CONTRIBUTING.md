@@ -23,8 +23,14 @@ Run `just ci` before pushing — it runs every CI gate in order (see
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
-npx markdownlint-cli2 "**/*.md"   # docs; matches the CI markdown job
+npx markdownlint-cli2 "**/*.md"   # prose; matches the CI markdown job
+just docs                         # builds the manual; matches the CI `docs book` job
 ```
+
+The manual lives in [`docs/src/`](docs/src/) and is published to
+<https://bastien-gallay.github.io/faceto/>. A change a user can notice belongs there in the same
+PR — see [`AGENTS.md`](AGENTS.md) § *Documentation is part of the feature* for which page each
+kind of change lands on. `just docs-serve` previews it locally with live reload.
 
 The toolchain is pinned in `rust-toolchain.toml` (currently 1.95.0); `rustup`
 picks it up automatically. Keep that file, `Cargo.toml`'s `rust-version`, and the
