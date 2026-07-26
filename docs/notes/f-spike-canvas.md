@@ -176,13 +176,18 @@ portable-vs-format question — they are the Scene IR question.
 
 ## What this changes for the queued work
 
-- **F-scene-ir** — confirmed, and its strongest justification moved. It is not primarily about
+- **#121 F-format-tag** — **promote it above everything else in the family**. Constraint 1 makes it
+  a correctness requirement ahead of any second format, not a bookkeeping step alongside one.
+- **#116 F-scene-ir** — confirmed, and its strongest justification moved. It is not primarily about
   rendering N formats (the canvas renderer was easy to write from scratch); it is about *deleting*
   the Rust↔JS geometry mirror so the client does not fork.
-- **F-format-tag** — **promote it**. Constraint 1 makes it a correctness requirement, ahead of any
-  second format, not a bookkeeping step alongside one.
-- **F-formats-move** — the boundary the note drew is right, with the journal/vocabulary split
-  (constraint 3) as the first concrete move and constraint 6 as its prerequisite.
+- **#119 F-board-vs-diff** — constraint 6 promotes this too: it pays for itself with one format.
+- **#117 F-lane-enum** — constraint 7 is direct evidence, not analogy: format #2 was written
+  enum-first and produced no `_ =>` fallback anywhere.
+- **#122 F-formats-move** — the boundary the note drew is right, with the journal/vocabulary split
+  (constraint 3) as the first concrete move and #119 as its prerequisite.
+- **#128 F-client-shell-split** — retitle the intent: plan to *delete* the geometry modules, not to
+  split them per format.
 - **#124 (DDD Context Map)** — the canvas exercised *no* edges at all, so it says nothing about the
   `Edge` seam. That remains entirely #124's job, and the two spikes are genuinely complementary:
   this one killed the coordinates, that one will stress the relationships.
