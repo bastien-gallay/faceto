@@ -138,9 +138,13 @@ loop no competitor offers:
 touches prose, so a narrative paragraph naming issue numbers drifts silently. Re-read this list
 whenever a crowned item closes.
 
-Running alongside, off the leverage map because they are probes: **`F-spike-canvas` #114** and
-**`F-spike-wardley` #115** (🎲 · M each, timeboxed, throwaway). They compete for calendar time with
-the crowned three, not for scope — their output is a constraints note.
+Running alongside, off the leverage map because they are probes: ~~**`F-spike-canvas` #114**~~ —
+🔍 **reported 2026-07-26** ([`docs/notes/f-spike-canvas.md`](docs/notes/f-spike-canvas.md)) — and
+**`F-spike-wardley` #115** (🎲 · M, timeboxed, throwaway). They compete for calendar time with the
+crowned three, not for scope — their output is a constraints note. The canvas one **re-ordered the
+family**: `F-format-tag` #121 is a correctness precondition (a foreign-format log replays as an
+empty board, silently), and `F-scene-ir` #116 now waits on #115, the only probe left that can
+constrain the Scene primitives.
 
 **Free experiments to ride while the log / events are open** (H3 seeds, near-zero cost): point the
 shipped **faceto-narrate** at a *sibling* log so a variant becomes a rejectable **proposal** — that

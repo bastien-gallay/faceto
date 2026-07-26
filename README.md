@@ -230,7 +230,9 @@ a sibling log as a diff) and the **context pack** (`export --format context`, ab
 of that loop is `extract` — carve a semantic sub-board out of a big one.
 
 In flight next: the **kernel/format split** that lets a second board format exist at all — a Scene
-IR, a format tag on the log, and event storming moved behind a thin seam. Two throwaway spikes (a
-bounded context canvas, a Wardley map) run alongside, to find the seam rather than guess it; only
-the move of event storming itself waits on what they report. Also planned: a `model.json`
+IR, a format tag on the log, and event storming moved behind a thin seam. Two throwaway spikes run
+alongside to find the seam rather than guess it: the **bounded context canvas has reported**
+(2026-07-26) — no coordinate concept leaked into the kernel, and the format tag turned out to be a
+correctness precondition rather than a later step — and a **Wardley map** is still to come. Also
+planned: a `model.json`
 **export** (project the log back to a source file). Full narrative in [ROADMAP.md](ROADMAP.md).
