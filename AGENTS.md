@@ -79,10 +79,10 @@ lockstep. For board behaviour not covered by tests, render `examples/sample.mode
 
 ## Architecture
 
-The pipeline is `event-log.jsonl → replay → Model → SVG → HTML`; the `model.json → Model` path is
-the genesis/bootstrap input and a read-only `render` / `lint` source (serving always goes through
-the log). Seven modules, each one stage (`json`/`model`/`lint` are single files; `events`/`render`/
-`serve` are directories with a `mod.rs` plus one file per concern):
+The pipeline is `event-log.jsonl → replay → Model → Scene → SVG → HTML`; the `model.json → Model`
+path is the genesis/bootstrap input and a read-only `render` / `lint` source (serving always goes
+through the log). Eight modules, each one stage (`json`/`model`/`lint`/`scene` are single files;
+`events`/`render`/`serve` are directories with a `mod.rs` plus one file per concern):
 
 - **`src/json.rs`** — minimal JSON parser/serializer (`parse`, `to_string`, the `Json` enum with
   `get`/`as_str`/`as_f64`/`as_bool`/`as_array`). Everything else builds on this.
@@ -103,9 +103,16 @@ the log). Seven modules, each one stage (`json`/`model`/`lint` are single files;
   the stable `id` (the comment-sidecar join key). A real edge connects two distinct existing
   elements. Findings surface in `serve`'s `/comments` sidebar as `kind:"lint"` entries, computed on
   read and suppressed once the element is `resolved` (see `src/serve/`).
-- **`src/render/`** — pure layout + SVG generation (`render_svg`) and HTML wrapping
-  (`render_html`). Holds the lane order (`LANES`), the colour grammar (`colour`), geometry
-  constants (`COL_W`, `LANE_H`, etc.), label wrapping, the serif nameplate, and diff styling.
+- **`src/scene.rs`** — the Scene IR (F-scene-ir). Geometric primitives (`Rect`/`Line`/`Text`/
+  `Circle`/`Path` + a **nesting** `Group`), a `Scene`, and the single `render_scene` serializer.
+  **Geometric, never semantic**: a sticky, a lane, a region are event-storming words that stay on
+  the `render` side of the seam. Numbers stay numbers (`Val::Num`), so a scene can be read back —
+  which is what the render tests assert against instead of scraping serialized SVG.
+- **`src/render/`** — pure layout + the board's visual language (`render_svg` builds a `Scene`;
+  `board_scene` is the `(Model, View) -> Scene` builder) and HTML wrapping (`render_html`). Holds
+  the lane order (`LANES`), the colour grammar (`colour`), geometry constants (`COL_W`, `LANE_H`,
+  etc.), label wrapping, the serif nameplate, and diff styling. It no longer writes SVG text —
+  `scene` does, once, for every format.
 - **`src/serve/`** — std-only HTTP server, **event-log-only** (F-auto-genesis killed legacy
   mode: `main` resolves any `model.json` to its sibling `<name>.event-log.jsonl` via `serve_log_path`
   before calling `serve`, auto-running genesis if no log exists yet, so the server only ever

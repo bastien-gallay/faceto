@@ -3,6 +3,7 @@ use super::geometry::*;
 use super::style::*;
 use super::text::*;
 use crate::model::{is_pivotal, Element, Model};
+use crate::scene::{render_scene, Scene, Shape};
 use std::collections::{HashMap, HashSet};
 
 pub(crate) fn diff_tooltip(e: &Element, meta: &(String, String)) -> String {
@@ -56,7 +57,15 @@ impl View {
     }
 }
 
+/// Render a board to SVG — the event-storming scene, through the kernel's one serializer.
 pub fn render_svg(model: &Model, view: &View) -> String {
+    render_scene(&board_scene(model, view))
+}
+
+/// The event-storming scene builder: `(Model, View) -> Scene`. Every ES-specific word — lane, col,
+/// sticky, region, frontier, pivotal — lives on this side of the seam; what crosses it is pure
+/// geometry the kernel serializes without knowing what a board is.
+pub(crate) fn board_scene(model: &Model, view: &View) -> Scene {
     let mut elements = model.elements.clone();
     // `type` selects the lane; an element whose type isn't one of the 8 lanes has no lane to
     // occupy. Drop it from this projection (its edges are then skipped by the `idx_of` guard
@@ -211,11 +220,13 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         })
         .collect();
 
-    let width = (board_right + 40.0) as i64;
-    let height = (lanes_bottom + 60.0) as i64;
+    // Board size rounds down to whole pixels — the SVG viewBox has always been integral, and the
+    // legend and lane rules are laid out against it.
+    let width = (board_right + 40.0).trunc();
+    let height = (lanes_bottom + 60.0).trunc();
 
     let diff_meta = model.diff_meta.clone();
-    let mut p: Vec<String> = Vec::new();
+    let mut p: Vec<Shape> = Vec::new();
     draw_header(&mut p, model, width, height, &diff_meta, &elements);
     // Regions (a.k.a. phases) — a region is a *thin labelled outline*, never a filled block
     // (DESIGN.md calm-instrument register; anti-reference: Miro maximalism). It reads as an open
@@ -253,15 +264,12 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         if is_hidden {
             continue;
         }
-        p.push(format!(
-            "<rect class=\"region-rail\" data-col=\"{}\" x=\"{:.1}\" y=\"{}\" width=\"{:.1}\" \
-             height=\"{}\" fill=\"transparent\"/>",
-            min_col + idx as i64,
-            col_left(idx),
-            band_top,
-            COL_W,
-            band_bot - band_top
-        ));
+        p.push(
+            Shape::rect(col_left(idx), band_top, COL_W, band_bot - band_top)
+                .with("class", "region-rail")
+                .with("data-col", min_col + idx as i64)
+                .with("fill", "transparent"),
+        );
     }
 
     for ph in &model.phases {
@@ -295,11 +303,7 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         let diff_col = dk.map(diff_colour); // computed once; each use picks its own bench fallback
         let stroke = diff_col.unwrap_or("#cfcfda");
         let top_stroke = diff_col.unwrap_or("#e0e0e6");
-        let dash = if dk.is_some() {
-            " stroke-dasharray=\"4 3\""
-        } else {
-            ""
-        };
+        let dash = dk.map(|_| "4 3");
 
         // One group per region carries its identity + *clamped* bounds (the client reads
         // `data-from-col`/`data-to-col` to snap a drag to a rail column without inverse pixel math;
@@ -307,31 +311,16 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         // carries the *unclamped* `data-real-to`: the keyboard resize (which nudges the true
         // `to_col`, not the visible edge) must not read the clamped value or a "grow" would truncate
         // a region whose stored extent runs past the last element column.
-        p.push(format!(
-            "<g class=\"region{}\" data-region=\"{}\" data-from-col=\"{}\" data-to-col=\"{}\" \
-             data-real-to=\"{}\">",
-            if removed { " removed" } else { "" },
-            esc(&ph.id),
-            clamped_from,
-            clamped_to,
-            ph.to_col
-        ));
-        if removed {
-            p.push("<g opacity=\"0.45\">".to_string());
-        }
-
         // Tonal wash (the lone sanctioned region fill, #000 @ 0.02) + the open "⊓" outline.
-        p.push(format!(
-            "<rect x=\"{:.1}\" y=\"{}\" width=\"{:.1}\" height=\"{}\" fill=\"#000\" opacity=\"0.02\"/>",
-            x,
-            band_top,
-            w,
-            band_bot - band_top
-        ));
-        p.push(format!(
-            "<line x1=\"{:.1}\" y1=\"{}\" x2=\"{:.1}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1\"{}/>",
-            x, band_top, right, band_top, top_stroke, dash
-        ));
+        let mut band: Vec<Shape> = vec![
+            Shape::rect(x, band_top, w, band_bot - band_top)
+                .with("fill", "#000")
+                .with("opacity", 0.02),
+            Shape::line(x, band_top, right, band_top)
+                .with("stroke", top_stroke)
+                .with("stroke-width", 1.0)
+                .maybe("stroke-dasharray", dash),
+        ];
         // The band's vertical sides are the partition's frontiers, drawn once (deduped) by the
         // frontier pass after this loop — a boundary is shared by two neighbours, so drawing it
         // per-region is exactly the doubled/overlapping-edge bug F-region-frontiers kills. A
@@ -373,9 +362,35 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         let tab_h = REGION_TAB_H;
         let tab_w = tri_w + label.chars().count() as f64 * REGION_TAB_CHAR_W + REGION_TAB_PAD;
         let tab_y = band_top - tab_h + 1.0;
-        if !removed {
+        let tab_rect = Shape::rect(x, tab_y, tab_w, tab_h)
+            .with("rx", 6.0)
+            .with("fill", "#ffffff")
+            .with("stroke", stroke)
+            .with("stroke-width", 1.0)
+            .maybe("stroke-dasharray", dash);
+        let tab_label = Shape::text(x + 7.0 + tri_w, tab_y + 13.5, label)
+            .with("font-size", 11.0)
+            .with("font-weight", 600i64)
+            .with("fill", diff_col.unwrap_or(AXIS_LABEL));
+        if removed {
+            // A removed ghost has no tab *group*: nothing about it is operable, so it gets no hit
+            // target, no focus stop, and no disclosure triangle — just the outline of where it was.
+            band.push(tab_rect);
+            band.push(tab_label);
+        } else {
+            // The triangle sits in the tab's left gutter; `title` names the gesture for hover/a11y.
+            let toggle = Shape::text(x + 7.0, tab_y + 13.0, disclosure)
+                .with("class", "region-collapse")
+                .with("data-region", ph.id.as_str())
+                .with("font-size", 10.0)
+                .with("fill", AXIS_LABEL)
+                .with("style", "cursor:pointer")
+                .titled(format!(
+                    "{} region (z)",
+                    if collapsed { "expand" } else { "collapse" }
+                ));
             // `data-label` carries the *raw* stored label (no diff badge, no count) — the rename
-            // editor prefills from this, not the badge/count-prefixed display `label` below. The aria
+            // editor prefills from this, not the badge/count-prefixed display `label` above. The aria
             // state names the fold *and* the hidden count, so a screen-reader user hears what the
             // sighted `· N` chip shows (not just "collapsed").
             let aria_state = if collapsed {
@@ -383,44 +398,20 @@ pub fn render_svg(model: &Model, view: &View) -> String {
             } else {
                 String::new()
             };
-            p.push(format!(
-                "<g class=\"region-tab\" data-region=\"{}\" data-label=\"{}\" data-collapsed=\"{}\" \
-                 role=\"button\" tabindex=\"0\" aria-label=\"region {}, {}{}\" style=\"cursor:pointer\">",
-                esc(&ph.id),
-                esc(&ph.label),
-                collapsed,
-                esc(&ph.id),
-                esc(&ph.label),
-                aria_state,
-            ));
-        }
-        p.push(format!(
-            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"6\" \
-             fill=\"#ffffff\" stroke=\"{}\" stroke-width=\"1\"{}/>",
-            x, tab_y, tab_w, tab_h, stroke, dash
-        ));
-        if !removed {
-            // The triangle sits in the tab's left gutter; `title` names the gesture for hover/a11y.
-            p.push(format!(
-                "<text class=\"region-collapse\" data-region=\"{}\" x=\"{:.1}\" y=\"{:.1}\" \
-                 font-size=\"10\" fill=\"{}\" style=\"cursor:pointer\"><title>{} region (z)</title>{}</text>",
-                esc(&ph.id),
-                x + 7.0,
-                tab_y + 13.0,
-                AXIS_LABEL,
-                if collapsed { "expand" } else { "collapse" },
-                disclosure,
-            ));
-        }
-        p.push(format!(
-            "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"11\" font-weight=\"600\" fill=\"{}\">{}</text>",
-            x + 7.0 + tri_w,
-            tab_y + 13.5,
-            diff_col.unwrap_or(AXIS_LABEL),
-            esc(&label)
-        ));
-        if !removed {
-            p.push("</g>".to_string());
+            band.push(
+                Shape::group(vec![tab_rect, toggle, tab_label])
+                    .with("class", "region-tab")
+                    .with("data-region", ph.id.as_str())
+                    .with("data-label", ph.label.as_str())
+                    .with("data-collapsed", collapsed)
+                    .with("role", "button")
+                    .with("tabindex", 0i64)
+                    .with(
+                        "aria-label",
+                        format!("region {}, {}{}", ph.id, ph.label, aria_state),
+                    )
+                    .with("style", "cursor:pointer"),
+            );
         }
 
         // Note each edge that carries a pivotal event (an `event` sitting on this region's
@@ -434,10 +425,21 @@ pub fn render_svg(model: &Model, view: &View) -> String {
             }
         }
 
-        if removed {
-            p.push("</g>".to_string());
-        }
-        p.push("</g>".to_string());
+        // A ghosted region fades as one: the opacity rides an inner group rather than every child,
+        // which is the nesting a flat string list had to fake with a bare `<g opacity>` open/close.
+        let inner = if removed {
+            vec![Shape::group(band).with("opacity", 0.45)]
+        } else {
+            band
+        };
+        p.push(
+            Shape::group(inner)
+                .with("class", if removed { "region removed" } else { "region" })
+                .with("data-region", ph.id.as_str())
+                .with("data-from-col", clamped_from)
+                .with("data-to-col", clamped_to)
+                .with("data-real-to", ph.to_col),
+        );
     }
 
     // Frontier lines — the grabbable boundaries of the contiguous partition (F-region-frontiers).
@@ -481,21 +483,23 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         for (id, edge, bcol, fx) in frontiers {
             // Visible boundary (neutral instrument grey — a frontier is structural, shared by two
             // regions; diff emphasis stays on each region's top rule + tab, not the shared line).
-            p.push(format!(
-                "<line x1=\"{fx:.1}\" y1=\"{band_top}\" x2=\"{fx:.1}\" y2=\"{band_bot}\" \
-                 stroke=\"#cfcfda\" stroke-width=\"1.5\"/>"
-            ));
+            p.push(
+                Shape::line(fx, band_top, fx, band_bot)
+                    .with("stroke", "#cfcfda")
+                    .with("stroke-width", 1.5),
+            );
             // Wide transparent hit-line — the grab target (D5: the border, not a sticky), reusing
             // the proven pointer-capture drag. `data-col` lets the client detect "no change" and
             // resolve the post without inverse pixel math.
-            p.push(format!(
-                "<line class=\"frontier\" data-region=\"{}\" data-edge=\"{}\" data-col=\"{}\" \
-                 x1=\"{fx:.1}\" y1=\"{band_top}\" x2=\"{fx:.1}\" y2=\"{band_bot}\" \
-                 stroke=\"transparent\" stroke-width=\"8\"/>",
-                esc(id),
-                edge,
-                bcol
-            ));
+            p.push(
+                Shape::line(fx, band_top, fx, band_bot)
+                    .with("class", "frontier")
+                    .with("data-region", id)
+                    .with("data-edge", edge)
+                    .with("data-col", bcol)
+                    .with("stroke", "transparent")
+                    .with("stroke-width", 8.0),
+            );
         }
     }
 
@@ -505,12 +509,12 @@ pub fn render_svg(model: &Model, view: &View) -> String {
         pivot_node_x.sort_unstable();
         pivot_node_x.dedup();
         for kx in &pivot_node_x {
-            p.push(format!(
-                "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"4\" fill=\"{AXIS_LABEL}\" \
-                 stroke=\"#fbfbfd\" stroke-width=\"1.5\"/>",
-                *kx as f64 / 10.0,
-                cy
-            ));
+            p.push(
+                Shape::circle(*kx as f64 / 10.0, cy, 4.0)
+                    .with("fill", AXIS_LABEL)
+                    .with("stroke", "#fbfbfd")
+                    .with("stroke-width", 1.5),
+            );
         }
     }
 
@@ -518,54 +522,45 @@ pub fn render_svg(model: &Model, view: &View) -> String {
     draw_edges(&mut p, model, &elements, &idx_of, &centers, &hidden_el);
     draw_stickies(&mut p, &elements, &centers, &hidden_el, &diff_meta);
     draw_legend(&mut p, &present, height);
-    p.push("</svg>".to_string());
-    p.join(
-        "
-",
-    )
+
+    Scene {
+        width,
+        height,
+        shapes: p,
+    }
 }
 
-/// Board frame: SVG open, arrow marker, background, the serif nameplate, and the diff subtitle.
+/// Board frame: the background wash, the serif nameplate, and the diff subtitle. The `<svg>` root
+/// and the shared arrow marker now belong to `render_scene` — every format needs both.
 fn draw_header(
-    p: &mut Vec<String>,
+    p: &mut Vec<Shape>,
     model: &Model,
-    width: i64,
-    height: i64,
+    width: f64,
+    height: f64,
     diff_meta: &Option<(String, String)>,
     elements: &[Element],
 ) {
-    p.push(format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" \
-         viewBox=\"0 0 {w} {h}\" font-family=\"-apple-system,Segoe UI,Roboto,sans-serif\">",
-        w = width,
-        h = height
-    ));
-    // Arrow fill = context-stroke, so each arrowhead takes its own edge's colour.
-    p.push(
-        "<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" \
-         markerHeight=\"7\" orient=\"auto\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"context-stroke\"/>\
-         </marker></defs>"
-            .to_string(),
-    );
-    p.push(format!(
-        "<rect width=\"{}\" height=\"{}\" fill=\"#fbfbfd\"/>",
-        width, height
-    ));
+    p.push(Shape::rect(0.0, 0.0, width, height).with("fill", "#fbfbfd"));
     // The board title is the instrument's engraved nameplate: a refined system serif, the one
     // place a second font family appears (see DESIGN.md §3). Everything else stays the SVG sans.
-    p.push(format!(
-        "<text x=\"20\" y=\"34\" font-size=\"20\" font-weight=\"700\" fill=\"#222\" \
-         font-family=\"'Iowan Old Style','Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif\">{}</text>",
-        esc(&model.title)
-    ));
+    p.push(
+        Shape::text(20.0, 34.0, model.title.as_str())
+            .with("font-size", 20.0)
+            .with("font-weight", 700i64)
+            .with("fill", "#222")
+            .with(
+                "font-family",
+                "'Iowan Old Style','Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif",
+            ),
+    );
 
     // Diff subtitle: rev labels + per-status counts with dashed swatches.
     if let Some((a, b)) = diff_meta {
-        p.push(format!(
-            "<text x=\"20\" y=\"56\" font-size=\"12\" fill=\"#777\">{} \u{2192} {}</text>",
-            esc(a),
-            esc(b)
-        ));
+        p.push(
+            Shape::text(20.0, 56.0, format!("{a} \u{2192} {b}"))
+                .with("font-size", 12.0)
+                .with("fill", "#777"),
+        );
         let mut lx2 = 40.0 + 7.0 * ((a.chars().count() + b.chars().count() + 3) as f64);
         for k in ["added", "removed", "changed", "moved"] {
             let n = elements
@@ -575,18 +570,19 @@ fn draw_header(
             if n == 0 {
                 continue;
             }
-            p.push(format!(
-                "<rect x=\"{}\" y=\"46\" width=\"12\" height=\"12\" rx=\"3\" fill=\"none\" \
-                 stroke=\"{}\" stroke-width=\"2.5\" stroke-dasharray=\"3 2\"/>",
-                lx2,
-                diff_colour(k)
-            ));
-            p.push(format!(
-                "<text x=\"{}\" y=\"56\" font-size=\"12\" fill=\"#555\">{} {}</text>",
-                lx2 + 17.0,
-                n,
-                k
-            ));
+            p.push(
+                Shape::rect(lx2, 46.0, 12.0, 12.0)
+                    .with("rx", 3.0)
+                    .with("fill", "none")
+                    .with("stroke", diff_colour(k))
+                    .with("stroke-width", 2.5)
+                    .with("stroke-dasharray", "3 2"),
+            );
+            p.push(
+                Shape::text(lx2 + 17.0, 56.0, format!("{n} {k}"))
+                    .with("font-size", 12.0)
+                    .with("fill", "#555"),
+            );
             lx2 += 17.0 + 8.0 * ((k.len() + n.to_string().len() + 1) as f64) + 16.0;
         }
     }
@@ -594,21 +590,20 @@ fn draw_header(
 
 /// Faint lane rules and the centred lane labels (which expose the band interior geometry).
 fn draw_lanes(
-    p: &mut Vec<String>,
+    p: &mut Vec<Shape>,
     present: &[&str],
     lane_top: &HashMap<String, f64>,
     lane_h: &HashMap<String, f64>,
-    width: i64,
+    width: f64,
 ) {
     // Faint horizontal lane rules — graph-paper bench lines that delimit lanes now that a busy
     // lane can span several rows.
     for t in present.iter().skip(1) {
-        p.push(format!(
-            "<line x1=\"12\" y1=\"{:.1}\" x2=\"{}\" y2=\"{:.1}\" stroke=\"#e0e0e6\" opacity=\"0.55\"/>",
-            lane_top[*t],
-            width - 20,
-            lane_top[*t]
-        ));
+        p.push(
+            Shape::line(12.0, lane_top[*t], width - 20.0, lane_top[*t])
+                .with("stroke", "#e0e0e6")
+                .with("opacity", 0.55),
+        );
     }
 
     // Lane labels — centred on each lane's (possibly multi-row) band. `data-band-top`/
@@ -619,23 +614,22 @@ fn draw_lanes(
         let y = lane_top[*t] + lane_h[*t] / 2.0;
         // `class`/`data-lane` let the client hang the lane-title `+` (inline-add prepend) on each
         // label; the rendered text content is unchanged.
-        p.push(format!(
-            "<text class=\"lane-label\" data-lane=\"{}\" data-band-top=\"{:.1}\" \
-             data-band-h=\"{:.1}\" x=\"16\" y=\"{:.1}\" font-size=\"12\" \
-             font-weight=\"600\" fill=\"{}\">{}</text>",
-            esc(t),
-            lane_top[*t] + LANE_VPAD / 2.0,
-            lane_h[*t] - LANE_VPAD,
-            y + 4.0,
-            AXIS_LABEL,
-            esc(t)
-        ));
+        p.push(
+            Shape::text(16.0, y + 4.0, *t)
+                .with("class", "lane-label")
+                .with("data-lane", *t)
+                .with("data-band-top", lane_top[*t] + LANE_VPAD / 2.0)
+                .with("data-band-h", lane_h[*t] - LANE_VPAD)
+                .with("font-size", 12.0)
+                .with("font-weight", 600i64)
+                .with("fill", AXIS_LABEL),
+        );
     }
 }
 
 /// Flow / hotspot edges under the stickies (fanned at shared faces; folded endpoints skipped).
 fn draw_edges(
-    p: &mut Vec<String>,
+    p: &mut Vec<Shape>,
     model: &Model,
     elements: &[Element],
     idx_of: &HashMap<&str, usize>,
@@ -671,42 +665,38 @@ fn draw_edges(
         let d = edge_path(centers[si], centers[di], off_src[ei], off_dst[ei]);
         let is_hot = elements[si].kind == "hotspot" || elements[di].kind == "hotspot";
         let cls = if is_hot { "edge hot" } else { "edge" };
-        let attrs = format!(
-            "class=\"{}\" data-src=\"{}\" data-dst=\"{}\" fill=\"none\"",
-            cls,
-            esc(&edge.src),
-            esc(&edge.dst)
-        );
-        match edge.status.as_deref() {
-            Some("added") => p.push(format!(
-                "<path {a} d=\"{d}\" stroke=\"{c}\" stroke-width=\"1.8\" stroke-dasharray=\"6 4\" \
-                 marker-end=\"url(#arrow)\" opacity=\"0.9\"/>",
-                a = attrs,
-                d = d,
-                c = diff_colour("added")
-            )),
-            Some("removed") => p.push(format!(
-                "<path {a} d=\"{d}\" stroke=\"{c}\" stroke-width=\"1.6\" stroke-dasharray=\"3 4\" \
-                 marker-end=\"url(#arrow)\" opacity=\"0.5\"/>",
-                a = attrs,
-                d = d,
-                c = diff_colour("removed")
-            )),
-            _ if is_hot => p.push(format!(
-                "<path {a} d=\"{d}\" stroke=\"{c}\" stroke-width=\"1.4\" stroke-dasharray=\"0.1 6\" \
-                 stroke-linecap=\"round\" opacity=\"0.7\"/>",
-                a = attrs,
-                d = d,
-                c = EDGE_HOTSPOT
-            )),
-            _ => p.push(format!(
-                "<path {a} d=\"{d}\" stroke=\"{c}\" stroke-width=\"1.5\" marker-end=\"url(#arrow)\" \
-                 opacity=\"0.6\"/>",
-                a = attrs,
-                d = d,
-                c = EDGE_FLOW
-            )),
-        }
+        let wire = Shape::path(d)
+            .with("class", cls)
+            .with("data-src", edge.src.as_str())
+            .with("data-dst", edge.dst.as_str())
+            .with("fill", "none");
+        // Four connector registers, one shape each: a diff-added wire, a diff-removed one, a
+        // hotspot concern (dotted, arrow-less — a concern is not a flow), and the plain flow.
+        p.push(match edge.status.as_deref() {
+            Some("added") => wire
+                .with("stroke", diff_colour("added"))
+                .with("stroke-width", 1.8)
+                .with("stroke-dasharray", "6 4")
+                .with("marker-end", "url(#arrow)")
+                .with("opacity", 0.9),
+            Some("removed") => wire
+                .with("stroke", diff_colour("removed"))
+                .with("stroke-width", 1.6)
+                .with("stroke-dasharray", "3 4")
+                .with("marker-end", "url(#arrow)")
+                .with("opacity", 0.5),
+            _ if is_hot => wire
+                .with("stroke", EDGE_HOTSPOT)
+                .with("stroke-width", 1.4)
+                .with("stroke-dasharray", "0.1 6")
+                .with("stroke-linecap", "round")
+                .with("opacity", 0.7),
+            _ => wire
+                .with("stroke", EDGE_FLOW)
+                .with("stroke-width", 1.5)
+                .with("marker-end", "url(#arrow)")
+                .with("opacity", 0.6),
+        });
         // An authored connection label (F-element-links), set small and muted at the edge midpoint
         // so a wire reads as *what* it is, not just *that* it is — a white halo keeps it legible
         // where it crosses a line. Suppressed on a fading "removed" diff edge (its endpoints are
@@ -715,15 +705,17 @@ fn draw_edges(
             if edge.status.as_deref() != Some("removed") {
                 let (sx, sy) = centers[si];
                 let (dx, dy) = centers[di];
-                p.push(format!(
-                    "<text class=\"edge-label\" x=\"{:.1}\" y=\"{:.1}\" font-size=\"10\" \
-                     text-anchor=\"middle\" fill=\"{c}\" stroke=\"#fff\" stroke-width=\"3\" \
-                     paint-order=\"stroke\" opacity=\"0.85\">{}</text>",
-                    (sx + dx) / 2.0,
-                    (sy + dy) / 2.0 - 3.0,
-                    esc(lbl),
-                    c = AXIS_LABEL,
-                ));
+                p.push(
+                    Shape::text((sx + dx) / 2.0, (sy + dy) / 2.0 - 3.0, lbl)
+                        .with("class", "edge-label")
+                        .with("font-size", 10.0)
+                        .with("text-anchor", "middle")
+                        .with("fill", AXIS_LABEL)
+                        .with("stroke", "#fff")
+                        .with("stroke-width", 3.0)
+                        .with("paint-order", "stroke")
+                        .with("opacity", 0.85),
+                );
             }
         }
     }
@@ -731,7 +723,7 @@ fn draw_edges(
 
 /// The stickies themselves — each a focusable, id-keyed group the sidecar targets.
 fn draw_stickies(
-    p: &mut Vec<String>,
+    p: &mut Vec<Shape>,
     elements: &[Element],
     centers: &[(f64, f64)],
     hidden_el: &[bool],
@@ -762,11 +754,6 @@ fn draw_stickies(
         let shape_i: i64 = if is_hotspot { 2 } else { 8 };
         let status = e.diff.as_deref();
 
-        let g_op = if status == Some("removed") {
-            " opacity=\"0.4\""
-        } else {
-            ""
-        };
         let mut cls = format!("sticky {}", e.kind);
         if resolved {
             cls.push_str(" resolved");
@@ -790,187 +777,173 @@ fn draw_stickies(
         // group, recompute its edges) without a server round-trip — see template.html. A placed
         // element also exposes its normalised ordering key (`data-y`), so the client's grid
         // preview sorts a dragged box against its occupants exactly as this renderer will.
-        let data_y = match e.y {
-            Some(_) => format!(" data-y=\"{}\"", crate::model::y_key(e.y)),
-            None => String::new(),
-        };
+        let data_y = e.y.map(|_| crate::model::y_key(e.y));
         // Reference URLs (F-element-links) ride the sticky as a newline-joined `data-links` (a URL
         // has no raw newline) — the client splits it and renders clickable chips in the modal. They
         // are surfaced on click, never painted on the calm board. Absent when the element has none.
-        let data_links = if e.links.is_empty() {
-            String::new()
-        } else {
-            format!(" data-links=\"{}\"", esc(&e.links.join("\n")))
-        };
-        p.push(format!(
-            "<g id=\"{}\" class=\"{}\" role=\"button\" tabindex=\"0\" aria-label=\"{}\" \
-             data-hero=\"{}\" data-detail=\"{}\" data-kind=\"{}\" \
-             data-col=\"{}\" data-cx=\"{:.1}\" data-cy=\"{:.1}\"{}{} style=\"cursor:pointer\"{}>",
-            esc(&e.id),
-            cls,
-            esc(&aria),
-            esc(&hero),
-            esc(&detail),
-            esc(&e.kind),
-            e.col.unwrap(),
-            cx,
-            cy,
-            data_y,
-            data_links,
-            g_op
-        ));
-        if let (Some(_), Some(meta)) = (status, diff_meta) {
-            let tip = diff_tooltip(e, meta);
-            if !tip.is_empty() {
-                p.push(format!("<title>{}</title>", esc(&tip)));
-            }
-        }
+        let data_links = (!e.links.is_empty()).then(|| e.links.join("\n"));
+
+        let mut kids: Vec<Shape> = Vec::new();
         if matches!(status, Some("added") | Some("changed") | Some("moved")) {
             let s = status.unwrap();
-            p.push(format!(
-                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{}\" height=\"{}\" rx=\"{}\" fill=\"none\" \
-                 stroke=\"{}\" stroke-width=\"3\" stroke-dasharray=\"6 4\"/>",
-                x - 4.0,
-                y - 4.0,
-                STICKY_W + 8.0,
-                STICKY_H + 8.0,
-                shape_i + 3,
-                diff_colour(s)
-            ));
+            kids.push(
+                Shape::rect(x - 4.0, y - 4.0, STICKY_W + 8.0, STICKY_H + 8.0)
+                    .with("rx", (shape_i + 3) as f64)
+                    .with("fill", "none")
+                    .with("stroke", diff_colour(s))
+                    .with("stroke-width", 3.0)
+                    .with("stroke-dasharray", "6 4"),
+            );
         }
-        p.push(format!(
-            "<rect class=\"card\" x=\"{:.1}\" y=\"{:.1}\" width=\"{}\" height=\"{}\" rx=\"{}\" \
-             fill=\"{}\" stroke=\"#0003\"/>",
-            x, y, STICKY_W, STICKY_H, shape_i, fill
-        ));
-        p.push(format!(
-            "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"9\" font-weight=\"700\" fill=\"{}\" \
-             opacity=\"0.6\">{}</text>",
-            x + 8.0,
-            y + 15.0,
-            txt,
-            esc(&e.id)
-        ));
+        kids.push(
+            Shape::rect(x, y, STICKY_W, STICKY_H)
+                .with("class", "card")
+                .with("rx", shape_i as f64)
+                .with("fill", fill)
+                .with("stroke", "#0003"),
+        );
+        kids.push(
+            Shape::text(x + 8.0, y + 15.0, &e.id)
+                .with("font-size", 9.0)
+                .with("font-weight", 700i64)
+                .with("fill", txt)
+                .with("opacity", 0.6),
+        );
         let hlines = wrap(&hero, 20, if detail.is_empty() { 3 } else { 2 });
         let block_h = hlines.len() as f64 * 14.0 + if !detail.is_empty() { 12.0 } else { 0.0 };
         let start = cy - block_h / 2.0 + 11.0;
         for (i, ln) in hlines.iter().enumerate() {
-            p.push(format!(
-                "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12\" font-weight=\"600\" \
-                 text-anchor=\"middle\" fill=\"{}\">{}</text>",
-                cx,
-                start + i as f64 * 14.0,
-                txt,
-                esc(ln)
-            ));
+            kids.push(
+                Shape::text(cx, start + i as f64 * 14.0, ln.as_str())
+                    .with("font-size", 12.0)
+                    .with("font-weight", 600i64)
+                    .with("text-anchor", "middle")
+                    .with("fill", txt),
+            );
         }
         if !detail.is_empty() {
             let dtxt = wrap(&detail, 30, 1).into_iter().next().unwrap_or_default();
-            p.push(format!(
-                "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"9.5\" text-anchor=\"middle\" fill=\"{}\" \
-                 opacity=\"0.6\">{}</text>",
-                cx,
-                start + hlines.len() as f64 * 14.0,
-                txt,
-                esc(&dtxt)
-            ));
+            kids.push(
+                Shape::text(cx, start + hlines.len() as f64 * 14.0, dtxt)
+                    .with("font-size", 9.5)
+                    .with("text-anchor", "middle")
+                    .with("fill", txt)
+                    .with("opacity", 0.6),
+            );
         }
         if resolved {
-            p.push(format!(
-                "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"8\" fill=\"#6FAE7E\"/>",
-                x + STICKY_W - 3.0,
-                y + 3.0
-            ));
-            p.push(format!(
-                "<path d=\"M{:.1},{:.1} l2.4,2.6 l4,-5.2\" fill=\"none\" stroke=\"#fff\" \
-                 stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
-                x + STICKY_W - 7.0,
-                y + 3.0
-            ));
+            kids.push(Shape::circle(x + STICKY_W - 3.0, y + 3.0, 8.0).with("fill", "#6FAE7E"));
+            kids.push(
+                Shape::path(format!(
+                    "M{:.1},{:.1} l2.4,2.6 l4,-5.2",
+                    x + STICKY_W - 7.0,
+                    y + 3.0
+                ))
+                .with("fill", "none")
+                .with("stroke", "#fff")
+                .with("stroke-width", 1.6)
+                .with("stroke-linecap", "round")
+                .with("stroke-linejoin", "round"),
+            );
         }
         if status == Some("removed") {
-            p.push(format!(
-                "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"{}\" \
-                 stroke-width=\"2.5\"/>",
-                x + 6.0,
-                cy,
-                x + STICKY_W - 6.0,
-                cy,
-                diff_colour("removed")
-            ));
+            kids.push(
+                Shape::line(x + 6.0, cy, x + STICKY_W - 6.0, cy)
+                    .with("stroke", diff_colour("removed"))
+                    .with("stroke-width", 2.5),
+            );
         }
         if let Some(badge) = status.and_then(diff_badge) {
             let s = status.unwrap();
-            p.push(format!(
-                "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"9\" fill=\"{}\" stroke=\"#fff\" \
-                 stroke-width=\"1.5\"/>",
-                x + STICKY_W,
-                y,
-                diff_colour(s)
-            ));
-            p.push(format!(
-                "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12\" font-weight=\"700\" \
-                 text-anchor=\"middle\" fill=\"#fff\">{}</text>",
-                x + STICKY_W,
-                y + 4.0,
-                badge
-            ));
+            kids.push(
+                Shape::circle(x + STICKY_W, y, 9.0)
+                    .with("fill", diff_colour(s))
+                    .with("stroke", "#fff")
+                    .with("stroke-width", 1.5),
+            );
+            kids.push(
+                Shape::text(x + STICKY_W, y + 4.0, badge)
+                    .with("font-size", 12.0)
+                    .with("font-weight", 700i64)
+                    .with("text-anchor", "middle")
+                    .with("fill", "#fff"),
+            );
         }
-        p.push("</g>".to_string());
+
+        let tip = match (status, diff_meta) {
+            (Some(_), Some(meta)) => Some(diff_tooltip(e, meta)).filter(|t| !t.is_empty()),
+            _ => None,
+        };
+        let mut g = Shape::group(kids)
+            .with("id", e.id.as_str())
+            .with("class", cls)
+            .with("role", "button")
+            .with("tabindex", 0i64)
+            .with("aria-label", aria)
+            .with("data-hero", hero)
+            .with("data-detail", detail)
+            .with("data-kind", e.kind.as_str())
+            .with("data-col", e.col.unwrap())
+            .with("data-cx", cx)
+            .with("data-cy", cy)
+            .maybe("data-y", data_y)
+            .maybe("data-links", data_links)
+            .with("style", "cursor:pointer");
+        if status == Some("removed") {
+            g = g.with("opacity", 0.4);
+        }
+        if let Some(t) = tip {
+            g = g.titled(t);
+        }
+        p.push(g);
     }
 }
 
 /// Legend: the lane colour swatches and the connector key.
-fn draw_legend(p: &mut Vec<String>, present: &[&str], height: i64) {
+fn draw_legend(p: &mut Vec<Shape>, present: &[&str], height: f64) {
     // Legend: type swatches, then a connector key (flow vs hotspot-concern).
-    let ly = height - 28;
-    let mut lx: i64 = 20;
+    let ly = height - 28.0;
+    let mut lx = 20.0;
     for t in present.iter() {
-        p.push(format!(
-            "<rect x=\"{}\" y=\"{}\" width=\"14\" height=\"14\" rx=\"3\" fill=\"{}\" stroke=\"#0003\"/>",
-            lx,
-            ly,
-            colour(t)
-        ));
-        p.push(format!(
-            "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"#555\">{}</text>",
-            lx + 19,
-            ly + 11,
-            esc(t)
-        ));
-        lx += 26 + 7 * (t.len() as i64) + 14;
+        p.push(
+            Shape::rect(lx, ly, 14.0, 14.0)
+                .with("rx", 3.0)
+                .with("fill", colour(t))
+                .with("stroke", "#0003"),
+        );
+        p.push(
+            Shape::text(lx + 19.0, ly + 11.0, *t)
+                .with("font-size", 11.0)
+                .with("fill", "#555"),
+        );
+        lx += 26.0 + 7.0 * (t.len() as f64) + 14.0;
     }
-    let midy = ly + 7;
-    lx += 12;
-    p.push(format!(
-        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1.5\" \
-         marker-end=\"url(#arrow)\"/>",
-        lx,
-        midy,
-        lx + 26,
-        midy,
-        EDGE_FLOW
-    ));
-    p.push(format!(
-        "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"#555\">triggers / leads to</text>",
-        lx + 33,
-        ly + 11
-    ));
-    lx += 33 + 7 * ("triggers / leads to".len() as i64) + 18;
-    p.push(format!(
-        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1.4\" \
-         stroke-dasharray=\"0.1 6\" stroke-linecap=\"round\"/>",
-        lx,
-        midy,
-        lx + 26,
-        midy,
-        EDGE_HOTSPOT
-    ));
-    p.push(format!(
-        "<text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"#555\">open question (hotspot)</text>",
-        lx + 33,
-        ly + 11
-    ));
+    let midy = ly + 7.0;
+    lx += 12.0;
+    p.push(
+        Shape::line(lx, midy, lx + 26.0, midy)
+            .with("stroke", EDGE_FLOW)
+            .with("stroke-width", 1.5)
+            .with("marker-end", "url(#arrow)"),
+    );
+    p.push(
+        Shape::text(lx + 33.0, ly + 11.0, "triggers / leads to")
+            .with("font-size", 11.0)
+            .with("fill", "#555"),
+    );
+    lx += 33.0 + 7.0 * ("triggers / leads to".len() as f64) + 18.0;
+    p.push(
+        Shape::line(lx, midy, lx + 26.0, midy)
+            .with("stroke", EDGE_HOTSPOT)
+            .with("stroke-width", 1.4)
+            .with("stroke-dasharray", "0.1 6")
+            .with("stroke-linecap", "round"),
+    );
+    p.push(
+        Shape::text(lx + 33.0, ly + 11.0, "open question (hotspot)")
+            .with("font-size", 11.0)
+            .with("fill", "#555"),
+    );
 }
 
 #[cfg(test)]
@@ -1052,6 +1025,86 @@ mod tests {
         assert!(svg.contains("aria-label=\"E1, L, event\""));
     }
 
+    /// Every numeric value of `attr` across the scene, in draw order. Reads the `Scene` rather than
+    /// scraping the serialized SVG, so a geometry assertion pins the *number* the layout computed
+    /// and never the serializer's formatting of it.
+    fn attr_nums(model: &Model, attr: &str) -> Vec<f64> {
+        fn walk(shapes: &[Shape], attr: &str, out: &mut Vec<f64>) {
+            for s in shapes {
+                match s.attrs().get(attr) {
+                    Some(crate::scene::Val::Num(n)) => out.push(*n),
+                    Some(crate::scene::Val::Int(i)) => out.push(*i as f64),
+                    _ => {}
+                }
+                if let Shape::Group { children, .. } = s {
+                    walk(children, attr, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&board_scene(model, &View::none()).shapes, attr, &mut out);
+        out
+    }
+
+    /// How many shapes in the scene carry *all* of `want` (attribute name, value as written).
+    ///
+    /// The Scene-level replacement for asserting on a multi-attribute SVG substring: such a
+    /// substring pinned the serializer's emission order as tightly as it pinned the content, so a
+    /// harmless reordering broke a test about client contracts. Here the order cannot matter.
+    fn shapes_with(scene: &Scene, want: &[(&str, &str)]) -> usize {
+        fn as_str(v: &crate::scene::Val) -> String {
+            match v {
+                crate::scene::Val::Num(n) => format!("{n}"),
+                crate::scene::Val::Int(i) => i.to_string(),
+                crate::scene::Val::Str(s) => s.clone(),
+            }
+        }
+        fn walk(shapes: &[Shape], want: &[(&str, &str)], n: &mut usize) {
+            for s in shapes {
+                if want
+                    .iter()
+                    .all(|(k, v)| s.attrs().get(k).map(as_str).as_deref() == Some(*v))
+                {
+                    *n += 1;
+                }
+                if let Shape::Group { children, .. } = s {
+                    walk(children, want, n);
+                }
+            }
+        }
+        let mut n = 0;
+        walk(&scene.shapes, want, &mut n);
+        n
+    }
+
+    /// The scene a plain (nothing folded) render produces — the `shapes_with` subject for every
+    /// test that is not itself exercising the collapse lens.
+    fn plain_scene(model: &Model) -> Scene {
+        board_scene(model, &View::none())
+    }
+
+    /// Every connector path whose `attr` equals `value`, as `(d, start-anchor Y)`. Reads the
+    /// `Scene`, so an edge-routing assertion works off the path the layout produced rather than
+    /// hunting for `M` in a serialized document.
+    fn edge_anchors(model: &Model, attr: &str, value: &str) -> Vec<f64> {
+        board_scene(model, &View::none())
+            .shapes
+            .iter()
+            .filter_map(|s| match s {
+                Shape::Path { d, attrs } => {
+                    let hit =
+                        matches!(attrs.get(attr), Some(crate::scene::Val::Str(v)) if v == value);
+                    // `d` opens `M<x>,<y> ` — the start anchor the fan spreads.
+                    hit.then(|| {
+                        let head = d.split(' ').next().unwrap_or("");
+                        head[head.find(',').unwrap() + 1..].parse().unwrap()
+                    })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     fn attr_values(svg: &str, attr: &str) -> Vec<String> {
         let needle = format!("{}=\"", attr);
         svg.match_indices(&needle)
@@ -1123,8 +1176,8 @@ mod tests {
             let mut m = one_event_at_col(0);
             m.elements[0].y = Some(y);
             assert_eq!(
-                attr_values(&rsvg(&m), "data-cy"),
-                vec!["494.0".to_string()],
+                attr_nums(&m, "data-cy"),
+                vec![494.0],
                 "y={y} must still render on the single-slot centre"
             );
         }
@@ -1152,11 +1205,17 @@ mod tests {
     // the server itself rendered — pin the attributes it reads.
     #[test]
     fn lane_labels_expose_the_band_interior_geometry() {
-        let svg = rsvg(&empty_board());
+        let m = empty_board();
         // actor is the first lane: top = MARGIN_T + LANE_VPAD/2 = 124, interior = ROW_PITCH = 92.
-        assert!(svg.contains(
-            "class=\"lane-label\" data-lane=\"actor\" data-band-top=\"124.0\" data-band-h=\"92.0\""
-        ));
+        assert_eq!(attr_nums(&m, "data-band-top")[0], 124.0);
+        assert_eq!(attr_nums(&m, "data-band-h")[0], 92.0);
+        assert_eq!(
+            shapes_with(
+                &plain_scene(&m),
+                &[("class", "lane-label"), ("data-lane", "actor")]
+            ),
+            1
+        );
     }
 
     // A hand-authored negative or sparse `col` must render, not panic/OOM. Column geometry is
@@ -1176,11 +1235,10 @@ mod tests {
             diff: None,
             was: None,
         });
-        let svg = rsvg(&m);
-        assert_eq!(distinct(&svg, "data-cx"), 2);
+        assert_eq!(distinct(&rsvg(&m), "data-cx"), 2);
         // col -3 is the leftmost authored column → slot 0 → classic single-cell centre 255.0.
-        let cxs = attr_values(&svg, "data-cx");
-        assert!(cxs.contains(&"255.0".to_string()), "got {cxs:?}");
+        let cxs = attr_nums(&m, "data-cx");
+        assert!(cxs.contains(&255.0), "got {cxs:?}");
     }
 
     // A lone sticky keeps its classic position: centred on a single-row lane, no horizontal fan.
@@ -1188,11 +1246,11 @@ mod tests {
     // above it), each an empty single-row band of height ROW_PITCH + LANE_VPAD = 108.
     #[test]
     fn a_lone_sticky_stays_on_the_lane_mid_line() {
-        let svg = rsvg(&events_at_col(0, 1));
+        let m = events_at_col(0, 1);
         // lane_top(event) = MARGIN_T + 3*108 = 440; + LANE_VPAD/2 + ROW_PITCH/2 = 440 + 8 + 46.
-        assert_eq!(attr_values(&svg, "data-cy"), vec!["494.0".to_string()]);
+        assert_eq!(attr_nums(&m, "data-cy"), vec![494.0]);
         // col 0 centre, no stagger: MARGIN_L + COL_W/2 = 150 + 105.
-        assert_eq!(attr_values(&svg, "data-cx"), vec!["255.0".to_string()]);
+        assert_eq!(attr_nums(&m, "data-cx"), vec![255.0]);
     }
 
     fn phase(id: &str, label: &str, from: i64, to: i64, diff: Option<&str>) -> Phase {
@@ -1228,6 +1286,17 @@ mod tests {
         }
     }
 
+    /// The scene a render with `ids` folded produces — the `shapes_with` subject for the
+    /// collapse-lens tests, which cannot use `plain_scene`.
+    fn folded_scene(m: &Model, ids: &[&str]) -> Scene {
+        board_scene(
+            m,
+            &View {
+                collapsed: ids.iter().map(|s| s.to_string()).collect(),
+            },
+        )
+    }
+
     fn folded(m: &Model, ids: &[&str]) -> String {
         render_svg(
             m,
@@ -1257,7 +1326,17 @@ mod tests {
         // The chip carries the in-band count (2 hidden stickies) and the folded triangle "▸".
         assert!(f.contains("Beta \u{00b7} 2"), "count chip missing");
         assert!(f.contains("\u{25b8}"), "folded disclosure triangle missing");
-        assert!(f.contains("data-region=\"K2\" data-label=\"Beta\" data-collapsed=\"true\""));
+        assert_eq!(
+            shapes_with(
+                &folded_scene(&m, &["K2"]),
+                &[
+                    ("data-region", "K2"),
+                    ("data-label", "Beta"),
+                    ("data-collapsed", "true"),
+                ],
+            ),
+            1
+        );
     }
 
     // Pure-remap contract 1: an empty collapsed set — or one naming only unknown ids (a stale fold
@@ -1315,13 +1394,15 @@ mod tests {
                 status: None,
             }, // crosses K2, both ends visible
         ];
-        let f = folded(&m, &["K2"]);
-        assert!(
-            !f.contains("data-src=\"E2\" data-dst=\"E3\""),
+        let f = folded_scene(&m, &["K2"]);
+        assert_eq!(
+            shapes_with(&f, &[("data-src", "E2"), ("data-dst", "E3")]),
+            0,
             "an edge inside the folded band must drop with its hidden nodes"
         );
-        assert!(
-            f.contains("data-src=\"E1\" data-dst=\"E4\""),
+        assert_eq!(
+            shapes_with(&f, &[("data-src", "E1"), ("data-dst", "E4")]),
+            1,
             "a crossing edge (both ends visible) stays a passthrough in v1"
         );
     }
@@ -1345,7 +1426,17 @@ mod tests {
             "an out-of-content region draws no count chip (nothing was folded)"
         );
         // And its tab reports expanded, not collapsed — the flag agrees with the (empty) fold.
-        assert!(f.contains("data-region=\"K9\" data-label=\"Ghosttail\" data-collapsed=\"false\""));
+        assert_eq!(
+            shapes_with(
+                &folded_scene(&m, &["K9"]),
+                &[
+                    ("data-region", "K9"),
+                    ("data-label", "Ghosttail"),
+                    ("data-collapsed", "false"),
+                ],
+            ),
+            1
+        );
     }
 
     // A removed-ghost region (diff overlay) must NOT fold, even if its id is in the collapse set: it
@@ -1390,32 +1481,62 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = rsvg(&m);
-        assert!(svg.contains(">Context A<"), "region label tab is missing");
+        assert!(
+            rsvg(&m).contains(">Context A<"),
+            "region label tab is missing"
+        );
         // A lone phase draws its two board-end frontiers: the leftmost is its "start", the rightmost
         // its "end". `data-col` is the clamped boundary each sits before (start at col 0; the right
         // board edge sits after the last visible column 1, so col 2).
-        assert!(svg
-            .contains("class=\"frontier\" data-region=\"K1\" data-edge=\"start\" data-col=\"0\""));
-        assert!(
-            svg.contains("class=\"frontier\" data-region=\"K1\" data-edge=\"end\" data-col=\"2\"")
-        );
+        let frontier = |edge, col| {
+            shapes_with(
+                &plain_scene(&m),
+                &[
+                    ("class", "frontier"),
+                    ("data-region", "K1"),
+                    ("data-edge", edge),
+                    ("data-col", col),
+                ],
+            )
+        };
+        assert_eq!(frontier("start", "0"), 1);
+        assert_eq!(frontier("end", "2"), 1);
         // The enclosing group carries the region's *clamped* bounds — K1's authored to_col (2) is
         // past the last visible column (elements only reach col 1), so the group reports the
         // clamped bound (1), matching the visual box exactly. Review: emitting the raw, unclamped
         // `ph.to_col` here desynced the client's drag math from the rail (which only covers
         // min_col..max_col) — a resize could target a column with no rail cell at all.
-        assert!(svg
-            .contains("class=\"region\" data-region=\"K1\" data-from-col=\"0\" data-to-col=\"1\""));
+        assert_eq!(
+            shapes_with(
+                &plain_scene(&m),
+                &[
+                    ("class", "region"),
+                    ("data-region", "K1"),
+                    ("data-from-col", "0"),
+                    ("data-to-col", "1"),
+                ],
+            ),
+            1
+        );
         // The label tab is one focusable rename target (mirrors the sticky's role=button pattern);
         // `data-collapsed` (false when expanded) is the fold-state flag the client's `z` toggle reads.
-        assert!(svg.contains(
-            "class=\"region-tab\" data-region=\"K1\" data-label=\"Context A\" \
-             data-collapsed=\"false\" role=\"button\" tabindex=\"0\""
-        ));
+        assert_eq!(
+            shapes_with(
+                &plain_scene(&m),
+                &[
+                    ("class", "region-tab"),
+                    ("data-region", "K1"),
+                    ("data-label", "Context A"),
+                    ("data-collapsed", "false"),
+                    ("role", "button"),
+                    ("tabindex", "0"),
+                ],
+            ),
+            1
+        );
         // E1 sits on the region's from-edge → a pivotal node; E2 (interior) does not add a third.
         assert_eq!(
-            svg.matches("<circle").count(),
+            rsvg(&m).matches("<circle").count(),
             1,
             "expected one pivotal node"
         );
@@ -1438,19 +1559,28 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = rsvg(&m);
         assert_eq!(
-            svg.matches("class=\"frontier\"").count(),
+            shapes_with(&plain_scene(&m), &[("class", "frontier")]),
             4,
             "3 phases → 4 frontiers, no doubled boundary"
         );
         // The K1|K2 boundary is the left region's "end" at col 2; the K2|K3 boundary K2's "end" at 4.
-        assert!(svg.contains("data-region=\"K1\" data-edge=\"end\" data-col=\"2\""));
-        assert!(svg.contains("data-region=\"K2\" data-edge=\"end\" data-col=\"4\""));
+        let boundary = |region, col| {
+            shapes_with(
+                &plain_scene(&m),
+                &[
+                    ("data-region", region),
+                    ("data-edge", "end"),
+                    ("data-col", col),
+                ],
+            )
+        };
+        assert_eq!(boundary("K1", "2"), 1);
+        assert_eq!(boundary("K2", "4"), 1);
         // No frontier is keyed to a *right* region's "start" for an internal boundary (that would be
         // the doubled edge). Only the leftmost board edge is a "start".
         assert_eq!(
-            svg.matches("data-edge=\"start\"").count(),
+            shapes_with(&plain_scene(&m), &[("data-edge", "start")]),
             1,
             "one board-left start only"
         );
@@ -1468,10 +1598,13 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = rsvg(&m);
         for col in 0..=2 {
-            assert!(
-                svg.contains(&format!("class=\"region-rail\" data-col=\"{col}\"")),
+            assert_eq!(
+                shapes_with(
+                    &plain_scene(&m),
+                    &[("class", "region-rail"), ("data-col", &col.to_string())]
+                ),
+                1,
                 "missing region-rail cell for col {col}"
             );
         }
@@ -1490,20 +1623,28 @@ mod tests {
             level: Level::default(),
             diff_meta: Some(("v1".into(), "v2".into())),
         };
-        let svg = rsvg(&m);
-        assert!(
-            svg.contains("<g opacity=\"0.45\">"),
+        assert_eq!(
+            shapes_with(&plain_scene(&m), &[("opacity", "0.45")]),
+            1,
             "removed region is not ghosted"
         );
         // The region still carries an identifying group (Stage 6: the client needs `data-region`
         // to tell regions apart even when removed), but must not offer a resize handle or a
         // rename tab for something that no longer exists.
-        assert!(
-            !svg.contains("class=\"region-edge\" data-region=\"K9\""),
+        assert_eq!(
+            shapes_with(
+                &plain_scene(&m),
+                &[("class", "region-edge"), ("data-region", "K9")]
+            ),
+            0,
             "a removed region must not offer a resize handle"
         );
-        assert!(
-            !svg.contains("class=\"region-tab\" data-region=\"K9\""),
+        assert_eq!(
+            shapes_with(
+                &plain_scene(&m),
+                &[("class", "region-tab"), ("data-region", "K9")]
+            ),
+            0,
             "a removed region must not offer a rename tab"
         );
     }
@@ -1674,18 +1815,8 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = rsvg(&m);
-        // Each edge path's start anchor Y (the M y-coord). They must differ by the fan spread.
-        let starts: Vec<f64> = svg
-            .match_indices("<path class=\"edge\"")
-            .map(|(i, _)| {
-                let m0 = svg[i..].find('M').unwrap() + i + 1;
-                let seg = &svg[m0..];
-                let comma = seg.find(',').unwrap();
-                let end = seg.find(' ').unwrap();
-                seg[comma + 1..end].parse().unwrap()
-            })
-            .collect();
+        // Each edge path's start anchor Y. They must differ by the fan spread.
+        let starts = edge_anchors(&m, "class", "edge");
         assert_eq!(starts.len(), 2, "expected two flow edges");
         assert!(
             (starts[0] - starts[1]).abs() > 1.0,
@@ -1718,20 +1849,14 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = rsvg(&m);
-        let cy = cy_of(&svg, "X1");
-        let mut count = 0;
-        for (i, _) in svg.match_indices("data-src=\"X1\"") {
-            let after = &svg[i + svg[i..].find('M').unwrap() + 1..];
-            let comma = after.find(',').unwrap();
-            let end = after.find(' ').unwrap();
-            let y: f64 = after[comma + 1..end].parse().unwrap();
+        let cy = cy_of(&rsvg(&m), "X1");
+        let anchors = edge_anchors(&m, "data-src", "X1");
+        assert_eq!(anchors.len(), 9, "expected 9 fanned connectors");
+        for y in anchors {
             assert!(
                 (y - cy).abs() <= STICKY_H / 2.0 + 0.05,
                 "anchor slid off the box: y={y}, cy={cy}"
             );
-            count += 1;
         }
-        assert_eq!(count, 9, "expected 9 fanned connectors");
     }
 }
