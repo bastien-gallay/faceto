@@ -215,7 +215,13 @@ describes present behaviour. **And not against the code's own comments either**:
 describe a design that was never built. Six places here — `SKILL.md`, two design notes, four
 `src/serve/` comments and a roadmap row — described a "~1 Hz poll" of `/model-version` repainting
 the board on its own; `git log -S setInterval` proved no such loop was ever written. When a comment
-asserts a *mechanism*, grep for the identifier that would implement it before repeating the claim. Document what is shipped; when a feature is mid-reformulation, say so
+asserts a *mechanism*, grep for the identifier that would implement it before repeating the claim.
+**And re-read your own replacement against the code, not against the text it replaced.** A commit
+titled *"correct three claims the code does not support"* introduced a fourth of the same shape: it
+rewrote a stale "what's next" paragraph and listed two features as upcoming that had shipped weeks
+earlier — two commits after correcting exactly that defect elsewhere in the same PR. Rewriting a
+stale claim puts you in the mindset of the claim; the fix is to verify the new sentence from
+scratch, the way you verified that the old one was wrong. Document what is shipped; when a feature is mid-reformulation, say so
 on the page and link the issue rather than describing an interface about to move. Internal
 artefacts (`docs/notes/`, `docs/F-*-plan.md`, `.personal/**`) stay out of `docs/src`: the book
 publishes decisions, not deliberations.

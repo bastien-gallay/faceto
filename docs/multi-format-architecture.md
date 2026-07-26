@@ -9,6 +9,38 @@ discovered late.
 **Ethos guardrails (unchanged):** zero external dependencies, pure std, hand-written JSON, calm
 instrument. These *constrain* the design (no serde, no autolayout crate) rather than relax it.
 
+## Read this first — triage of 2026-07-26
+
+This note is now **tracked**, and one of its premises changed. Read the two together.
+
+**Every section below is still the design.** The kernel/format boundary, the data-Scene decision,
+the sealed `enum Board`, the format tag, ADR-1 and the staged path are all unchanged, and they are
+now 15 rows in `ROADMAP.md` (issues #114–#128, under the de-parked `F-new-diagrams` umbrella #126).
+
+**What changed is which second format.** This note uses **C4** throughout as its pressure test —
+`enum Board { EventStorming, C4 }`, `formats/c4/`, the container/component views. C4 is now a
+**paper adversary, not a plan**: its pressure test did its job (it is what forced nested
+`Shape::Group`, the format-owned lens, per-format diff verdicts, and the singular-board break), and
+it stays unbuilt because it is the most expensive of the candidates — stored per-view coordinates
+*and* multi-view *and* nested containment.
+
+The formats actually queued:
+
+| | Format | Shape family | Role |
+| --- | --- | --- | --- |
+| spike, throwaway | Bounded Context Canvas (#114) | slot template — *no* coordinates | kill `col`/`lane`/`y`/`phase` at once |
+| spike, throwaway | Wardley map / Core Domain Chart (#115) | continuous 2D plane | replace discrete `col` with named axes |
+| shipped format #2 | DDD Context Map (#124) | free-form graph, **typed** relationships | stress the `Edge` seam, which ES barely exercises |
+
+Also dropped outright: **user story mapping** and **event modeling** — both are timeline ×
+swimlane, i.e. structurally the board that already ships, so they would validate no abstraction.
+
+**So when you read `c4::Model` below, read it as "a second format that is maximally distant".** The
+C4 sketch is still the sharpest pressure test in the file; it is just not the next thing built.
+Publication of this note into `docs/src/architecture/` is #127, and is deliberately sequenced
+*after* the two spikes report — publishing a decision a spike is about to contradict is worse than
+publishing nothing.
+
 ## The core realization
 
 Almost everything in `faceto` today is coupled to **one domain: event storming**. The `Model` is

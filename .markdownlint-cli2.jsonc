@@ -10,10 +10,13 @@
   // .impeccable/critique/ holds generated design-review snapshots, not authored docs.
   // docs/book/ is the mdBook output; docs/src/SUMMARY.md is mdBook's table of contents, whose
   // part headers are H1s by specification (MD025) — it is structure, not prose.
+  // .personal/ is gitignored working notes, so CI never sees it — without this entry `just md`
+  // fails locally on files CI will never lint, and `just ci` becomes unrunnable.
   "ignores": [
     "target/**",
     "node_modules/**",
     ".impeccable/**",
+    ".personal/**",
     "docs/book/**",
     "docs/src/SUMMARY.md"
   ]
