@@ -15,6 +15,7 @@ mod json;
 mod lint;
 mod model;
 mod render;
+mod scene;
 mod serve;
 
 use std::fs::OpenOptions;

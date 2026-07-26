@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Rendering goes through a Scene IR** (F-scene-ir, #116): the board is built as geometry —
+  `Rect` / `Line` / `Text` / `Circle` / `Path` and a nesting `Group` — and one serializer turns
+  that into SVG, instead of every draw step writing SVG strings inline. The board is unchanged to
+  look at; the emitted markup differs in two harmless ways, so a *committed* board SVG will show
+  one-off churn on its next render: numbers print in their shortest form (`240.0` → `240`, while
+  an opacity like `0.02` keeps its precision), and attributes are ordered geometry-first. Every
+  `data-*` tag the client reads is unchanged.
+
 - **Output & log names are derived from the model basename** (F-output-naming): `faceto render
   orders.model.json` now writes `orders.svg` / `orders.html` (was a shared `board.svg` /
   `index.html`), and the event log is `orders.event-log.jsonl` (was a shared `event-log.jsonl`), so
