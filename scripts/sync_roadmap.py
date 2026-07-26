@@ -42,6 +42,11 @@ HORIZON_CELL = {
     "Later": "Later",
     "Parked": "Parked",
     "Shipped": "✅ Shipped",
+    # A throwaway spike that rendered its verdict. Terminal like Shipped, but distinct on purpose:
+    # a spike's contract is that its code is *never merged*, so reusing "Shipped" to buy the row a
+    # tidy state would be a plain falsehood. Kept out of the Status column — a reported spike is
+    # `Done` there, like anything else finished.
+    "Reported": "🔍 Reported",
 }
 TRACKED_RE = re.compile(r"Tracked:?\s+#(\d+)")
 ANY_REF_RE = re.compile(r"#(\d+)")
