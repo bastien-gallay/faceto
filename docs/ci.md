@@ -2,7 +2,8 @@
 
 # CI reference
 
-The authoritative source is [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) and the
+The authoritative source is [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), its sibling
+[`docs-deploy.yml`](../.github/workflows/docs-deploy.yml), and the
 `main-protection` branch ruleset on GitHub. This document is the *map*: what runs, when, why, and
 how to reproduce or restore it. If the two ever disagree, the workflow file wins — fix this doc.
 
@@ -37,7 +38,8 @@ the PR's file list).
 ## Path gating (run only what's relevant)
 
 A first job, `detect changes`, classifies the diff with
-[`dorny/paths-filter`](https://github.com/dorny/paths-filter) and exposes three boolean outputs.
+[`dorny/paths-filter`](https://github.com/dorny/paths-filter) and exposes one boolean output per
+kind of file.
 Every other job carries `needs: changes` + an `if:` on the relevant output, so a docs-only change
 skips the Rust jobs, a Rust-only change skips markdownlint/actionlint, and so on.
 
@@ -49,6 +51,7 @@ skips the Rust jobs, a Rust-only change skips markdownlint/actionlint, and so on
 | `just`      | `justfile`                                                                     |
 | `js`        | `tests/js/**`, `src/client/**`                                                  |
 | `roadmap`   | `ROADMAP.md`, `scripts/sync_roadmap.py`                                         |
+| `docs`      | `docs/**`                                                                       |
 
 > **Why `src/template.html` + `src/client/**` count as a Rust change.** The shell template and the
 > client modules are `include_str!`'d into the binary by `render.rs`, so editing any of them rebuilds
@@ -78,6 +81,7 @@ job-level skips — see the [static-names gotcha](#the-static-names-gotcha).
 | `justfile`                | ubuntu          | `just`                           | `just --fmt --check` + `--summary` (guard rot)   |
 | `client-logic (node)`     | ubuntu          | `js`                             | `node tests/js/board-logic.test.mjs` — pure client helpers |
 | `roadmap-check`           | ubuntu          | `roadmap`                        | `ROADMAP.md` reconciled with issues (Now/Next rows tracked; no orphan open issues) |
+| `docs book`               | ubuntu          | `docs`                           | `mdbook build docs` — the manual builds, and every promised page exists |
 
 Notes on the less-obvious ones:
 
@@ -103,8 +107,37 @@ Notes on the less-obvious ones:
   checked in CI — reading user Project #2 needs `project` scope that `GITHUB_TOKEN` lacks, so the
   script degrades gracefully (skips the board dimension) and that sync stays a local `just sync-roadmap`
   step.
+- **`docs book`** builds the user manual ([`docs/src/`](../docs/src/), published to
+  <https://bastien-gallay.github.io/faceto/>). Its value is `create-missing = false` in
+  `docs/book.toml`: a `SUMMARY.md` entry with no file on disk **fails the build**, so a chapter the
+  table of contents promises can never ship as a silent empty page. It does *not* check in-page
+  links, and it does not render the sample board (that needs a Rust build — the deploy workflow does
+  it). `AGENTS.md` §*Documentation is part of the feature* is the rule this job enforces mechanically.
 - The macOS jobs (`clippy (macos-latest)`, `test (macos-latest)`) are **not required checks**; they
   run only on `push`/`workflow_dispatch`, never on PRs.
+
+---
+
+## The second workflow: `docs-deploy.yml`
+
+`ci.yml` gates; [`docs-deploy.yml`](../.github/workflows/docs-deploy.yml) **publishes**. It runs
+only on `push` to `main` (plus `workflow_dispatch`), never on PRs — the `docs book` job above
+already proved the book builds, so this one just ships what `main` accepted.
+
+| | |
+| --- | --- |
+| Triggers on | `docs/**`, `examples/**`, `src/**`, `Cargo.toml`, the workflow file |
+| Builds | the sample board (`cargo build --release` → `faceto render`), then `mdbook build docs` |
+| Publishes to | GitHub Pages → <https://bastien-gallay.github.io/faceto/> |
+| Permissions | `contents: read`; the deploy job alone adds `pages: write` + `id-token: write` |
+| Concurrency | group `pages`, **never** cancel-in-progress (a half-cancelled deploy is a broken site) |
+
+**Why `src/**` and `Cargo.toml` are triggers.** The book's tour embeds a *real* board, rendered at
+deploy time by that build of faceto rather than captured as a screenshot. A renderer change must
+therefore republish, or the published sample silently drifts from the code it claims to depict.
+
+Pages is configured repo-side as **source: GitHub Actions** (`build_type: workflow`); the
+`github-pages` environment carries a branch policy so only `main` can deploy.
 
 ---
 
@@ -194,7 +227,7 @@ Every gate has a local equivalent, wired up as [`just`](https://github.com/casey
 the repo's [`justfile`](../justfile). Run the whole set before pushing:
 
 ```bash
-just ci      # format → lint → test → docs → zero-deps → actionlint → justfile, in order
+just ci      # format → lint → test → markdown → book → zero-deps → size → actionlint → justfile
 ```
 
 Or run one gate at a time:
@@ -205,14 +238,16 @@ Or run one gate at a time:
 | `just clippy`      | `clippy (…)`         | `cargo clippy --all-targets -- -D warnings` |
 | `just test`        | `test (…)`           | `cargo test --all-targets`                  |
 | `just md`          | `markdownlint`       | `markdownlint-cli2 "**/*.md"`               |
+| `just docs`        | `docs book`          | render the sample board, then `mdbook build docs` |
 | `just zero-deps`   | `zero dependencies`  | assert `cargo tree -e normal` is faceto-only |
 | `just binary-size` | `binary size budget` | assert the release binary is under 2 MiB    |
 | `just actionlint`  | `actionlint`         | `actionlint`                                |
 | `just lint-justfile` | `justfile`         | `just --fmt --check --unstable` + `--summary` |
 
 The justfile exports `RUSTFLAGS=-D warnings`, matching CI so rustc warnings fail locally too.
-`just` (`brew install just`), `markdownlint-cli2`, and `actionlint` are dev tools installed
-separately — none is a Rust crate, so the zero-dependency promise is untouched.
+`just` (`brew install just`), `markdownlint-cli2`, `actionlint` and `mdbook` (`brew install mdbook`)
+are dev tools installed separately — none is a Rust crate, so the zero-dependency promise is
+untouched. `just docs-serve` previews the book locally with live reload.
 
 The repo's [`.pre-commit-config.yaml`](../.pre-commit-config.yaml) also wires fmt, clippy,
 markdownlint and `typos` into a pre-commit hook (tests run pre-push). See
@@ -234,6 +269,12 @@ trailing comment. Bump the SHA and the comment together; never use a mutable tag
 | `DavidAnson/markdownlint-cli2-action`  | v23     | markdownlint               |
 | actionlint downloader (sha256-checked) | v1.7.7  | actionlint                 |
 | `extractions/setup-just`               | v4.0.0  | justfile                   |
+| `taiki-e/install-action`               | v2.85.1 | docs book, Deploy docs     |
+| `actions/upload-pages-artifact`        | v5.0.0  | Deploy docs                |
+| `actions/deploy-pages`                 | v5.0.0  | Deploy docs                |
+
+> `actions/checkout` is pinned at **v6.0.2** in `ci.yml` and **v7.0.1** in `docs-deploy.yml` (the
+> newer workflow was written against the current release). Not a bug, but bump them together.
 
 ---
 

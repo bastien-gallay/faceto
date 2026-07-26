@@ -20,8 +20,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two F-auto-genesis review carry-overs — the wrong-board serve bug is fixed by construction, and a
   new warn-only nudge fires when a source replays to an empty board (0 elements).
 
+### Fixed
+
+- **The narrate skill can propose edges again** — its instructions claimed "you cannot propose
+  edges […] never invent an edge kind (it will 400)", which stopped being true when
+  `connect`/`disconnect` shipped with F-edge-connect. A missing arrow is the commonest gap the
+  skill detects, so it was talking its way around the cheapest proposal on the board.
+- **The board never auto-refreshed, and now the docs say so.** `SKILL.md`, two design notes, four
+  `src/serve/` comments and the F-collab-sse roadmap row all described a "~1 Hz poll" of
+  `/model-version` that repaints the board on its own. `git log -S setInterval` shows no such loop
+  was ever written: the client fetches on load and on **Reload**, full stop. No behaviour changed —
+  the claim did. Push (`F-collab-sse`) is still the un-shipped answer.
+
 ### Added
 
+- **A documentation site** (F-docs-book): the manual now lives in `docs/src/` as an mdBook,
+  published to <https://bastien-gallay.github.io/faceto/> — a board guide organised by what you are
+  looking at, a per-verb CLI reference, the lint rules, and a "Working with agents" part covering
+  the context pack, the narrate skill and variants. The tour embeds a *real* board rendered at
+  deploy time, not a screenshot. `create-missing = false` plus a CI `docs book` job mean a chapter
+  the table of contents promises can never ship as an empty page.
 - **Collapse a region to a band** (F-region-collapse): fold a wide board's off-topic regions to
   concentrate readability. Click the **▸/▾** disclosure on a region tab (or press **`z`** on it) to
   compress that region's columns to one thin summary slot — its stickies hide behind a `▸ Label · N`

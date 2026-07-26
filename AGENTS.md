@@ -211,7 +211,11 @@ Three traps this table exists to prevent, each one already met:
   `docs/schema/` silently stops being discoverable.
 
 Write against **the code, not the CHANGELOG** — the entry describes intent at merge time, the code
-describes present behaviour. Document what is shipped; when a feature is mid-reformulation, say so
+describes present behaviour. **And not against the code's own comments either**: a doc comment can
+describe a design that was never built. Six places here — `SKILL.md`, two design notes, four
+`src/serve/` comments and a roadmap row — described a "~1 Hz poll" of `/model-version` repainting
+the board on its own; `git log -S setInterval` proved no such loop was ever written. When a comment
+asserts a *mechanism*, grep for the identifier that would implement it before repeating the claim. Document what is shipped; when a feature is mid-reformulation, say so
 on the page and link the issue rather than describing an interface about to move. Internal
 artefacts (`docs/notes/`, `docs/F-*-plan.md`, `.personal/**`) stay out of `docs/src`: the book
 publishes decisions, not deliberations.
