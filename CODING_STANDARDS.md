@@ -67,6 +67,17 @@ Rules of thumb:
   intentional diff.
 - If a tidy ends up changing observable behaviour, it wasn't a tidy. Revert
   and split.
+- **Choosing the safety net is choosing the commit type.** When you port a
+  serializer, a formatter, or anything else whose *output text* is the
+  artefact, the test you reach for decides this before you write a line. A
+  byte-identical net keeps the port a tidy. A structural net (parse both
+  outputs, compare the trees) is stronger against real regressions — it
+  catches a dropped attribute that a byte diff drowns in noise — but it
+  licenses the output to change, so the commit is behavioural by
+  construction. Both are defensible; picking one without noticing which is
+  not. F-scene-ir (PR #136) chose the structural net for good reasons and
+  still landed as `refactor`, which by the rule above it was not.
+
 Acceptable commit shapes:
 
 ```text
