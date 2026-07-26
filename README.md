@@ -17,8 +17,10 @@
 
 Point it at a model; get an interactive HTML+SVG board you can read at a glance and
 **click any element → write a short note → have your next session adjust the model**.
-Event storming is the first board format; C4, story mapping, impact mapping and friends are
-the direction. Pure Rust standard library — **zero dependencies, offline, one fast install**.
+Event storming is the first board format; the direction is the rest of the workshop path —
+**context map** (boundaries), **bounded context canvas** (one context in depth), **core domain
+chart** (where to invest). Pure Rust standard library — **zero dependencies, offline, one fast
+install**.
 
 <p align="center">
   <img src="docs/sample-board.svg" alt="A faceto event-storming board: actor, command, aggregate, event, policy, read-model and hotspot stickies laid out left-to-right along a shared timeline." width="100%">
