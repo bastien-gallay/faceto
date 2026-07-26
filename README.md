@@ -17,8 +17,10 @@
 
 Point it at a model; get an interactive HTML+SVG board you can read at a glance and
 **click any element → write a short note → have your next session adjust the model**.
-Event storming is the first board format; C4, story mapping, impact mapping and friends are
-the direction. Pure Rust standard library — **zero dependencies, offline, one fast install**.
+Event storming is the first board format; the direction is the rest of the workshop path —
+**context map** (boundaries), **bounded context canvas** (one context in depth), **core domain
+chart** (where to invest). Pure Rust standard library — **zero dependencies, offline, one fast
+install**.
 
 <p align="center">
   <img src="docs/sample-board.svg" alt="A faceto event-storming board: actor, command, aggregate, event, policy, read-model and hotspot stickies laid out left-to-right along a shared timeline." width="100%">
@@ -126,8 +128,18 @@ rationale — compaction, forward/backward compatibility, the locked decisions �
 
 ## Click → note → event
 
-With `serve` running, click a sticky → a modal opens → pick a kind (`comment` / `add` / `split` /
-`rename` / `drop` / `move` / `question` / `resolve`) → type a short note → **Save**.
+With `serve` running, click a sticky → a modal opens → pick a kind (`comment`, `split`,
+`open question`, or `resolve a hotspot` — gated to hotspots and elements carrying an open
+question) → type a short note → **Save**.
+
+Structural edits are **gestures, not modal options**: rename is double-click or <kbd>F2</kbd>,
+remove is the `×` glyph or <kbd>Delete</kbd>, move is a drag or <kbd>←</kbd>/<kbd>→</kbd>, add is
+the hover `+`. Connect is its own affordance — drag the wire from the **dot on a selected box's
+right edge** onto another box (dropping on a box it already points at cuts that edge instead), or
+press <kbd>e</kbd>, focus the target, <kbd>Enter</kbd>. A plain drag *between* two stickies moves
+and stacks them; it does not draw an edge. The
+[keyboard reference](https://bastien-gallay.github.io/faceto/board/keyboard.html) has the full
+sheet, mirrored in the in-app `?` dialog.
 
 The note is appended to the log as the matching event — `add` mints a server-side, type-prefixed
 id (`E5`, `C3`, …), one past the highest ever used under that lane, computed under a lock so
@@ -202,15 +214,23 @@ cargo fmt --all --check                           # formatting
 cargo clippy --all-targets -- -D warnings         # lints
 ```
 
-These mirror CI, which also runs the test + clippy matrix on macOS, Windows, and Linux. See
+These mirror CI, which runs clippy + tests on Linux for every pull request and adds macOS on
+`main`. Also gated there: markdownlint, actionlint, a justfile lint, the book build, and the
+runtime-only dependency firewall — see [docs/ci.md](docs/ci.md). See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the (one) hard rule and [AGENTS.md](AGENTS.md) for the
 architecture and domain invariants.
 
 ## Status
 
 Extracted from the daily-ops inception event-storm harness. The event-sourced spine is the current
-shape: the log is truth, the model is a projection, comments are events. Next: more board formats and
-a `reorder` affordance (per-sticky nudge + backward-edge contradiction styling).
-Also planned: a `model.json` **export** (project the log back to a source file) — see
-[ROADMAP.md](ROADMAP.md). The **runtime-only** dependency policy (dev-deps free + a binary-size
-budget) has since landed.
+shape: the log is truth, the model is a projection, comments are events.
+
+Already shipped from the **conversational AI loop**: **variants** (render or serve a board against
+a sibling log as a diff) and the **context pack** (`export --format context`, above). What is left
+of that loop is `extract` — carve a semantic sub-board out of a big one.
+
+In flight next: the **kernel/format split** that lets a second board format exist at all — a Scene
+IR, a format tag on the log, and event storming moved behind a thin seam. Two throwaway spikes (a
+bounded context canvas, a Wardley map) run alongside, to find the seam rather than guess it; only
+the move of event storming itself waits on what they report. Also planned: a `model.json`
+**export** (project the log back to a source file). Full narrative in [ROADMAP.md](ROADMAP.md).

@@ -7,7 +7,12 @@ product
 ## Users
 
 Software designers, architects, and developers running domain-modelling sessions —
-event storming first, with C4 / story mapping / impact mapping on the roadmap. Their
+event storming first, then the rest of the DDD workshop path on the roadmap: **context
+map** (boundaries), **bounded context canvas** (one context in depth), **core domain
+chart** (where to invest). One method, four board formats — not a diagram-type catalogue.
+C4 is a deliberate non-target for now; user story mapping and event modeling are dropped
+outright, being the same timeline × swimlane shape the event-storming board already is
+(see `ROADMAP.md`, multi-format triage 2026-07-26). Their
 context: mid-thought, often pairing with an LLM, working from a single typed JSON model
 they iterate on between sessions. They are technically fluent (the tool installs as a
 zero-dependency Rust binary and is driven from the CLI), comfortable editing a typed

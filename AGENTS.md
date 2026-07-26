@@ -116,9 +116,9 @@ the log). Seven modules, each one stage (`json`/`model`/`lint` are single files;
   `ElementAnnotated`); `add` mints a server-side type-prefixed id. All appends serialize through
   one mutex so concurrent posts never interleave (H4).
 - **`src/template.html` + `src/client/*.js` + `src/client/style.css`** — the client. `template.html`
-  is a thin shell (head, static body DOM, four placeholders); the CSS and the ~1.3k lines of JS live
-  in sibling files, split into cohesive modules (`core` → `layout` → `drag` → `edit` → `region` →
-  `sync` → `graph` → `main`). `src/render/html.rs` `include_str!`s them all and `concat!`s the JS
+  is a thin shell (head, static body DOM, four placeholders); the CSS and the ~1.6k lines of JS live
+  in sibling files, split into nine cohesive modules (`core` → `layout` → `drag` → `connect` →
+  `edit` → `region` → `sync` → `graph` → `main`). `src/render/html.rs` `include_str!`s them all and `concat!`s the JS
   modules — in that order, `"\n"`-separated — back into one classic `<script>` at build time (no
   bundler ships; the concatenation is one shared scope, behaviour-identical to the former inline
   script). `render_html` then
