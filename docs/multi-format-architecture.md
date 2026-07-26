@@ -1,21 +1,66 @@
 # Multi-format architecture — exploration & decision record
 
-**Status:** exploration (no code yet). Captures the design direction for evolving `faceto` from
-a single-format tool (event storming) into a **kernel + pluggable diagram/workshop formats**
-(e.g. C4, User Story Mapping, BPMN — the roadmap's parked `F-new-diagrams`). Nothing here is
-committed to `main`; it is the shared reasoning so the seams are chosen deliberately, not
-discovered late.
+**Status:** partly built. Captures the design direction for evolving `faceto` from a single-format
+tool (event storming) into a **kernel + pluggable diagram/workshop formats** (e.g. C4, User Story
+Mapping, BPMN — the roadmap's parked `F-new-diagrams`). It is the shared reasoning so the seams are
+chosen deliberately, not discovered late.
+
+**One section is now code.** The data-Scene decision shipped 2026-07-26 as `src/scene.rs`
+(`F-scene-ir` #116, PR #136). Everything else here is still exploration. Where a section describes
+the Scene IR in the future tense, read it as the design it was built from — and see the *as built*
+notes, which record the three places reality diverged.
 
 **Ethos guardrails (unchanged):** zero external dependencies, pure std, hand-written JSON, calm
 instrument. These *constrain* the design (no serde, no autolayout crate) rather than relax it.
+
+## Where this stands — 2026-07-26
+
+**Settled.** The data-Scene decision is built: `src/scene.rs` holds the geometric primitives and
+the one `render_scene` serializer, and `render::board_scene` turns a board into a `Scene`
+(`F-scene-ir` #116, PR #136). Nothing else in this note is code.
+
+**Open, ranked.** Each item is tracked or explicitly is not:
+
+1. **#119 `F-board-vs-diff`** — split the board type from the overlay type. Its precondition just
+   fired, and it is the cheapest thing in the family right now.
+2. **#121 `F-format-tag`** — the correctness precondition the canvas spike found: a foreign-format
+   log currently replays as an empty board, silently.
+3. **#115 `F-spike-wardley`** — still worth running, but its job changed: it can no longer
+   constrain `Shape`'s introduction, only a revision of it.
+4. **Ship positions to the client** — the half of the Scene IR that did not land, and the whole
+   justification for #128. **Deliberately not ticketed**: nobody has designed what the client
+   would receive, and a ticket for an undesigned interface is a ticket that rots. It is named in
+   the #128 row instead.
+
+**What will look like a contradiction and is not.**
+
+- This note describes the Scene IR in the future tense throughout. That is deliberate — it is the
+  design the code was built *from*. The *as built* notes mark each place reality diverged; the
+  prose around them was not rewritten, so a reader arriving with the old design in their head can
+  still recognise it.
+- The staged path carries **two** superseding blockquotes that disagree with each other. Both are
+  correct as records: the family was re-ordered twice in one week and the code followed neither
+  ordering. Read them as history, not as instructions.
+- `docs/notes/f-spike-canvas.md` forecasts that the Scene IR deletes 766 lines of client geometry.
+  It did not — the note is pinned to a commit and never rebased, by design.
+
+**Resuming here:**
+
+```text
+Read docs/multi-format-architecture.md (this section), then the F-scene-ir row in ROADMAP.md
+for what shipped versus what the row promised. The Scene IR is src/scene.rs; the ES scene
+builder is render::board_scene. Next action: issue #119 (F-board-vs-diff) — the diff overlay
+becomes "compose two Scenes" instead of diff/was/status optionals on Model.
+```
 
 ## Read this first — triage of 2026-07-26
 
 This note is now **tracked**, and one of its premises changed. Read the two together.
 
-**Every section below is still the design.** The kernel/format boundary, the data-Scene decision,
-the sealed `enum Board`, the format tag, ADR-1 and the staged path are all unchanged, and they are
-now 15 rows in `ROADMAP.md` (issues #114–#128, under the de-parked `F-new-diagrams` umbrella #126).
+**Every section below is still the design** — except the data-Scene decision, which is now code
+(see *Status*, above). The kernel/format boundary, the sealed `enum Board`, the format tag, ADR-1
+and the staged path are all unchanged, and they are now 15 rows in `ROADMAP.md` (issues #114–#128,
+under the de-parked `F-new-diagrams` umbrella #126).
 
 **What changed is which second format.** This note uses **C4** throughout as its pressure test —
 `enum Board { EventStorming, C4 }`, `formats/c4/`, the container/component views. C4 is now a
@@ -57,9 +102,18 @@ still the design — but two of its judgements moved, and both are about *order*
   the Rust↔JS geometry mirror. And the canvas exercised zero coordinates and zero edges, so it
   constrains `Shape` not at all — #115 is the probe that still can.
 
+  > **Not honoured — 2026-07-26.** #116 shipped *before* #115 ran, on the ROADMAP row's reading
+  > ("correct with one format") rather than this bullet's. Two consequences the next reader needs.
+  > `Shape` was designed with no second format pressing on it, so the primitive set is a bet: #115
+  > can now only constrain a *revision*. And the strong driver named here — deleting the geometry
+  > mirror — **did not land with it**: the IR builds a `Scene` server-side and serializes it, but
+  > ships no positions to the client, which is still 1597 lines. The bullet's reasoning stands;
+  > only its sequencing was overtaken.
+
 Two of the open questions at the foot of this note now have evidence; see there. The kernel /
-format boundary, the data-Scene decision, the sealed `enum Board`, ADR-1 and the C4 pressure test
-are **unchanged** — the spike found no coordinate concept leaking into the kernel at all.
+format boundary, the sealed `enum Board`, ADR-1 and the C4 pressure test are **unchanged** — the
+spike found no coordinate concept leaking into the kernel at all. (The data-Scene decision was in
+this list too; it has since been built.)
 
 ## The core realization
 
@@ -84,6 +138,7 @@ they are purely ES is exactly what makes the boundary real.
 | `events.rs` | log machinery: `parse_log` / `read_log` / `jsonl_records`, compact *scaffold*, `upcast` seam, unknown-kind skip, `to_jsonl` | the `Event` enum, `replay`, `from_model`, `comment_to_events`, `region_watermark`, compact bodies |
 | `model.rs` | the stable-id **diff pattern** (`join_by_id`) | `Model` / `Element` / `Edge` / `Phase`, `normalize`, `is_pivotal`, `y_key`, `resolve_region_id`, `lane_left_col`, `diff_models` |
 | `render/` | `svg` **primitives** + the Scene serializer | `style` (8 lanes/colours), `geometry` (col = x timeline), `svg` `draw_*` (sticky/region/frontier) |
+| *as built* | the primitives and the serializer went **further out** than this row: they are `src/scene.rs`, a sibling of `render/`, not a kernel half of it | `render/` kept every ES word — lane, col, sticky, region, frontier — and gained `board_scene`, the `(Model, View) -> Scene` builder |
 | `serve.rs` | transport: listener/threads, request parse + caps, `send`, `fnv12`, cache ring, appends mutex, mint *mechanism* | route command→event mapping, mint *prefix table* |
 | `lint.rs` | a `Finding` shape + the serve-sidecar merge | every rule (ES grammar) |
 
@@ -106,6 +161,15 @@ enum Shape {
 type Scene = Vec<Shape>;
 fn render_scene(scene: &Scene) -> String;           // written ONCE
 ```
+
+**As built (`src/scene.rs`, PR #136), three divergences from this sketch.** `Scene` is a struct
+carrying `width` / `height` beside the shapes, not a bare `Vec<Shape>` — the canvas size is
+geometry too, and leaving it out meant the serializer could not write its own `<svg>` root.
+`Attrs` is an *ordered* `Vec<(String, Val)>`, not a map: deterministic output is what makes a
+rendered board diffable in git. And `Val` keeps numbers as numbers (`Num(f64)` / `Int(i64)`),
+which is what lets a test — or later, the diff overlay — read geometry back off a scene instead
+of re-parsing strings. The comment on `Rect` here (`/* class, fill, stroke, data-* */`) is exactly
+that `Attrs`.
 
 **Decision: data-Scene.** Across `render`, `serve`, and especially the client, string-Scene
 forces every downstream layer to re-implement per format. The drivers, strongest last:
@@ -165,7 +229,9 @@ Fits the zero-dep / legible / sealed ethos; one `match`, compiler-checked exhaus
 
 - **`render/` →** `kernel/scene.rs` (primitives + `render_scene`) +
   `formats/event_storming/render.rs` (`Model -> Scene`: lanes, colours, col→x layout, the ES
-  shapes).
+  shapes). **Half done 2026-07-26**: the split happened, at `src/scene.rs` + `src/render/`
+  (`board_scene`). The `kernel/` and `formats/` trees are still F-formats-move #122's to create;
+  this is a rename away, not a re-design.
 
 - **`serve.rs` →** transport stays kernel; the command→event mapping, the mint prefix table,
   and the view selector are per-format. `?base=` diff-overlay composition moves to Scene-level
@@ -254,10 +320,10 @@ The way to get ready for C4 is **not** to build the abstraction now (that bakes 
 C4 breaks), but to make event storming stop being "the whole app" and become "format #1 behind a
 thin seam."
 
-1. **Now (low regret, validated by ES alone):** the Scene IR — `kernel/scene.rs` (primitives +
-   `render_scene`); ES `render.rs` produces a `Scene`. Correct with one format; the render
-   contract later. Fold in the `Lane` enum and `UnitFraction` (net-negative-line wins regardless
-   of C4).
+1. ~~**Now (low regret, validated by ES alone):**~~ **Shipped 2026-07-26 (PR #136)** — the Scene IR,
+   as `src/scene.rs` rather than `kernel/scene.rs` (the `kernel/` tree is step 2's to create), with
+   `render::board_scene` producing the `Scene`. **The riders did not come with it**: the `Lane` enum
+   (#117) and `UnitFraction` (#118) are both still open, so step 1 shipped as its head only.
 2. **Next:** move ES into `formats/event_storming/`; leave `json` / `log` / `scene` /
    serve-transport as `kernel/`; introduce `enum Board` with **one** variant + the format tag.
    No C4 yet — just the boundary.
@@ -270,6 +336,11 @@ thin seam."
    > with a single format — **#119** (split the board type from the overlay type), **#117** (the
    > `Lane` enum) and **#118** (`UnitFraction`), which step 1 already folded in as riders. The
    > *content* of both steps is unchanged; only their order is.
+   >
+   > **This re-ordering was itself overtaken — 2026-07-26.** #116 shipped first after all, and
+   > none of the trio named above has. Read the note as a record of what was decided, not of what
+   > happened: two orderings were written down for this family in one week, and the code followed
+   > neither. The *content* of the steps is still unchanged — that part has now survived twice.
 3. **When C4 is actually designed:** add `formats/c4/`. Two real examples let the `Format` /
    diff / lint abstractions extract correctly (rule of two) instead of guessed.
 4. **Defer:** generic diff and lint frameworks until C4 shows its shape; autolayout (documented

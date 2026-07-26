@@ -36,10 +36,10 @@ ask before adding one.
 Consequences you must respect:
 
 - JSON is parsed/serialized by the hand-written `src/json.rs` (not serde).
-- The HTTP server is `std::net::TcpListener` + threads (`src/serve.rs`), not a
+- The HTTP server is `std::net::TcpListener` + threads (`src/serve/`), not a
   web framework.
 - Dates (`now_iso`) and content hashing (`fnv12`, FNV-1a) are implemented by
-  hand in `src/serve.rs`.
+  hand in `src/serve/`.
 
 If a task seems to need a crate, implement it in `std` or push back. "Add a
 crate to avoid twenty lines of `std`" is the wrong trade here, always.
@@ -67,6 +67,16 @@ Rules of thumb:
   intentional diff.
 - If a tidy ends up changing observable behaviour, it wasn't a tidy. Revert
   and split.
+- **Choosing the safety net is choosing the commit type.** When you port a
+  serializer, a formatter, or anything else whose *output text* is the
+  artefact, the test you reach for decides this before you write a line. A
+  byte-identical net keeps the port a tidy. A structural net (parse both
+  outputs, compare the trees) is stronger against real regressions — it
+  catches a dropped attribute that a byte diff drowns in noise — but it
+  licenses the output to change, so the commit is behavioural by
+  construction. Both are defensible; picking one without noticing which is
+  not. F-scene-ir (PR #136) chose the structural net for good reasons and
+  still landed as `refactor`, which by the rule above it was not.
 
 Acceptable commit shapes:
 
@@ -93,20 +103,21 @@ Five properties to optimise for, in roughly this order:
 
 ### C — Composable
 
-The pipeline is `JSON file → Model → SVG → HTML`, and each stage plugs into the
-next without reaching across it.
+The pipeline is `event-log.jsonl → replay → Model → Scene → SVG → HTML`, and each
+stage plugs into the next without reaching across it.
 
 - `src/json.rs` knows nothing of boards; `src/model.rs` builds on `Json` but
-  not on rendering; `src/render.rs` is pure layout over a `Model`; `src/serve.rs`
-  wires them behind HTTP. `src/events.rs` `replay()` folds a log into a `Model`
-  and depends on nothing downstream.
+  not on rendering; `src/render/` is pure layout over a `Model`; `src/scene.rs`
+  knows geometry and nothing about boards at all; `src/serve/` wires them behind
+  HTTP. `src/events/` `replay()` folds a log into a `Model` and depends on
+  nothing downstream.
 - The client (`src/template.html` shell + `src/client/*.js`) talks to the server
   only through the routes and the geometry it is handed (`__CONFIG__`); it never
   assumes server internals.
 
-**Watch for**: the client or `serve.rs` re-deriving a layout/colour decision
-that `render.rs` already owns. If two sites want the same derived value, hoist
-it into the stage that owns it (e.g. geometry constants flow out of `render.rs`
+**Watch for**: the client or `serve/` re-deriving a layout/colour decision
+that `render/` already owns. If two sites want the same derived value, hoist
+it into the stage that owns it (e.g. geometry constants flow out of `render/`
 once, into the page).
 
 ### U — Unix philosophy
@@ -132,7 +143,7 @@ Same input, same output, on any machine.
   matters, sort explicitly — never rely on `HashMap`/`HashSet` iteration order.
 - Broken invariants surface as `None`/`Err`, not via a panic in a shipped path.
 
-Non-deterministic work (filesystem, sockets, time) lives in `serve.rs` /
+Non-deterministic work (filesystem, sockets, time) lives in `serve/` /
 `main.rs`, never in the pure stages.
 
 ### I — Idiomatic
@@ -247,7 +258,7 @@ Reflect rules:
   exhaustively. A behaviour with an invariant (an id-keyed diff tag, a layout
   data-attribute, a replay rule) gets a positive, a negative, and an edge case.
 - **Server helpers** that are pure (`fnv12`, the civil-date maths behind
-  `now_iso`) are unit-tested in `src/serve.rs`.
+  `now_iso`) are unit-tested in `src/serve/`.
 - **Tests may use `unwrap`/`expect`/`panic`** — `clippy.toml` allows it in tests
   so the discipline doesn't fight the harness. Shipped paths may not.
 - Run the suite with `cargo test --all-targets`. There is no external test
@@ -287,7 +298,7 @@ by accident.
 - Default to **no inline comments**. Code says *what*; commit messages say *why*.
 - Write an inline comment only when the *why* is non-obvious: a hidden
   constraint, a surprising invariant, a workaround (e.g. why the client mirrors
-  `render.rs`'s `edge_path` instead of round-tripping to the server).
+  `render/geometry.rs`'s `edge_path` instead of round-tripping to the server).
 - Public items get a doc comment: a one-line summary, then detail if needed.
 
 ### Errors
@@ -341,17 +352,19 @@ instruction). Record user-visible changes under `## [Unreleased]` in
 ### Layout
 
 There is one binary crate. The "layout" is the pipeline, not a workspace — each
-source file is exactly one stage:
+module is exactly one stage. Three of them outgrew a single file and became
+directories with a `mod.rs` plus one file per concern; the rule is unchanged.
 
 ```text
 src/
 ├── json.rs       # hand-written JSON parser/serializer (the Json enum)
 ├── model.rs      # typed board: Model/Element/Edge/Phase, from_json, diff_models
 ├── lint.rs       # ES-grammar lint: lint(&Model) → Vec<Finding>, warn-only, pure (level-aware)
-├── events.rs     # event log: Event enum, replay() → Model, from_model() genesis
-├── render.rs     # pure layout + SVG (render_svg) and HTML wrapping (render_html)
-├── serve.rs      # std-only HTTP server (TcpListener + threads)
-├── template.html # the client's thin shell (placeholders), embedded via include_str! in render.rs
+├── scene.rs      # the Scene IR: geometric primitives + the one render_scene serializer
+├── events/       # event log: Event enum, replay() → Model, from_model() genesis
+├── render/       # pure layout + the board's visual language; board_scene, render_html
+├── serve/        # std-only HTTP server (TcpListener + threads)
+├── template.html # the client's thin shell (placeholders), embedded via include_str! in render/html.rs
 ├── client/       # the client's CSS + JS modules, concat!'d into the shell at build (no bundler)
 └── main.rs       # CLI dispatch only
 ```
