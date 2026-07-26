@@ -106,9 +106,16 @@ tag every open issue.
 **Multi-format triage 2026-07-26** — the anti-over-specialisation pass. `docs/multi-format-architecture.md`
 had held an excellent kernel/format design since its writing with **zero tracking**: no issue, no
 label, no board row. That is the mechanism by which over-specialisation becomes irreversible, so the
-note is now 14 rows tracked as **#114–#128** under the de-parked **F-new-diagrams** umbrella (#126),
-plus four `area:*` updates — new **`area:kernel`**, **`area:board-type`**, **`area:render`**, and
-`area:format` renamed **`area:model-format`** to stop it colliding with "board format".
+note is now **15 rows** tracked as **#114–#128** under the de-parked **F-new-diagrams** umbrella
+(#126), which carries a row of its own, plus four `area:*` updates — new **`area:kernel`**,
+**`area:board-type`**, **`area:render`**, and `area:format` renamed **`area:model-format`** to stop
+it colliding with "board format".
+
+*Corrected 2026-07-26:* this read **14 rows**, which is the feature count *without* the umbrella's
+own row — defensible in isolation, but it sat next to the range `#114–#128`, which is fifteen
+numbers, and `docs/multi-format-architecture.md` said 15 for the same range all along. A count that
+disagrees with a sibling document is the drift this file keeps producing; the fix is to name what
+is being counted, not to pick a number.
 
 The method is **isolate first, abstract on the second example**, and the entry point is two
 **throwaway** spikes rather than a build: **F-spike-canvas** #114 (a bounded context canvas — a slot
