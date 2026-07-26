@@ -28,7 +28,7 @@ The formats actually queued:
 
 | | Format | Shape family | Role |
 | --- | --- | --- | --- |
-| spike, throwaway | Bounded Context Canvas (#114) | slot template — *no* coordinates | kill `col`/`lane`/`y`/`phase` at once |
+| spike, **reported** 2026-07-26 | Bounded Context Canvas (#114) | slot template — *no* coordinates | kill `col`/`lane`/`y`/`phase` at once |
 | spike, throwaway | Wardley map / Core Domain Chart (#115) | continuous 2D plane | replace discrete `col` with named axes |
 | shipped format #2 | DDD Context Map (#124) | free-form graph, **typed** relationships | stress the `Edge` seam, which ES barely exercises |
 
@@ -40,6 +40,26 @@ C4 sketch is still the sharpest pressure test in the file; it is just not the ne
 Publication of this note into `docs/src/architecture/` is #127, and is deliberately sequenced
 *after* the two spikes report — publishing a decision a spike is about to contradict is worse than
 publishing nothing.
+
+### What the canvas spike settled (2026-07-26)
+
+The first spike reported: [`docs/notes/f-spike-canvas.md`](notes/f-spike-canvas.md), 11
+constraints, code on `spike/f-spike-canvas` (never merged, never rebased). **The sections below are
+still the design — but two of its judgements moved, and both are about *order*, not content.**
+
+- **The format tag moves to the front.** This note treats it as part of step 2 of the staged path.
+  It is a *precondition*: without it, `events::parse_log` reads a foreign-format log as `Ok` with
+  an empty `Model`, because skipping unknown kinds is precisely the forward-compatibility rule.
+  Forward compatibility and format discrimination are one mechanism aimed in opposite directions.
+- **The Scene IR moves behind the second spike.** Step 1 below calls it "validated by ES alone".
+  The canvas contradicted the *reason*, not the conclusion: a from-scratch canvas renderer was
+  easy, so "render N formats" is a weak driver. The strong one is that the Scene IR **deletes**
+  the Rust↔JS geometry mirror. And the canvas exercised zero coordinates and zero edges, so it
+  constrains `Shape` not at all — #115 is the probe that still can.
+
+Two of the open questions at the foot of this note now have evidence; see there. The kernel /
+format boundary, the data-Scene decision, the sealed `enum Board`, ADR-1 and the C4 pressure test
+are **unchanged** — the spike found no coordinate concept leaking into the kernel at all.
 
 ## The core realization
 
@@ -241,6 +261,15 @@ thin seam."
 2. **Next:** move ES into `formats/event_storming/`; leave `json` / `log` / `scene` /
    serve-transport as `kernel/`; introduce `enum Board` with **one** variant + the format tag.
    No C4 yet — just the boundary.
+
+   > **Superseded 2026-07-26 by the canvas spike (#114) — steps 1 and 2 re-order.** The **format
+   > tag (#121)** leaves step 2 and becomes the first thing built: it is a correctness
+   > precondition, not a boundary detail (see *What the canvas spike settled*, above). The
+   > **Scene IR (#116)** leaves step 1 and waits on the Wardley spike (#115), the only remaining
+   > probe that can still constrain `Shape`. What lands first instead is the trio that pays off
+   > with a single format — **#119** (split the board type from the overlay type), **#117** (the
+   > `Lane` enum) and **#118** (`UnitFraction`), which step 1 already folded in as riders. The
+   > *content* of both steps is unchanged; only their order is.
 3. **When C4 is actually designed:** add `formats/c4/`. Two real examples let the `Format` /
    diff / lint abstractions extract correctly (rule of two) instead of guessed.
 4. **Defer:** generic diff and lint frameworks until C4 shows its shape; autolayout (documented
@@ -262,8 +291,19 @@ Every step is independently green and shippable.
 
 ## Open questions
 
-- Does the generic log stay `Vec<Json>` (tolerant, simplest) or gain a `trait LogEvent`? Lean
-  `Vec<Json>`.
-- Where does the diff overlay compose — Scene-level in the kernel (preferred) or per-format?
+- ~~Does the generic log stay `Vec<Json>` (tolerant, simplest) or gain a `trait LogEvent`?~~
+  **Answered by the canvas spike (#114): `Vec<Json>`, as leaned.** `CanvasEvent` shares *no*
+  variant with `Event` — not one — so there is no vocabulary for a trait to abstract over. What
+  the kernel keeps is the **journal**: `parse_log`'s policy, `jsonl_records`, the `upcast` seam,
+  all of which are already format-agnostic and merely typed on `Event`. The spike had to copy
+  them verbatim; parameterising them on a parse closure is the one clearly-earned extraction.
+- ~~Where does the diff overlay compose — Scene-level in the kernel (preferred) or per-format?~~
+  **Split, per the canvas spike:** the *join* (`join_by_id`) is kernel and transferred verbatim;
+  the *verdicts* are per-format and must not be extracted. `moved` has no canvas meaning, and its
+  replacement `reslotted` is not `moved` renamed — it reports a category, so it reads closer to
+  `changed`. The rule of two resolved **against** a generic verdict engine: the second example
+  disagreed with the first rather than generalising it.
+- Still open — a second-format question the canvas could not touch: it has no edges and no
+  coordinates, so `Shape` and the `Edge` seam are unconstrained by it. #115 and #124 own those.
 - View selection UX in `serve`/CLI (`--view` / `?view=`) — settle when the first multi-view
   format lands.
