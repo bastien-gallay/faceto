@@ -1,0 +1,48 @@
+{
+  "name": "Order Management",
+  "slots": {
+    "purpose": [
+      { "id": "U1", "text": "Accept, track and settle customer orders through to fulfilment handover." }
+    ],
+    "classification": [
+      { "id": "S1", "text": "Domain: core" },
+      { "id": "S2", "text": "Business model: revenue generator" },
+      { "id": "S3", "text": "Evolution: custom built" }
+    ],
+    "roles": [
+      { "id": "D1", "text": "Execution — runs the ordering workflow end to end" },
+      { "id": "D2", "text": "Gateway — the single front door for storefront orders" }
+    ],
+    "language": [
+      { "id": "L1", "text": "Order — a customer's committed intent to buy" },
+      { "id": "L2", "text": "Line — one product at one quantity within an order" },
+      { "id": "L3", "text": "Settlement — payment captured and reconciled" }
+    ],
+    "inbound": [
+      { "id": "I1", "text": "PlaceOrder", "via": "Storefront" },
+      { "id": "I2", "text": "CancelOrder", "via": "Customer Support" },
+      { "id": "I3", "text": "PaymentCaptured", "via": "Payments" }
+    ],
+    "decisions": [
+      { "id": "B1", "text": "An order is only confirmed once stock is reserved and payment is authorised." },
+      { "id": "B2", "text": "Cancellation is free until the fulfilment handover, chargeable after." }
+    ],
+    "outbound": [
+      { "id": "O1", "text": "OrderConfirmed", "via": "Fulfilment" },
+      { "id": "O2", "text": "ReserveStock", "via": "Inventory" },
+      { "id": "O3", "text": "OrderCancelled", "via": "Billing" }
+    ],
+    "assumptions": [
+      { "id": "A1", "text": "Inventory reservations are authoritative and never oversell." },
+      { "id": "A2", "text": "Payments settles within the same business day." }
+    ],
+    "metrics": [
+      { "id": "M1", "text": "Confirmed-to-handover latency under 5 minutes at p95" },
+      { "id": "M2", "text": "Cancellation rate after handover below 0.5%" }
+    ],
+    "questions": [
+      { "id": "Q1", "text": "Who owns partial refunds — this context or Billing?" },
+      { "id": "Q2", "text": "Does a split shipment produce one order or two?" }
+    ]
+  }
+}

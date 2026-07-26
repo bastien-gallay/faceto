@@ -16,6 +16,9 @@ mod lint;
 mod model;
 mod render;
 mod serve;
+/// THROWAWAY SPIKE (#114) — a second board format, built beside the first to find the seam.
+/// Not for merge; see `docs/notes/f-spike-canvas.md`.
+mod spike_canvas;
 
 use std::fs::OpenOptions;
 use std::io::{ErrorKind, Write};
@@ -174,8 +177,96 @@ fn output_stem(source: &Path) -> String {
         .to_string()
 }
 
+/// SPIKE (#114). Format dispatch, by filename convention: `*.canvas.json` /
+/// `*.canvas.event-log.jsonl` is a Bounded Context Canvas, anything else is event storming.
+///
+/// **This is the sealed-`enum Board` question made concrete.** A filename convention is the
+/// cheapest possible dispatch and it is *wrong* for the log: a log's format must be readable from
+/// its **contents** (the genesis `BoardFormat` header), because a renamed file must not change how
+/// it replays, and because the alternative — "unknown kinds are skipped" — turns a wrong-format
+/// log into a silent empty board (see `spike_canvas::events`'s cross-format tests). For a
+/// throwaway spike the convention is enough to reach the answer; it is not the design.
+fn is_canvas_source(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.contains(".canvas."))
+}
+
+/// SPIKE (#114). The canvas render path — deliberately a *fork* at the top of `cmd_render` rather
+/// than a branch woven through it, because that is what the current types force: `load_source`
+/// returns `model::Model`, and every function below it (`warn_if_empty`, `render_diff`,
+/// `render::render_svg`, `render::render_html`) is typed on that one struct. Nothing between here
+/// and the SVG string is polymorphic. That is the empirical answer to "how welded is ES into the
+/// CLI?": not deeply, but *totally* — one type name appears in every signature.
+fn cmd_render_canvas(args: &RenderArgs) {
+    let path = Path::new(&args.source);
+    let load = |p: &Path| -> spike_canvas::Canvas {
+        let r = if p.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            spike_canvas::load_log(p)
+        } else {
+            spike_canvas::load(p)
+        };
+        match r {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("error: {e}");
+                exit(1);
+            }
+        }
+    };
+    let canvas = load(path);
+    let stem = output_stem(path);
+    let (svg, summary) = match &args.base {
+        None => (
+            spike_canvas::render_svg(&canvas),
+            format!("rendered {} canvas items", canvas.items.len()),
+        ),
+        Some(base) => {
+            let bp = Path::new(base);
+            let merged = spike_canvas::diff::diff_canvases(
+                &load(bp),
+                &canvas,
+                (output_stem(bp), stem.clone()),
+            );
+            let count = |v: &str| {
+                merged
+                    .items
+                    .iter()
+                    .filter(|i| i.diff.as_deref() == Some(v))
+                    .count()
+            };
+            (
+                spike_canvas::render_svg(&merged),
+                format!(
+                    "rendered canvas diff vs {} — {} added, {} removed, {} reslotted, {} changed",
+                    output_stem(bp),
+                    count("added"),
+                    count("removed"),
+                    count("reslotted"),
+                    count("changed")
+                ),
+            )
+        }
+    };
+    let svg_path = dir_of(path).join(format!("{stem}.svg"));
+    if let Err(e) = std::fs::write(&svg_path, format!("{svg}\n")) {
+        eprintln!("error writing {}: {e}", svg_path.display());
+        exit(1);
+    }
+    println!("{summary} → {}", svg_path.display());
+    // SPIKE FINDING (client): no `.html` is written. `render::render_html` wraps an SVG in
+    // `template.html` + the nine ES client modules, whose every gesture (lane drag, col nudge,
+    // region frontier, connect) is meaningless here, and whose `__CONFIG__` is ES geometry
+    // (`colW`, `stickyH`, `rowPitch`). Reusing the shell would have meant shipping a client that
+    // can only mis-handle this board. See `docs/notes/f-spike-canvas.md` §The client.
+    eprintln!("note: spike renders SVG only — the interactive shell is event-storming-specific");
+}
+
 fn cmd_render(args: &RenderArgs) {
     let path = Path::new(&args.source);
+    if is_canvas_source(path) {
+        return cmd_render_canvas(args);
+    }
     let model = match load_source(path) {
         Ok(m) => m,
         Err(e) => {
@@ -379,7 +470,48 @@ fn write_genesis(model_path: &Path) -> Result<(PathBuf, String), String> {
     Ok((out, summary))
 }
 
+/// SPIKE (#114). Canvas genesis. Note how little differs from [`write_genesis`]: the exclusive
+/// create, the clobber refusal, the `<stem>.event-log.jsonl` naming and the summary line are
+/// identical — only `load` + `from_model` + `to_jsonl` are format-typed. The **write policy** is
+/// kernel; the **vocabulary** is format. That split held everywhere the spike touched.
+fn write_canvas_genesis(source: &Path) -> Result<(PathBuf, String), String> {
+    let canvas = spike_canvas::load(source)?;
+    let out = log_beside(source);
+    let batch = spike_canvas::events::from_canvas(&canvas);
+    let mut f = match OpenOptions::new().write(true).create_new(true).open(&out) {
+        Ok(f) => f,
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+            return Err(format!(
+                "{} already exists — refusing to overwrite",
+                out.display()
+            ));
+        }
+        Err(e) => return Err(format!("writing {}: {e}", out.display())),
+    };
+    f.write_all(spike_canvas::events::to_jsonl(&batch).as_bytes())
+        .map_err(|e| format!("writing {}: {e}", out.display()))?;
+    Ok((
+        out.clone(),
+        format!(
+            "seeded {} canvas events from {} → {}",
+            batch.len(),
+            source.display(),
+            out.display()
+        ),
+    ))
+}
+
 fn cmd_genesis(model_path: &str) {
+    if is_canvas_source(Path::new(model_path)) {
+        match write_canvas_genesis(Path::new(model_path)) {
+            Ok((_, summary)) => println!("{summary}"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                exit(1);
+            }
+        }
+        return;
+    }
     // `write_genesis` refuses to clobber intrinsically (exclusive create), so there is no
     // separate exists-check to keep in sync — and loading the model first means a broken model
     // reports *its* error, not "already exists".
