@@ -1046,6 +1046,43 @@ mod tests {
         out
     }
 
+    /// How many shapes in the scene carry *all* of `want` (attribute name, value as written).
+    ///
+    /// The Scene-level replacement for asserting on a multi-attribute SVG substring: such a
+    /// substring pinned the serializer's emission order as tightly as it pinned the content, so a
+    /// harmless reordering broke a test about client contracts. Here the order cannot matter.
+    fn shapes_with(scene: &Scene, want: &[(&str, &str)]) -> usize {
+        fn as_str(v: &crate::scene::Val) -> String {
+            match v {
+                crate::scene::Val::Num(n) => format!("{n}"),
+                crate::scene::Val::Int(i) => i.to_string(),
+                crate::scene::Val::Str(s) => s.clone(),
+            }
+        }
+        fn walk(shapes: &[Shape], want: &[(&str, &str)], n: &mut usize) {
+            for s in shapes {
+                if want
+                    .iter()
+                    .all(|(k, v)| s.attrs().get(k).map(as_str).as_deref() == Some(*v))
+                {
+                    *n += 1;
+                }
+                if let Shape::Group { children, .. } = s {
+                    walk(children, want, n);
+                }
+            }
+        }
+        let mut n = 0;
+        walk(&scene.shapes, want, &mut n);
+        n
+    }
+
+    /// The scene a plain (nothing folded) render produces — the `shapes_with` subject for every
+    /// test that is not itself exercising the collapse lens.
+    fn plain_scene(model: &Model) -> Scene {
+        board_scene(model, &View::none())
+    }
+
     /// Every connector path whose `attr` equals `value`, as `(d, start-anchor Y)`. Reads the
     /// `Scene`, so an edge-routing assertion works off the path the layout produced rather than
     /// hunting for `M` in a serialized document.
@@ -1172,7 +1209,13 @@ mod tests {
         // actor is the first lane: top = MARGIN_T + LANE_VPAD/2 = 124, interior = ROW_PITCH = 92.
         assert_eq!(attr_nums(&m, "data-band-top")[0], 124.0);
         assert_eq!(attr_nums(&m, "data-band-h")[0], 92.0);
-        assert!(rsvg(&m).contains("class=\"lane-label\" data-lane=\"actor\""));
+        assert_eq!(
+            shapes_with(
+                &plain_scene(&m),
+                &[("class", "lane-label"), ("data-lane", "actor")]
+            ),
+            1
+        );
     }
 
     // A hand-authored negative or sparse `col` must render, not panic/OOM. Column geometry is
@@ -1243,6 +1286,17 @@ mod tests {
         }
     }
 
+    /// The scene a render with `ids` folded produces — the `shapes_with` subject for the
+    /// collapse-lens tests, which cannot use `plain_scene`.
+    fn folded_scene(m: &Model, ids: &[&str]) -> Scene {
+        board_scene(
+            m,
+            &View {
+                collapsed: ids.iter().map(|s| s.to_string()).collect(),
+            },
+        )
+    }
+
     fn folded(m: &Model, ids: &[&str]) -> String {
         render_svg(
             m,
@@ -1272,7 +1326,17 @@ mod tests {
         // The chip carries the in-band count (2 hidden stickies) and the folded triangle "▸".
         assert!(f.contains("Beta \u{00b7} 2"), "count chip missing");
         assert!(f.contains("\u{25b8}"), "folded disclosure triangle missing");
-        assert!(f.contains("data-region=\"K2\" data-label=\"Beta\" data-collapsed=\"true\""));
+        assert_eq!(
+            shapes_with(
+                &folded_scene(&m, &["K2"]),
+                &[
+                    ("data-region", "K2"),
+                    ("data-label", "Beta"),
+                    ("data-collapsed", "true"),
+                ],
+            ),
+            1
+        );
     }
 
     // Pure-remap contract 1: an empty collapsed set — or one naming only unknown ids (a stale fold
@@ -1330,13 +1394,15 @@ mod tests {
                 status: None,
             }, // crosses K2, both ends visible
         ];
-        let f = folded(&m, &["K2"]);
-        assert!(
-            !f.contains("data-src=\"E2\" data-dst=\"E3\""),
+        let f = folded_scene(&m, &["K2"]);
+        assert_eq!(
+            shapes_with(&f, &[("data-src", "E2"), ("data-dst", "E3")]),
+            0,
             "an edge inside the folded band must drop with its hidden nodes"
         );
-        assert!(
-            f.contains("data-src=\"E1\" data-dst=\"E4\""),
+        assert_eq!(
+            shapes_with(&f, &[("data-src", "E1"), ("data-dst", "E4")]),
+            1,
             "a crossing edge (both ends visible) stays a passthrough in v1"
         );
     }
@@ -1360,7 +1426,17 @@ mod tests {
             "an out-of-content region draws no count chip (nothing was folded)"
         );
         // And its tab reports expanded, not collapsed — the flag agrees with the (empty) fold.
-        assert!(f.contains("data-region=\"K9\" data-label=\"Ghosttail\" data-collapsed=\"false\""));
+        assert_eq!(
+            shapes_with(
+                &folded_scene(&m, &["K9"]),
+                &[
+                    ("data-region", "K9"),
+                    ("data-label", "Ghosttail"),
+                    ("data-collapsed", "false"),
+                ],
+            ),
+            1
+        );
     }
 
     // A removed-ghost region (diff overlay) must NOT fold, even if its id is in the collapse set: it
@@ -1405,32 +1481,62 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = rsvg(&m);
-        assert!(svg.contains(">Context A<"), "region label tab is missing");
+        assert!(
+            rsvg(&m).contains(">Context A<"),
+            "region label tab is missing"
+        );
         // A lone phase draws its two board-end frontiers: the leftmost is its "start", the rightmost
         // its "end". `data-col` is the clamped boundary each sits before (start at col 0; the right
         // board edge sits after the last visible column 1, so col 2).
-        assert!(svg
-            .contains("class=\"frontier\" data-region=\"K1\" data-edge=\"start\" data-col=\"0\""));
-        assert!(
-            svg.contains("class=\"frontier\" data-region=\"K1\" data-edge=\"end\" data-col=\"2\"")
-        );
+        let frontier = |edge, col| {
+            shapes_with(
+                &plain_scene(&m),
+                &[
+                    ("class", "frontier"),
+                    ("data-region", "K1"),
+                    ("data-edge", edge),
+                    ("data-col", col),
+                ],
+            )
+        };
+        assert_eq!(frontier("start", "0"), 1);
+        assert_eq!(frontier("end", "2"), 1);
         // The enclosing group carries the region's *clamped* bounds — K1's authored to_col (2) is
         // past the last visible column (elements only reach col 1), so the group reports the
         // clamped bound (1), matching the visual box exactly. Review: emitting the raw, unclamped
         // `ph.to_col` here desynced the client's drag math from the rail (which only covers
         // min_col..max_col) — a resize could target a column with no rail cell at all.
-        assert!(svg
-            .contains("class=\"region\" data-region=\"K1\" data-from-col=\"0\" data-to-col=\"1\""));
+        assert_eq!(
+            shapes_with(
+                &plain_scene(&m),
+                &[
+                    ("class", "region"),
+                    ("data-region", "K1"),
+                    ("data-from-col", "0"),
+                    ("data-to-col", "1"),
+                ],
+            ),
+            1
+        );
         // The label tab is one focusable rename target (mirrors the sticky's role=button pattern);
         // `data-collapsed` (false when expanded) is the fold-state flag the client's `z` toggle reads.
-        assert!(svg.contains(
-            "class=\"region-tab\" data-region=\"K1\" data-label=\"Context A\" \
-             data-collapsed=\"false\" role=\"button\" tabindex=\"0\""
-        ));
+        assert_eq!(
+            shapes_with(
+                &plain_scene(&m),
+                &[
+                    ("class", "region-tab"),
+                    ("data-region", "K1"),
+                    ("data-label", "Context A"),
+                    ("data-collapsed", "false"),
+                    ("role", "button"),
+                    ("tabindex", "0"),
+                ],
+            ),
+            1
+        );
         // E1 sits on the region's from-edge → a pivotal node; E2 (interior) does not add a third.
         assert_eq!(
-            svg.matches("<circle").count(),
+            rsvg(&m).matches("<circle").count(),
             1,
             "expected one pivotal node"
         );
@@ -1453,19 +1559,28 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = rsvg(&m);
         assert_eq!(
-            svg.matches("class=\"frontier\"").count(),
+            shapes_with(&plain_scene(&m), &[("class", "frontier")]),
             4,
             "3 phases → 4 frontiers, no doubled boundary"
         );
         // The K1|K2 boundary is the left region's "end" at col 2; the K2|K3 boundary K2's "end" at 4.
-        assert!(svg.contains("data-region=\"K1\" data-edge=\"end\" data-col=\"2\""));
-        assert!(svg.contains("data-region=\"K2\" data-edge=\"end\" data-col=\"4\""));
+        let boundary = |region, col| {
+            shapes_with(
+                &plain_scene(&m),
+                &[
+                    ("data-region", region),
+                    ("data-edge", "end"),
+                    ("data-col", col),
+                ],
+            )
+        };
+        assert_eq!(boundary("K1", "2"), 1);
+        assert_eq!(boundary("K2", "4"), 1);
         // No frontier is keyed to a *right* region's "start" for an internal boundary (that would be
         // the doubled edge). Only the leftmost board edge is a "start".
         assert_eq!(
-            svg.matches("data-edge=\"start\"").count(),
+            shapes_with(&plain_scene(&m), &[("data-edge", "start")]),
             1,
             "one board-left start only"
         );
@@ -1483,10 +1598,13 @@ mod tests {
             level: Level::default(),
             diff_meta: None,
         };
-        let svg = rsvg(&m);
         for col in 0..=2 {
-            assert!(
-                svg.contains(&format!("class=\"region-rail\" data-col=\"{col}\"")),
+            assert_eq!(
+                shapes_with(
+                    &plain_scene(&m),
+                    &[("class", "region-rail"), ("data-col", &col.to_string())]
+                ),
+                1,
                 "missing region-rail cell for col {col}"
             );
         }
@@ -1505,20 +1623,28 @@ mod tests {
             level: Level::default(),
             diff_meta: Some(("v1".into(), "v2".into())),
         };
-        let svg = rsvg(&m);
-        assert!(
-            svg.contains("<g opacity=\"0.45\">"),
+        assert_eq!(
+            shapes_with(&plain_scene(&m), &[("opacity", "0.45")]),
+            1,
             "removed region is not ghosted"
         );
         // The region still carries an identifying group (Stage 6: the client needs `data-region`
         // to tell regions apart even when removed), but must not offer a resize handle or a
         // rename tab for something that no longer exists.
-        assert!(
-            !svg.contains("class=\"region-edge\" data-region=\"K9\""),
+        assert_eq!(
+            shapes_with(
+                &plain_scene(&m),
+                &[("class", "region-edge"), ("data-region", "K9")]
+            ),
+            0,
             "a removed region must not offer a resize handle"
         );
-        assert!(
-            !svg.contains("class=\"region-tab\" data-region=\"K9\""),
+        assert_eq!(
+            shapes_with(
+                &plain_scene(&m),
+                &[("class", "region-tab"), ("data-region", "K9")]
+            ),
+            0,
             "a removed region must not offer a rename tab"
         );
     }
