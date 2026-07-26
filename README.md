@@ -134,7 +134,10 @@ question) → type a short note → **Save**.
 
 Structural edits are **gestures, not modal options**: rename is double-click or <kbd>F2</kbd>,
 remove is the `×` glyph or <kbd>Delete</kbd>, move is a drag or <kbd>←</kbd>/<kbd>→</kbd>, add is
-the hover `+`, connect is a drag between two stickies. The
+the hover `+`. Connect is its own affordance — drag the wire from the **dot on a selected box's
+right edge** onto another box (dropping on a box it already points at cuts that edge instead), or
+press <kbd>e</kbd>, focus the target, <kbd>Enter</kbd>. A plain drag *between* two stickies moves
+and stacks them; it does not draw an edge. The
 [keyboard reference](https://bastien-gallay.github.io/faceto/board/keyboard.html) has the full
 sheet, mirrored in the in-app `?` dialog.
 
@@ -222,9 +225,12 @@ architecture and domain invariants.
 Extracted from the daily-ops inception event-storm harness. The event-sourced spine is the current
 shape: the log is truth, the model is a projection, comments are events.
 
-Next, in order: the **conversational AI loop** (`extract` a sub-board, render **variants** as a
-diff, hand a **context pack** to a coding agent), then the **kernel/format split** that lets a
-second board format exist at all — a Scene IR, a format tag on the log, and event storming moved
-behind a thin seam. Two throwaway spikes (a bounded context canvas, a Wardley map) run first to
-find the seam rather than guess it. Also planned: a `model.json` **export** (project the log back
-to a source file). Full narrative in [ROADMAP.md](ROADMAP.md).
+Already shipped from the **conversational AI loop**: **variants** (render or serve a board against
+a sibling log as a diff) and the **context pack** (`export --format context`, above). What is left
+of that loop is `extract` — carve a semantic sub-board out of a big one.
+
+In flight next: the **kernel/format split** that lets a second board format exist at all — a Scene
+IR, a format tag on the log, and event storming moved behind a thin seam. Two throwaway spikes (a
+bounded context canvas, a Wardley map) run alongside, to find the seam rather than guess it; only
+the move of event storming itself waits on what they report. Also planned: a `model.json`
+**export** (project the log back to a source file). Full narrative in [ROADMAP.md](ROADMAP.md).
