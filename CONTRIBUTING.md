@@ -54,8 +54,9 @@ Code, commit style, and the toolchain policy — lives in
 [`CODING_STANDARDS.md`](CODING_STANDARDS.md). The essentials:
 
 - **CUPID** — Composable, Unix-philosophy, Predictable, Idiomatic, Domain-based.
-- Each module is one stage of the `JSON → Model → SVG → HTML` pipeline; keep
-  it that way (see [`AGENTS.md`](AGENTS.md) for the architecture and the domain invariants).
+- Each module is one stage of the `event-log.jsonl → replay → Model → Scene → SVG → HTML`
+  pipeline; keep it that way (see [`AGENTS.md`](AGENTS.md) for the architecture and the
+  domain invariants).
 - The model's `id` is stable identity — the comment join key and the diff key.
   Never derive identity from text or position.
 

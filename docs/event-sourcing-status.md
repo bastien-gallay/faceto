@@ -43,6 +43,10 @@ faceto board* — see [`../examples/faceto-event-sourced.model.json`](../example
 The pipeline is now `event-log.jsonl → replay → Model → SVG → HTML`. `model.json → Model` remains
 the genesis/bootstrap input and a read-only `render` source; serving always goes through the log.
 
+> *Superseded, not wrong — 2026-07-26.* Accurate when written; the pipeline has since gained a
+> `Scene` stage (`Model → Scene → SVG`, F-scene-ir #116). This document is a dated handoff record
+> and keeps its arrow. `AGENTS.md` carries the present-tense one.
+
 ### Event schema (one JSON object per line, discriminated by `"event"`)
 
 ```text

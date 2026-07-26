@@ -81,8 +81,13 @@ lockstep. For board behaviour not covered by tests, render `examples/sample.mode
 
 The pipeline is `event-log.jsonl → replay → Model → Scene → SVG → HTML`; the `model.json → Model`
 path is the genesis/bootstrap input and a read-only `render` / `lint` source (serving always goes
-through the log). Eight modules, each one stage (`json`/`model`/`lint`/`scene` are single files;
-`events`/`render`/`serve` are directories with a `mod.rs` plus one file per concern):
+through the log). **Seven Rust modules**, each one stage — `json`/`model`/`lint`/`scene` are single
+files, `events`/`render`/`serve` are directories with a `mod.rs` plus one file per concern — plus
+the client, which is not a Rust module and gets the eighth bullet below. (The count is stated this
+way on purpose — it has been wrong twice, once as "Seven" over six names and once as "Eight" over
+seven. `grep -c '^mod .*;' src/main.rs` settles it: **7**. Keep the `;` — a bare `^mod` prefix also matches
+`mod tests {` at the foot of the file and answers 8, which is how you talk yourself back into the
+off-by-one this sentence exists to prevent.)
 
 - **`src/json.rs`** — minimal JSON parser/serializer (`parse`, `to_string`, the `Json` enum with
   `get`/`as_str`/`as_f64`/`as_bool`/`as_array`). Everything else builds on this.

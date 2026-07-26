@@ -229,8 +229,10 @@ Already shipped from the **conversational AI loop**: **variants** (render or ser
 a sibling log as a diff) and the **context pack** (`export --format context`, above). What is left
 of that loop is `extract` — carve a semantic sub-board out of a big one.
 
-In flight next: the **kernel/format split** that lets a second board format exist at all — a Scene
-IR, a format tag on the log, and event storming moved behind a thin seam. Two throwaway spikes run
+The **kernel/format split** that lets a second board format exist at all is under way. Its first
+piece shipped: a **Scene IR** (2026-07-26) — the board is built as geometry and one serializer
+turns that into SVG, so a second format will not have to re-implement the drawing. Still in flight:
+a format tag on the log, and event storming moved behind a thin seam. Two throwaway spikes run
 alongside to find the seam rather than guess it: the **bounded context canvas has reported**
 (2026-07-26) — no coordinate concept leaked into the kernel, and the format tag turned out to be a
 correctness precondition rather than a later step — and a **Wardley map** is still to come. Also
