@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An edge tuple's third slot is no longer read.** `["E1", "E2", "added"]` in a `model.json` used
+  to set the internal diff status of that connection, painting it as an overlay wire on an ordinary
+  board. It was the diff channel leaking into the authored format — `docs/schema/` always said "not
+  an authored field" — and a board carrying one now renders it as a plain connection. The two-slot
+  tuple and the object form are unchanged.
+
+- **The diff is no longer part of the board type** (F-board-vs-diff, #119): comparing two boards
+  returns the board *and* a separate overlay saying what changed, instead of writing
+  `diff` / `was` / `status` annotations onto the model itself. Nothing changes to look at — the
+  rendered SVG and HTML are byte-identical, for a plain board and for a `--base` diff alike.
+
 - **Rendering goes through a Scene IR** (F-scene-ir, #116): the board is built as geometry —
   `Rect` / `Line` / `Text` / `Circle` / `Path` and a nesting `Group` — and one serializer turns
   that into SVG, instead of every draw step writing SVG strings inline. The board is unchanged to

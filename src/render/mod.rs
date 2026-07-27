@@ -4,6 +4,7 @@
 //! whole visual language are ported faithfully from the original Python harness.
 
 mod context;
+mod diff;
 mod geometry;
 mod html;
 mod mermaid;
@@ -12,6 +13,7 @@ mod svg;
 mod text;
 
 pub use context::render_context;
+pub use diff::{diff_boards, Overlay, Tone};
 pub use html::render_html;
 pub use mermaid::{render_mermaid, DEGRADATION_NOTICE};
 pub use style::lane_prefix;

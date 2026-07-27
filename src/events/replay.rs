@@ -87,8 +87,6 @@ pub fn replay(events: &[Event]) -> Model {
                         y: *y,
                         resolved: false,
                         links: links.clone(),
-                        diff: None,
-                        was: None,
                     });
                 }
             }
@@ -131,7 +129,6 @@ pub fn replay(events: &[Event]) -> Model {
                         src: src.clone(),
                         dst: dst.clone(),
                         label: label.clone(),
-                        status: None,
                     });
                 }
             }
@@ -165,7 +162,6 @@ fn add_phase(phases: &mut Vec<Phase>, id: String, label: String, from_col: i64, 
             label,
             from_col,
             to_col,
-            diff: None,
         });
     }
 }
@@ -238,7 +234,6 @@ fn split_phase(phases: &mut Vec<Phase>, id: &str, at_col: i64, new_id: String, n
                 label: new_label,
                 from_col: at_col,
                 to_col: to,
-                diff: None,
             });
         }
     }

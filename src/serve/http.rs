@@ -129,21 +129,22 @@ pub(crate) fn handle(stream: TcpStream, ctx: Arc<Ctx>) -> std::io::Result<()> {
 }
 
 /// Apply a launch-time `--base` overlay (F-variants): when a fixed baseline board is set, return the
-/// current board diffed against it (added/removed/moved/changed tagged, ready for the SVG overlay);
-/// with no baseline it is the identity — the plain current board. Returns a `Cow` so the common
-/// no-baseline path (every page load / refresh of an ordinary live board) *borrows* `current` instead
-/// of deep-cloning a whole `Model`. Pure `(&baseline, &current)`, so it unit-tests without a running
-/// server. The single seam both `route_page` and `route_board_svg` funnel through, so the first paint
-/// and every later fetch agree.
+/// union board diffed against it *plus* the overlay that says what changed (the pair `render_svg`
+/// takes); with no baseline it is the identity — the plain current board and no overlay at all.
+/// Returns a `Cow` so the common no-baseline path (every page load / refresh of an ordinary live
+/// board) *borrows* `current` instead of deep-cloning a whole `Model`. Pure `(&baseline, &current)`,
+/// so it unit-tests without a running server. The single seam both `route_page` and
+/// `route_board_svg` funnel through, so the first paint and every later fetch agree.
 fn overlay<'a>(
     baseline: &'a Option<(model::Model, (String, String))>,
     current: &'a model::Model,
-) -> std::borrow::Cow<'a, model::Model> {
+) -> (std::borrow::Cow<'a, model::Model>, Option<render::Overlay>) {
     match baseline {
         Some((base, meta)) => {
-            std::borrow::Cow::Owned(model::diff_models(base, current, meta.clone()))
+            let (board, diff) = render::diff_boards(base, current, meta.clone());
+            (std::borrow::Cow::Owned(board), Some(diff))
         }
-        None => std::borrow::Cow::Borrowed(current),
+        None => (std::borrow::Cow::Borrowed(current), None),
     }
 }
 
@@ -152,8 +153,8 @@ fn overlay<'a>(
 fn route_page(out: &mut TcpStream, ctx: &Ctx) -> std::io::Result<()> {
     match ctx.current() {
         Ok((_v, model)) => {
-            let board = overlay(&ctx.baseline, &model);
-            let svg = render::render_svg(&board, &render::View::none());
+            let (board, diff) = overlay(&ctx.baseline, &model);
+            let svg = render::render_svg(&board, &render::View::none(), diff.as_ref());
             // A launch-time `--base` makes this a diff overlay → render the page read-only so no
             // edit gesture lands on the ghost-carrying diff DOM.
             let html = render::render_html(&svg, &board.title, ctx.baseline.is_some());
@@ -178,8 +179,8 @@ fn route_board_svg(out: &mut TcpStream, ctx: &Ctx, query: &str) -> std::io::Resu
             // *is* the given file, not "since you last looked". The collapse `View` still composes
             // (diff → merged → render_svg(merged, view)), exactly as the ring path below does.
             if ctx.baseline.is_some() {
-                let merged = overlay(&ctx.baseline, &model);
-                let svg = render::render_svg(&merged, &view) + "\n";
+                let (merged, diff) = overlay(&ctx.baseline, &model);
+                let svg = render::render_svg(&merged, &view, diff.as_ref()) + "\n";
                 return send(out, 200, "image/svg+xml", svg.as_bytes(), &[]);
             }
             let base = query_get(query, "base");
@@ -188,8 +189,9 @@ fn route_board_svg(out: &mut TcpStream, ctx: &Ctx, query: &str) -> std::io::Resu
                 .filter(|b| *b != version)
                 .and_then(|b| ctx.cached(b));
             if let (Some(old), Some(base)) = (old, &base) {
-                let merged = model::diff_models(&old, &model, ("last seen".into(), "now".into()));
-                let svg = render::render_svg(&merged, &view) + "\n";
+                let (merged, diff) =
+                    render::diff_boards(&old, &model, ("last seen".into(), "now".into()));
+                let svg = render::render_svg(&merged, &view, Some(&diff)) + "\n";
                 send(
                     out,
                     200,
@@ -198,7 +200,7 @@ fn route_board_svg(out: &mut TcpStream, ctx: &Ctx, query: &str) -> std::io::Resu
                     &[("X-Diff-Base", base.as_str())],
                 )
             } else {
-                let svg = render::render_svg(&model, &view) + "\n";
+                let svg = render::render_svg(&model, &view, None) + "\n";
                 send(out, 200, "image/svg+xml", svg.as_bytes(), &[])
             }
         }
@@ -419,10 +421,10 @@ mod tests {
             ]}"#,
         );
 
-        // No baseline → the plain current board, untouched (no diff verdicts).
-        let plain = overlay(&None, &current);
-        assert!(plain.diff_meta.is_none());
-        assert!(plain.elements.iter().all(|e| e.diff.is_none()));
+        // No baseline → the plain current board, untouched, and no overlay at all.
+        let (plain, none) = overlay(&None, &current);
+        assert!(none.is_none());
+        assert_eq!(*plain, current);
 
         // With a baseline (E2 is new vs the base) → a diff overlay: E2 is tagged `added`.
         let base = model_of(
@@ -431,10 +433,11 @@ mod tests {
             ]}"#,
         );
         let baseline = Some((base, ("before".to_string(), "after".to_string())));
-        let merged = overlay(&baseline, &current);
-        assert!(merged.diff_meta.is_some());
-        let e2 = merged.elements.iter().find(|e| e.id == "E2").unwrap();
-        assert_eq!(e2.diff.as_deref(), Some("added"));
+        let (merged, diff) = overlay(&baseline, &current);
+        let diff = diff.expect("a baseline produces an overlay");
+        assert_eq!(diff.meta, ("before".to_string(), "after".to_string()));
+        assert_eq!(diff.count(render::Tone::Added), 1);
+        assert!(merged.elements.iter().any(|e| e.id == "E2"));
     }
 
     #[test]

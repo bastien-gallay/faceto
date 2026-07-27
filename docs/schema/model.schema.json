@@ -110,18 +110,15 @@
       }
     },
     "edge": {
-      "description": "A directed edge, in either form: a positional tuple `[src, dst]` / `[src, dst, status]`, OR an object `{src, dst, label}` (F-element-links: the object form carries an authored `label`). `src` and `dst` are element ids. (Note: in the EVENT LOG, edges are objects `{src, dst, label?}` — see event-log-line.schema.json.)",
+      "description": "A directed edge, in either form: a positional tuple `[src, dst]`, OR an object `{src, dst, label}` (F-element-links: the object form carries an authored `label`). `src` and `dst` are element ids. (Note: in the EVENT LOG, edges are objects `{src, dst, label?}` — see event-log-line.schema.json.)",
       "oneOf": [
         {
           "type": "array",
-          "description": "Tuple form. A tuple with fewer than 2 string ids is dropped on load. The optional third slot is the internal diff `status`, not an authored field.",
+          "description": "Tuple form. A tuple with fewer than 2 string ids is dropped on load; further slots are ignored.",
           "minItems": 2,
-          "maxItems": 3,
-          "items": false,
           "prefixItems": [
             { "type": "string", "description": "src — source element id" },
-            { "type": "string", "description": "dst — destination element id" },
-            { "type": "string", "description": "internal diff status (added/removed/…), written by diff_models — not an authored field" }
+            { "type": "string", "description": "dst — destination element id" }
           ]
         },
         {

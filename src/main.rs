@@ -191,7 +191,7 @@ fn cmd_render(args: &RenderArgs) {
     match &args.base {
         // Plain render: the board as-is.
         None => {
-            let svg = render::render_svg(&model, &render::View::none());
+            let svg = render::render_svg(&model, &render::View::none(), None);
             let html = render::render_html(&svg, &model.title, false);
             let (svg_path, html_path) = write_board_files(&dir, &stem, &svg, &html);
             println!(
@@ -230,7 +230,7 @@ fn cmd_render(args: &RenderArgs) {
     }
 }
 
-/// The whole render surface of F-variants' cross-file diff: `diff_models(base, new)` then SVG + HTML,
+/// The whole render surface of F-variants' cross-file diff: `diff_boards(base, new)` then SVG + HTML,
 /// plus a one-line tally of the change (added/removed/moved/changed element counts) for the summary.
 /// Pure `(Model, Model) -> (svg, html, tally)` — no disk — so it unit-tests directly. `meta` labels
 /// the two sides for the on-board legend and tooltips (`base` = "was", `new` = "now").
@@ -239,19 +239,16 @@ fn render_diff(
     new: &model::Model,
     meta: (String, String),
 ) -> (String, String, String) {
-    let merged = model::diff_models(base, new, meta);
-    let (mut added, mut removed, mut moved, mut changed) = (0, 0, 0, 0);
-    for e in &merged.elements {
-        match e.diff.as_deref() {
-            Some("added") => added += 1,
-            Some("removed") => removed += 1,
-            Some("moved") => moved += 1,
-            Some("changed") => changed += 1,
-            _ => {}
-        }
-    }
-    let tally = format!("{added} added, {removed} removed, {moved} moved, {changed} changed");
-    let svg = render::render_svg(&merged, &render::View::none());
+    use render::Tone;
+    let (merged, diff) = render::diff_boards(base, new, meta);
+    let tally = format!(
+        "{} added, {} removed, {} moved, {} changed",
+        diff.count(Tone::Added),
+        diff.count(Tone::Removed),
+        diff.count(Tone::Moved),
+        diff.count(Tone::Changed),
+    );
+    let svg = render::render_svg(&merged, &render::View::none(), Some(&diff));
     // A cross-file diff is a review artifact → render read-only (variant = true).
     let html = render::render_html(&svg, &merged.title, true);
     (svg, html, tally)
