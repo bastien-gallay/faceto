@@ -358,11 +358,11 @@ directories with a `mod.rs` plus one file per concern; the rule is unchanged.
 ```text
 src/
 ├── json.rs       # hand-written JSON parser/serializer (the Json enum)
-├── model.rs      # typed board: Model/Element/Edge/Phase, from_json, diff_models
+├── model.rs      # typed board: Model/Element/Edge/Phase, from_json (a Model is always a board)
 ├── lint.rs       # ES-grammar lint: lint(&Model) → Vec<Finding>, warn-only, pure (level-aware)
 ├── scene.rs      # the Scene IR: geometric primitives + the one render_scene serializer
 ├── events/       # event log: Event enum, replay() → Model, from_model() genesis
-├── render/       # pure layout + the board's visual language; board_scene, render_html
+├── render/       # pure layout + the board's visual language; board_scene, render_html, diff overlay
 ├── serve/        # std-only HTTP server (TcpListener + threads)
 ├── template.html # the client's thin shell (placeholders), embedded via include_str! in render/html.rs
 ├── client/       # the client's CSS + JS modules, concat!'d into the shell at build (no bundler)

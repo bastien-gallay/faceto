@@ -19,7 +19,7 @@ instrument. These *constrain* the design (no serde, no autolayout crate) rather 
 primitives and the one `render_scene` serializer, and `render::board_scene` turns a board into a
 `Scene` (`F-scene-ir` #116, PR #136). And the board/overlay split, one day later: `render::diff.rs`
 holds `diff_boards -> (Model, Overlay)` and the closed verdict enums, so a `Model` is now always a
-board (`F-board-vs-diff` #119). Nothing else in this note is code.
+board (`F-board-vs-diff` #119, PR #138). Nothing else in this note is code.
 
 **One line of the type-discipline section is now stale by success** — the third bullet ("Separate
 `Board` from a diff/overlay type") describes work that is done. It is left standing because the
@@ -52,6 +52,10 @@ board (`F-board-vs-diff` #119). Nothing else in this note is code.
   ordering. Read them as history, not as instructions.
 - `docs/notes/f-spike-canvas.md` forecasts that the Scene IR deletes 766 lines of client geometry.
   It did not — the note is pinned to a commit and never rebased, by design.
+- The data-Scene decision's second driver names `diff_meta`, and `git grep diff_meta` now returns
+  nothing. The field was deleted by #119, which is the driver's own goal arriving one step early:
+  the diff stopped being a `Model` field before it started composing two `Scene`s. The driver is
+  the record of why the IR was built, not a description of today's code.
 
 **Resuming here:**
 
@@ -150,6 +154,7 @@ they are purely ES is exactly what makes the boundary real.
 | `model.rs` | the stable-id **diff pattern** (`join_by_id`) | `Model` / `Element` / `Edge` / `Phase`, `normalize`, `is_pivotal`, `y_key`, `resolve_region_id`, `lane_left_col`, `diff_models` |
 | `render/` | `svg` **primitives** + the Scene serializer | `style` (8 lanes/colours), `geometry` (col = x timeline), `svg` `draw_*` (sticky/region/frontier) |
 | *as built* | the primitives and the serializer went **further out** than this row: they are `src/scene.rs`, a sibling of `render/`, not a kernel half of it | `render/` kept every ES word — lane, col, sticky, region, frontier — and gained `board_scene`, the `(Model, View) -> Scene` builder |
+| *as built* | the stable-id join is **not** in `model.rs` any more: F-board-vs-diff (#119, PR #138) moved it to `render/diff.rs` as `diff_boards -> (Model, Overlay)`. The row's instinct was right — the *pattern* is the generic half — but it generalises from `render/`, not from the domain type | `model.rs` kept `Model` / `Element` / `Edge` / `Phase`, `normalize`, `is_pivotal`, `y_key`, `resolve_region_id`, `lane_left_col` — and nothing that knows what a diff is |
 | `serve.rs` | transport: listener/threads, request parse + caps, `send`, `fnv12`, cache ring, appends mutex, mint *mechanism* | route command→event mapping, mint *prefix table* |
 | `lint.rs` | a `Finding` shape + the serve-sidecar merge | every rule (ES grammar) |
 
@@ -292,8 +297,9 @@ separate refactor:
   values. One boundary clamp, none downstream — parse, don't validate.
 - **Separate `Board` from a diff/overlay type.** ~~Today `Model` carries `diff` / `was` /
   `status` optionals, so one type encodes both "the board" and "a diff overlay" — two states
-  crammed into one product type.~~ **Done 2026-07-27 (#119):** `render::diff_boards` returns the
-  union board and an `Overlay` of closed verdict enums, which `render_svg` takes beside the board.
+  crammed into one product type.~~ **Done 2026-07-27 (#119, PR #138):** `render::diff_boards`
+  returns the union board and an `Overlay` of closed verdict enums, which `render_svg` takes beside
+  the board.
   The argument still holds for the next format — the diff is a render concern, not a domain
   fact — which is why the bullet stays.
 - **Parse, don't validate, at the command boundary.** `serve`'s `v.get_str("kind")` matched
