@@ -117,8 +117,10 @@ off-by-one this sentence exists to prevent.)
 - **`src/render/`** — pure layout + the board's visual language (`render_svg` builds a `Scene`;
   `board_scene` is the `(Model, View) -> Scene` builder) and HTML wrapping (`render_html`). Holds
   the lane order (`LANES`), the colour grammar (`colour`), geometry constants (`COL_W`, `LANE_H`,
-  etc.), label wrapping, the serif nameplate, and diff styling. It no longer writes SVG text —
-  `scene` does, once, for every format.
+  etc.), label wrapping, the serif nameplate, and diff styling. It also owns the **diff overlay**
+  (`diff.rs`: `diff_boards -> (Model, Overlay)` and the verdict enums) — comparing two boards is a
+  render concern, so no board type carries a diff. It no longer writes SVG text — `scene` does,
+  once, for every format.
 - **`src/serve/`** — std-only HTTP server, **event-log-only** (F-auto-genesis killed legacy
   mode: `main` resolves any `model.json` to its sibling `<name>.event-log.jsonl` via `serve_log_path`
   before calling `serve`, auto-running genesis if no log exists yet, so the server only ever

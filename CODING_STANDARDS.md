@@ -77,6 +77,17 @@ Rules of thumb:
   construction. Both are defensible; picking one without noticing which is
   not. F-scene-ir (PR #136) chose the structural net for good reasons and
   still landed as `refactor`, which by the rule above it was not.
+  F-board-vs-diff (PR #138) is the other side: the board/overlay split kept
+  the byte-identical net, output did not move, and the commit was a tidy in
+  fact and not only in name.
+- **Deleting a field can delete an input path.** A type split reads as pure
+  tidying right up to the moment you ask where the field was *written from*.
+  `Edge.status` was the diff overlay's internal channel — and `edge_from` also
+  filled it from an authored `model.json` tuple's third slot, so removing the
+  field silently removed a documented input. Before deleting a field, grep the
+  parse boundary (`from_json`, `replay`, the route handlers) for a write to it;
+  if a user's file can reach it, that removal is behavioural and lands in its
+  own commit, ahead of the tidy (PR #138).
 
 Acceptable commit shapes:
 
@@ -358,11 +369,11 @@ directories with a `mod.rs` plus one file per concern; the rule is unchanged.
 ```text
 src/
 ├── json.rs       # hand-written JSON parser/serializer (the Json enum)
-├── model.rs      # typed board: Model/Element/Edge/Phase, from_json, diff_models
+├── model.rs      # typed board: Model/Element/Edge/Phase, from_json (a Model is always a board)
 ├── lint.rs       # ES-grammar lint: lint(&Model) → Vec<Finding>, warn-only, pure (level-aware)
 ├── scene.rs      # the Scene IR: geometric primitives + the one render_scene serializer
 ├── events/       # event log: Event enum, replay() → Model, from_model() genesis
-├── render/       # pure layout + the board's visual language; board_scene, render_html
+├── render/       # pure layout + the board's visual language; board_scene, render_html, diff overlay
 ├── serve/        # std-only HTTP server (TcpListener + threads)
 ├── template.html # the client's thin shell (placeholders), embedded via include_str! in render/html.rs
 ├── client/       # the client's CSS + JS modules, concat!'d into the shell at build (no bundler)
