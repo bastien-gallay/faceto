@@ -216,17 +216,18 @@ fn element_from(j: &Json) -> Option<Element> {
     })
 }
 
-/// An edge is a positional tuple `[src, dst]` / `[src, dst, status]` **or** an object
-/// `{src, dst, label}` (F-element-links: the object form carries the authored `label`; the tuple's
-/// third slot is the internal diff `status`, not an authored field). The object form is the seam
-/// F-typed-edges extends with a future `type`.
+/// An edge is a positional tuple `[src, dst]` **or** an object `{src, dst, label}`
+/// (F-element-links: the object form carries the authored `label`). Extra tuple slots are ignored:
+/// the third one used to seed the internal diff `status`, which let an authored file paint an
+/// overlay wire on an ordinary board — the diff channel is `diff_models`' to write, never the
+/// model file's. The object form is the seam F-typed-edges extends with a future `type`.
 fn edge_from(j: &Json) -> Option<Edge> {
     if let Some(a) = j.as_array() {
         return Some(Edge {
             src: a.first()?.as_str()?.to_string(),
             dst: a.get(1)?.as_str()?.to_string(),
             label: None,
-            status: a.get(2).and_then(|v| v.as_str()).map(String::from),
+            status: None,
         });
     }
     Some(Edge {
@@ -772,6 +773,20 @@ mod tests {
         };
         assert_eq!(status("E1", "E3"), Some("unchanged".into()));
         assert_eq!(status("E1", "E5"), Some("added".into()));
+    }
+
+    // The tuple's third slot was the internal diff channel, reachable from an authored file: a
+    // hand-written `["E1","E3","added"]` painted a green overlay wire on a plain board. It is read
+    // no more — a tuple is two ids and nothing else.
+    #[test]
+    fn an_edge_tuple_carries_no_diff_status() {
+        let m = model_of(r#"{"edges":[["E1","E3","added"],["E1","E5"]]}"#);
+        assert_eq!(m.edges.len(), 2);
+        assert!(m.edges.iter().all(|e| e.status.is_none()));
+        assert_eq!(
+            (m.edges[0].src.as_str(), m.edges[0].dst.as_str()),
+            ("E1", "E3")
+        );
     }
 
     #[test]
