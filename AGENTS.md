@@ -68,7 +68,7 @@ A local `.pre-commit-config.yaml` runs these gates automatically — install it 
 `uvx pre-commit install` (see [`CONTRIBUTING.md`](CONTRIBUTING.md)).
 
 Tests are in-file under `#[cfg(test)] mod tests` (json parsing/roundtrip, the id-keyed
-`diff_models`, SVG label layout, the event log's replay / model round-trip / `compact`, server-side
+`diff_boards`, SVG label layout, the event log's replay / model round-trip / `compact`, server-side
 id minting, and the server's hash/date/concurrency helpers). CI (`.github/workflows/ci.yml`) runs fmt, clippy + test (ubuntu on PRs, macOS added on `main`),
 markdownlint, actionlint, a justfile lint, and the runtime-only dependency firewall — a `zero
 dependencies` job (`cargo tree -e normal` is faceto-only; dev-deps like `proptest` are allowed)
@@ -99,8 +99,9 @@ off-by-one this sentence exists to prevent.)
   event kinds are skipped and unknown fields ignored on read (forward compatibility) — and a
   renamed event *kind* is migrated forward at the `upcast` read-path seam (backward compatibility;
   fields evolve additively, since a renamed field is indistinguishable from a new one by shape).
-- **`src/model.rs`** — the typed board (`Model`, `Element`, `Edge`, `Phase`), `from_json`/`load`,
-  and `diff_models`. This is where the board's domain rules live.
+- **`src/model.rs`** — the typed board (`Model`, `Element`, `Edge`, `Phase`) and `from_json`/`load`.
+  This is where the board's domain rules live. A `Model` is *always* a board: the diff overlay is
+  no longer optionals on it (F-board-vs-diff) but a separate type in `render`.
 - **`src/lint.rs`** — ES-grammar lint. `lint(&Model) -> Vec<Finding>`, a pure graph pass (no IO,
   no clocks) that flags event-storming defects (event with no producer, policy with no input /
   output, non-terminal event with no outbound edge; plus, only when the board declares
@@ -158,10 +159,12 @@ come from violating them:
   `aggregate`, `event`, `policy`, `readmodel`, `external`, `hotspot`. Keep `LANES` (`src/render/`) and
   this set in sync.
 
-`diff_models` joins old vs new on `id` and tags each element `added` / `removed` / `changed`
-(label differs) / `moved` (col, type, or in-lane `y` key differs — compared through
-`model::y_key`, so "no y" and the neutral `0.5` are one state) / `unchanged`; layout follows
-the new side.
+`render::diff_boards` joins old vs new on `id` and returns **two** values: the union board (a
+plain `Model` — the new side's layout plus the old side's ghosts) and an `Overlay` judging each
+element `added` / `removed` / `changed` (label differs) / `moved` (col, type, or in-lane `y` key
+differs — compared through `model::y_key`, so "no y" and the neutral `0.5` are one state) /
+`unchanged`. Layout follows the new side. The overlay is a *render* argument, passed beside the
+board exactly like the `View` lens — never a field on it, never in the log.
 
 ### Event-sourced spine (do not break these)
 

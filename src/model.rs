@@ -5,7 +5,6 @@
 //! (never text or position) — that is the contract the comment sidecar and the diff rely on.
 
 use crate::json::{self, Json};
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// The board's declared modeling granularity, which parameterises lint strictness (never
@@ -51,16 +50,6 @@ pub struct Phase {
     pub label: String,
     pub from_col: i64,
     pub to_col: i64,
-    // diff annotation (not in the file): added / removed / renamed / resized / unchanged.
-    pub diff: Option<String>,
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub struct Was {
-    pub label: String,
-    pub col: Option<i64>,
-    pub kind: String,
-    pub y: Option<f64>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -79,9 +68,6 @@ pub struct Element {
     /// never identity, never a lane. Surfaced as clickable chips in the click modal, not painted
     /// into the calm SVG board. Empty when the element carries none.
     pub links: Vec<String>,
-    // diff annotations (not in the file)
-    pub diff: Option<String>,
-    pub was: Option<Was>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -90,10 +76,8 @@ pub struct Edge {
     pub dst: String,
     /// Optional human label for the connection (F-element-links) — drawn at the edge midpoint so
     /// connection kinds stop reading identically. Shares the `Edge` seam with F-typed-edges (a
-    /// future additive `type`); touch it once. Distinct from `status`, which is the internal
-    /// diff-overlay channel, not an authored field.
+    /// future additive `type`); touch it once.
     pub label: Option<String>,
-    pub status: Option<String>,
 }
 
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -105,7 +89,6 @@ pub struct Model {
     pub phases: Vec<Phase>,
     pub elements: Vec<Element>,
     pub edges: Vec<Edge>,
-    pub diff_meta: Option<(String, String)>,
 }
 
 pub fn load(path: &Path) -> Result<Model, String> {
@@ -154,7 +137,6 @@ pub fn from_json(j: &Json) -> Model {
         phases,
         elements,
         edges,
-        diff_meta: None,
     }
 }
 
@@ -170,7 +152,6 @@ fn phase_from(j: &Json, max_region: &mut u32) -> Option<Phase> {
         label,
         from_col,
         to_col,
-        diff: None,
     })
 }
 
@@ -211,30 +192,26 @@ fn element_from(j: &Json) -> Option<Element> {
         y: j.get("y").and_then(|v| v.as_f64()),
         resolved: j.get("resolved").and_then(|v| v.as_bool()).unwrap_or(false),
         links: links_from(j.get("links")),
-        diff: None,
-        was: None,
     })
 }
 
 /// An edge is a positional tuple `[src, dst]` **or** an object `{src, dst, label}`
 /// (F-element-links: the object form carries the authored `label`). Extra tuple slots are ignored:
 /// the third one used to seed the internal diff `status`, which let an authored file paint an
-/// overlay wire on an ordinary board — the diff channel is `diff_models`' to write, never the
-/// model file's. The object form is the seam F-typed-edges extends with a future `type`.
+/// overlay wire on an ordinary board — the diff channel belongs to `render`, never to the model
+/// file. The object form is the seam F-typed-edges extends with a future `type`.
 fn edge_from(j: &Json) -> Option<Edge> {
     if let Some(a) = j.as_array() {
         return Some(Edge {
             src: a.first()?.as_str()?.to_string(),
             dst: a.get(1)?.as_str()?.to_string(),
             label: None,
-            status: None,
         });
     }
     Some(Edge {
         src: j.get("src")?.as_str()?.to_string(),
         dst: j.get("dst")?.as_str()?.to_string(),
         label: j.get("label").and_then(|v| v.as_str()).map(String::from),
-        status: None,
     })
 }
 
@@ -312,135 +289,6 @@ pub fn is_pivotal(m: &Model, e: &Element) -> bool {
     e.kind == "event"
         && e.col
             .is_some_and(|c| m.phases.iter().any(|p| c == p.from_col || c == p.to_col))
-}
-
-/// Merge two models into one annotated model: every element/edge tagged
-/// added / removed / changed / moved / unchanged, keyed on stable `id` (never text or
-/// position). Layout follows the *new* side (`b`); removed elements keep their old slot.
-pub fn diff_models(a: &Model, b: &Model, meta: (String, String)) -> Model {
-    let ea: HashMap<&str, &Element> = a.elements.iter().map(|e| (e.id.as_str(), e)).collect();
-    let eb_ids: HashSet<&str> = b.elements.iter().map(|e| e.id.as_str()).collect();
-
-    let mut elements: Vec<Element> = Vec::new();
-    for e in &b.elements {
-        let mut el = e.clone();
-        match ea.get(e.id.as_str()) {
-            None => el.diff = Some("added".into()),
-            Some(old) => {
-                if old.label != e.label {
-                    el.diff = Some("changed".into());
-                    el.was = Some(Was {
-                        label: old.label.clone(),
-                        col: old.col,
-                        kind: old.kind.clone(),
-                        y: old.y,
-                    });
-                } else if old.col != e.col || old.kind != e.kind || y_key(old.y) != y_key(e.y) {
-                    // `y` counts: a re-placement within the lane is a position change the
-                    // since-you-last-looked overlay must report, same as a col shift. Compared
-                    // through `y_key`, so "no y" vs the neutral 0.5 (an undone placement) never
-                    // reads as a phantom move — only a key the renderer would order differently.
-                    el.diff = Some("moved".into());
-                    el.was = Some(Was {
-                        label: old.label.clone(),
-                        col: old.col,
-                        kind: old.kind.clone(),
-                        y: old.y,
-                    });
-                } else {
-                    el.diff = Some("unchanged".into());
-                }
-            }
-        }
-        elements.push(el);
-    }
-    for e in &a.elements {
-        if !eb_ids.contains(e.id.as_str()) {
-            let mut el = e.clone();
-            el.diff = Some("removed".into());
-            elements.push(el);
-        }
-    }
-
-    let sa: HashSet<(String, String)> = a
-        .edges
-        .iter()
-        .map(|e| (e.src.clone(), e.dst.clone()))
-        .collect();
-    let sb: HashSet<(String, String)> = b
-        .edges
-        .iter()
-        .map(|e| (e.src.clone(), e.dst.clone()))
-        .collect();
-    let mut edges: Vec<Edge> = Vec::new();
-    for e in &b.edges {
-        let status = if sa.contains(&(e.src.clone(), e.dst.clone())) {
-            "unchanged"
-        } else {
-            "added"
-        };
-        edges.push(Edge {
-            src: e.src.clone(),
-            dst: e.dst.clone(),
-            label: e.label.clone(),
-            status: Some(status.into()),
-        });
-    }
-    for e in &a.edges {
-        if !sb.contains(&(e.src.clone(), e.dst.clone())) {
-            edges.push(Edge {
-                src: e.src.clone(),
-                dst: e.dst.clone(),
-                label: e.label.clone(),
-                status: Some("removed".into()),
-            });
-        }
-    }
-
-    Model {
-        title: if !b.title.is_empty() {
-            b.title.clone()
-        } else {
-            a.title.clone()
-        },
-        // A diff is a render-only artifact (lint never runs on it); carry the newer board's level.
-        level: b.level,
-        phases: diff_phases(a, b),
-        elements,
-        edges,
-        diff_meta: Some(meta),
-    }
-}
-
-/// Diff the regions of two boards, keyed on stable `id` (mirroring the element diff): each tagged
-/// added / removed / renamed (label differs) / resized (bounds differ) / unchanged. Layout follows
-/// the **new** side (`b`); a region only in the old side keeps its slot, tagged removed and appended.
-fn diff_phases(a: &Model, b: &Model) -> Vec<Phase> {
-    let old: HashMap<&str, &Phase> = a.phases.iter().map(|p| (p.id.as_str(), p)).collect();
-    let new_ids: HashSet<&str> = b.phases.iter().map(|p| p.id.as_str()).collect();
-
-    let mut phases: Vec<Phase> = Vec::new();
-    for p in &b.phases {
-        let mut ph = p.clone();
-        ph.diff = Some(
-            match old.get(p.id.as_str()) {
-                None => "added",
-                Some(o) if o.label != p.label => "renamed",
-                Some(o) if o.from_col != p.from_col || o.to_col != p.to_col => "resized",
-                Some(_) => "unchanged",
-            }
-            .into(),
-        );
-        phases.push(ph);
-    }
-    for p in &a.phases {
-        if !new_ids.contains(p.id.as_str()) {
-            let mut ph = p.clone();
-            ph.diff = Some("removed".into());
-            phases.push(ph);
-        }
-    }
-    phases
 }
 
 #[cfg(test)]
@@ -587,21 +435,18 @@ mod tests {
                 label: "A".into(),
                 from_col: 0,
                 to_col: 3,
-                diff: None,
             },
             Phase {
                 id: "K3".into(),
                 label: "C".into(),
                 from_col: 8,
                 to_col: 10,
-                diff: None,
             },
             Phase {
                 id: "K2".into(),
                 label: "B".into(),
                 from_col: 2,
                 to_col: 5,
-                diff: None,
             },
         ];
         normalize(&mut ps);
@@ -649,36 +494,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn diff_tags_regions_by_stable_id() {
-        let a = model_of(
-            r#"{"phases":[
-                {"id":"K1","label":"Same","fromCol":0,"toCol":2},
-                {"id":"K2","label":"Old","fromCol":3,"toCol":4},
-                {"id":"K3","label":"Grows","fromCol":5,"toCol":6},
-                {"id":"K4","label":"GoneSoon","fromCol":7,"toCol":8}]}"#,
-        );
-        let b = model_of(
-            r#"{"phases":[
-                {"id":"K1","label":"Same","fromCol":0,"toCol":2},
-                {"id":"K2","label":"New","fromCol":3,"toCol":4},
-                {"id":"K3","label":"Grows","fromCol":5,"toCol":9},
-                {"id":"K5","label":"BrandNew","fromCol":10,"toCol":11}]}"#,
-        );
-        let d = diff_models(&a, &b, ("old".into(), "new".into()));
-        let tag = |id: &str| {
-            d.phases
-                .iter()
-                .find(|p| p.id == id)
-                .and_then(|p| p.diff.as_deref())
-        };
-        assert_eq!(tag("K1"), Some("unchanged"));
-        assert_eq!(tag("K2"), Some("renamed"), "label differs");
-        assert_eq!(tag("K3"), Some("resized"), "bounds differ");
-        assert_eq!(tag("K4"), Some("removed"));
-        assert_eq!(tag("K5"), Some("added"));
-    }
-
     // The lane-title `+` aligns a lane's *first* element to the board's existing left column (no
     // shift of the other lanes), but a *prepend* into a non-empty lane marches one column further
     // left (repeat-safe). Empty board falls back to 0.
@@ -707,82 +522,14 @@ mod tests {
         assert_eq!(lane_left_col(&m2, "event"), 1, "repeat marches left");
     }
 
-    fn tag<'a>(m: &'a Model, id: &str) -> Option<&'a str> {
-        m.elements
-            .iter()
-            .find(|e| e.id == id)
-            .and_then(|e| e.diff.as_deref())
-    }
-
-    // The whole comment/diff contract hinges on `id` being identity, never text
-    // or position. This pins each diff verdict to the right join.
-    #[test]
-    fn diff_tags_elements_by_stable_id() {
-        let a = model_of(
-            r#"{"elements":[
-                {"id":"E1","type":"event","label":"Created","col":1},
-                {"id":"E2","type":"event","label":"GoneSoon","col":2},
-                {"id":"E3","type":"event","label":"Same","col":3},
-                {"id":"E4","type":"event","label":"MoveMe","col":4}
-            ]}"#,
-        );
-        let b = model_of(
-            r#"{"elements":[
-                {"id":"E1","type":"event","label":"Created v2","col":1},
-                {"id":"E3","type":"event","label":"Same","col":3},
-                {"id":"E4","type":"event","label":"MoveMe","col":5},
-                {"id":"E5","type":"event","label":"BrandNew","col":6}
-            ]}"#,
-        );
-        let d = diff_models(&a, &b, ("old".into(), "new".into()));
-        assert_eq!(tag(&d, "E1"), Some("changed"));
-        assert_eq!(tag(&d, "E2"), Some("removed"));
-        assert_eq!(tag(&d, "E3"), Some("unchanged"));
-        assert_eq!(tag(&d, "E4"), Some("moved"));
-        assert_eq!(tag(&d, "E5"), Some("added"));
-    }
-
-    #[test]
-    fn changed_element_remembers_its_former_label() {
-        let a = model_of(r#"{"elements":[{"id":"E1","type":"event","label":"Old","col":1}]}"#);
-        let b = model_of(r#"{"elements":[{"id":"E1","type":"event","label":"New","col":1}]}"#);
-        let d = diff_models(&a, &b, ("old".into(), "new".into()));
-        let e1 = d.elements.iter().find(|e| e.id == "E1").unwrap();
-        assert_eq!(e1.was.as_ref().map(|w| w.label.as_str()), Some("Old"));
-    }
-
-    // Same label, different lane: a relocation, not an edit.
-    #[test]
-    fn changing_type_alone_reads_as_moved() {
-        let a = model_of(r#"{"elements":[{"id":"E1","type":"event","label":"X","col":1}]}"#);
-        let b = model_of(r#"{"elements":[{"id":"E1","type":"command","label":"X","col":1}]}"#);
-        let d = diff_models(&a, &b, ("old".into(), "new".into()));
-        assert_eq!(tag(&d, "E1"), Some("moved"));
-    }
-
-    #[test]
-    fn edges_diff_on_their_endpoints() {
-        let a = model_of(r#"{"elements":[],"edges":[["E1","E3"]]}"#);
-        let b = model_of(r#"{"elements":[],"edges":[["E1","E3"],["E1","E5"]]}"#);
-        let d = diff_models(&a, &b, ("old".into(), "new".into()));
-        let status = |s: &str, t: &str| {
-            d.edges
-                .iter()
-                .find(|e| e.src == s && e.dst == t)
-                .and_then(|e| e.status.clone())
-        };
-        assert_eq!(status("E1", "E3"), Some("unchanged".into()));
-        assert_eq!(status("E1", "E5"), Some("added".into()));
-    }
-
     // The tuple's third slot was the internal diff channel, reachable from an authored file: a
     // hand-written `["E1","E3","added"]` painted a green overlay wire on a plain board. It is read
     // no more — a tuple is two ids and nothing else.
     #[test]
-    fn an_edge_tuple_carries_no_diff_status() {
+    fn an_edge_tuple_is_two_ids_and_nothing_else() {
         let m = model_of(r#"{"edges":[["E1","E3","added"],["E1","E5"]]}"#);
         assert_eq!(m.edges.len(), 2);
-        assert!(m.edges.iter().all(|e| e.status.is_none()));
+        assert!(m.edges.iter().all(|e| e.label.is_none()));
         assert_eq!(
             (m.edges[0].src.as_str(), m.edges[0].dst.as_str()),
             ("E1", "E3")
@@ -798,29 +545,6 @@ mod tests {
         assert!(!e.resolved);
         assert!(e.detail.is_none());
         assert!(e.y.is_none());
-    }
-
-    // F-2d-placement: `y` reads from the file and a y-only re-placement is a *position* change —
-    // the overlay must report it as moved, keyed on the same stable id as every other verdict.
-    #[test]
-    fn a_y_only_change_reads_as_moved() {
-        let a = model_of(r#"{"elements":[{"id":"E1","type":"event","label":"X","col":1}]}"#);
-        let b =
-            model_of(r#"{"elements":[{"id":"E1","type":"event","label":"X","col":1,"y":0.75}]}"#);
-        assert_eq!(b.elements[0].y, Some(0.75), "y reads from the file");
-        let d = diff_models(&a, &b, ("old".into(), "new".into()));
-        assert_eq!(tag(&d, "E1"), Some("moved"));
-    }
-
-    // The diff compares y through `y_key`, where "no y" and the neutral 0.5 are one state (an
-    // undone placement posts 0.5) — the overlay must not announce a phantom "repositioned".
-    #[test]
-    fn a_neutral_y_vs_no_y_reads_as_unchanged() {
-        let a = model_of(r#"{"elements":[{"id":"E1","type":"event","label":"X","col":1}]}"#);
-        let b =
-            model_of(r#"{"elements":[{"id":"E1","type":"event","label":"X","col":1,"y":0.5}]}"#);
-        let d = diff_models(&a, &b, ("old".into(), "new".into()));
-        assert_eq!(tag(&d, "E1"), Some("unchanged"));
     }
 
     #[test]

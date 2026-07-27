@@ -13,20 +13,29 @@ notes, which record the three places reality diverged.
 **Ethos guardrails (unchanged):** zero external dependencies, pure std, hand-written JSON, calm
 instrument. These *constrain* the design (no serde, no autolayout crate) rather than relax it.
 
-## Where this stands — 2026-07-26
+## Where this stands — 2026-07-27
 
-**Settled.** The data-Scene decision is built: `src/scene.rs` holds the geometric primitives and
-the one `render_scene` serializer, and `render::board_scene` turns a board into a `Scene`
-(`F-scene-ir` #116, PR #136). Nothing else in this note is code.
+**Settled.** Two decisions are built. The data-Scene decision: `src/scene.rs` holds the geometric
+primitives and the one `render_scene` serializer, and `render::board_scene` turns a board into a
+`Scene` (`F-scene-ir` #116, PR #136). And the board/overlay split, one day later: `render::diff.rs`
+holds `diff_boards -> (Model, Overlay)` and the closed verdict enums, so a `Model` is now always a
+board (`F-board-vs-diff` #119). Nothing else in this note is code.
+
+**One line of the type-discipline section is now stale by success** — the third bullet ("Separate
+`Board` from a diff/overlay type") describes work that is done. It is left standing because the
+*reasoning* under it is what the next format will need; read it as the argument, not the backlog.
 
 **Open, ranked.** Each item is tracked or explicitly is not:
 
-1. **#119 `F-board-vs-diff`** — split the board type from the overlay type. Its precondition just
-   fired, and it is the cheapest thing in the family right now.
-2. **#121 `F-format-tag`** — the correctness precondition the canvas spike found: a foreign-format
+1. **#121 `F-format-tag`** — the correctness precondition the canvas spike found: a foreign-format
    log currently replays as an empty board, silently.
-3. **#115 `F-spike-wardley`** — still worth running, but its job changed: it can no longer
+2. **#115 `F-spike-wardley`** — still worth running, but its job changed: it can no longer
    constrain `Shape`'s introduction, only a revision of it.
+3. **Compose the overlay out of two Scenes** — what #119's row promised and did not deliver. The
+   split made a `Scene`-level diff *possible* (the overlay is now its own type, off the domain
+   model) but the code still annotates one board while it is built. **Not ticketed**: it wants a
+   second format to say what composing two scenes even means for a format whose layout is not a
+   column grid.
 4. **Ship positions to the client** — the half of the Scene IR that did not land, and the whole
    justification for #128. **Deliberately not ticketed**: nobody has designed what the client
    would receive, and a ticket for an undesigned interface is a ticket that rots. It is named in
@@ -47,10 +56,12 @@ the one `render_scene` serializer, and `render::board_scene` turns a board into 
 **Resuming here:**
 
 ```text
-Read docs/multi-format-architecture.md (this section), then the F-scene-ir row in ROADMAP.md
-for what shipped versus what the row promised. The Scene IR is src/scene.rs; the ES scene
-builder is render::board_scene. Next action: issue #119 (F-board-vs-diff) — the diff overlay
-becomes "compose two Scenes" instead of diff/was/status optionals on Model.
+Read docs/multi-format-architecture.md (this section), then the F-scene-ir and F-board-vs-diff
+rows in ROADMAP.md for what shipped versus what the rows promised. The Scene IR is
+src/scene.rs; the ES scene builder is render::board_scene; the diff overlay is
+src/render/diff.rs (diff_boards -> (Model, Overlay), passed to render_svg beside the board).
+Next action: issue #121 (F-format-tag) — a foreign-format log still replays as an empty board,
+silently.
 ```
 
 ## Read this first — triage of 2026-07-26
@@ -279,10 +290,12 @@ separate refactor:
 - **`UnitFraction(f64)`** (smart constructor, `[0,1]`) replaces `y: Option<f64>` clamped in
   *two* places (`clamp_y` on write, `y_key` on read) precisely because the type admits illegal
   values. One boundary clamp, none downstream — parse, don't validate.
-- **Separate `Board` from a diff/overlay type.** Today `Model` carries `diff` / `was` /
+- **Separate `Board` from a diff/overlay type.** ~~Today `Model` carries `diff` / `was` /
   `status` optionals, so one type encodes both "the board" and "a diff overlay" — two states
-  crammed into one product type. Split them. This is the **same** boundary the Scene IR wants
-  (the diff is a render concern, not a domain fact).
+  crammed into one product type.~~ **Done 2026-07-27 (#119):** `render::diff_boards` returns the
+  union board and an `Overlay` of closed verdict enums, which `render_svg` takes beside the board.
+  The argument still holds for the next format — the diff is a render concern, not a domain
+  fact — which is why the bullet stays.
 - **Parse, don't validate, at the command boundary.** `serve`'s `v.get_str("kind")` matched
   against string literals (the double-dispatch + silent-drop review findings) → parse the
   request into a typed `Command` enum once, then match exhaustively.

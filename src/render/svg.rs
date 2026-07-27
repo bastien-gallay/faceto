@@ -1,4 +1,5 @@
 //! SVG generation: the `View` lens, `render_svg`, and its per-stage draw helpers.
+use super::diff::{region_removed, EdgeVerdict, ElementVerdict, Overlay, RegionVerdict, Tone};
 use super::geometry::*;
 use super::style::*;
 use super::text::*;
@@ -6,41 +7,40 @@ use crate::model::{is_pivotal, Element, Model};
 use crate::scene::{render_scene, Scene, Shape};
 use std::collections::{HashMap, HashSet};
 
-pub(crate) fn diff_tooltip(e: &Element, meta: &(String, String)) -> String {
+pub(crate) fn diff_tooltip(
+    e: &Element,
+    verdict: &ElementVerdict,
+    meta: &(String, String),
+) -> String {
     let (a, b) = (&meta.0, &meta.1);
-    match e.diff.as_deref() {
-        Some("added") => format!("added in {}", b),
-        Some("removed") => format!("removed \u{2014} was in {}", a),
-        Some("moved") => {
+    match verdict {
+        ElementVerdict::Added => format!("added in {}", b),
+        ElementVerdict::Removed => format!("removed \u{2014} was in {}", a),
+        ElementVerdict::Moved(w) => {
             let mut bits = Vec::new();
-            if let Some(w) = &e.was {
-                if w.kind != e.kind {
-                    bits.push(format!("lane {} \u{2192} {}", w.kind, e.kind));
-                }
-                if w.col != e.col {
-                    bits.push(format!(
-                        "col {} \u{2192} {}",
-                        opt_col(w.col),
-                        opt_col(e.col)
-                    ));
-                }
-                if w.y != e.y {
-                    bits.push("repositioned in its lane".to_string());
-                }
+            if w.kind != e.kind {
+                bits.push(format!("lane {} \u{2192} {}", w.kind, e.kind));
+            }
+            if w.col != e.col {
+                bits.push(format!(
+                    "col {} \u{2192} {}",
+                    opt_col(w.col),
+                    opt_col(e.col)
+                ));
+            }
+            if w.y != e.y {
+                bits.push("repositioned in its lane".to_string());
             }
             format!("moved: {}", bits.join(", "))
         }
-        Some("changed") => format!(
-            "was: {}",
-            e.was.as_ref().map(|w| w.label.as_str()).unwrap_or("")
-        ),
-        _ => String::new(),
+        ElementVerdict::Changed(w) => format!("was: {}", w.label),
+        ElementVerdict::Unchanged => String::new(),
     }
 }
 
 /// A per-viewer *reading lens* applied at render time — never persisted, never in the log. Today it
 /// carries the set of collapsed region ids (F-region-collapse). It is a pure argument to
-/// `render_svg`, exactly like the diff overlay: `(Model, View) -> SVG`, re-derived per request. The
+/// `render_svg`, exactly like the diff overlay beside it: a pure argument, re-derived per request. The
 /// static `render`/`genesis` output and the plain `GET /` page pass `View::none()`; only
 /// `GET /board.svg` reads `?collapse=` into one.
 #[derive(Default)]
@@ -57,15 +57,17 @@ impl View {
     }
 }
 
-/// Render a board to SVG — the event-storming scene, through the kernel's one serializer.
-pub fn render_svg(model: &Model, view: &View) -> String {
-    render_scene(&board_scene(model, view))
+/// Render a board to SVG — the event-storming scene, through the kernel's one serializer. The
+/// `overlay` is the diff annotation of *two* boards (`None` for a plain board): it never rides the
+/// `Model`, it is passed beside it, exactly like the `View` lens.
+pub fn render_svg(model: &Model, view: &View, overlay: Option<&Overlay>) -> String {
+    render_scene(&board_scene(model, view, overlay))
 }
 
-/// The event-storming scene builder: `(Model, View) -> Scene`. Every ES-specific word — lane, col,
-/// sticky, region, frontier, pivotal — lives on this side of the seam; what crosses it is pure
-/// geometry the kernel serializes without knowing what a board is.
-pub(crate) fn board_scene(model: &Model, view: &View) -> Scene {
+/// The event-storming scene builder: `(Model, View, Overlay?) -> Scene`. Every ES-specific word —
+/// lane, col, sticky, region, frontier, pivotal — lives on this side of the seam; what crosses it
+/// is pure geometry the kernel serializes without knowing what a board is.
+pub(crate) fn board_scene(model: &Model, view: &View, overlay: Option<&Overlay>) -> Scene {
     let mut elements = model.elements.clone();
     // `type` selects the lane; an element whose type isn't one of the 8 lanes has no lane to
     // occupy. Drop it from this projection (its edges are then skipped by the `idx_of` guard
@@ -120,7 +122,7 @@ pub(crate) fn board_scene(model: &Model, view: &View) -> Scene {
         // (a) it is *live* — under a diff overlay (`?collapse=X&base=`), `diff_phases` feeds a removed
         //     region back as a `removed` ghost carrying its old span; folding it would hide *current*
         //     elements in those columns with no live tab to expand them (mirrors the `live` filter below);
-        let live = ph.diff.as_deref() != Some("removed");
+        let live = !region_removed(overlay, &ph.id);
         // (b) its stored span actually overlaps the content columns `[min_col, max_col]` — a region
         //     that F-region-frontiers let run entirely past the last element column has no on-board
         //     columns to fold, and clamping it would pin `lo=hi` onto an edge column owned by a
@@ -225,9 +227,8 @@ pub(crate) fn board_scene(model: &Model, view: &View) -> Scene {
     let width = (board_right + 40.0).trunc();
     let height = (lanes_bottom + 60.0).trunc();
 
-    let diff_meta = model.diff_meta.clone();
     let mut p: Vec<Shape> = Vec::new();
-    draw_header(&mut p, model, width, height, &diff_meta, &elements);
+    draw_header(&mut p, model, width, height, overlay, &elements);
     // Regions (a.k.a. phases) — a region is a *thin labelled outline*, never a filled block
     // (DESIGN.md calm-instrument register; anti-reference: Miro maximalism). It reads as an open
     // "⊓": a top rule + two grabbable vertical edges, plus the faintest tonal wash (the only fill
@@ -295,15 +296,18 @@ pub(crate) fn board_scene(model: &Model, view: &View) -> Scene {
         let clamped_from = min_col + lo as i64;
         let clamped_to = min_col + hi as i64;
 
-        // Diff verdict mapped onto the element-diff vocabulary (Review #4: read `Phase.diff` or a
-        // *removed* region — now fed into `model.phases` by `diff_phases` — paints as a phantom
-        // unstyled band). A removed region is ghosted; the rest pick up the dashed diff stroke.
-        let dk = phase_diff_kind(ph.diff.as_deref());
-        let removed = ph.diff.as_deref() == Some("removed");
-        let diff_col = dk.map(diff_colour); // computed once; each use picks its own bench fallback
+        // The region's verdict, mapped onto the shared four-tone vocabulary (Review #4: a band
+        // the overlay judged — a *removed* region among them, fed back into the union board by
+        // `diff_phases` — must not paint as a phantom unstyled band). A removed region is ghosted;
+        // the rest pick up the dashed diff stroke.
+        let tone = overlay
+            .map(|o| o.region(&ph.id))
+            .and_then(RegionVerdict::tone);
+        let removed = region_removed(overlay, &ph.id);
+        let diff_col = tone.map(diff_colour); // computed once; each use picks its own bench fallback
         let stroke = diff_col.unwrap_or("#cfcfda");
         let top_stroke = diff_col.unwrap_or("#e0e0e6");
-        let dash = dk.map(|_| "4 3");
+        let dash = tone.map(|_| "4 3");
 
         // One group per region carries its identity + *clamped* bounds (the client reads
         // `data-from-col`/`data-to-col` to snap a drag to a rail column without inverse pixel math;
@@ -333,7 +337,7 @@ pub(crate) fn board_scene(model: &Model, view: &View) -> Scene {
         // corner (instrument grey, no domain colour: the Bench-Is-Grey Rule). Carries the diff badge
         // when the region changed. Grouped as one focusable button (mirrors the sticky pattern) so
         // the Stage-6 client can bind a click/dblclick/Enter → in-place rename to one hit target.
-        let badge = dk.and_then(diff_badge);
+        let badge = tone.map(diff_badge);
         // When folded, the tab becomes the summary chip: the hidden stickies collapse to a `· N`
         // count (in-band elements), so the tab still tells the reader how much is tucked away.
         let n_in_band = if collapsed {
@@ -454,7 +458,7 @@ pub(crate) fn board_scene(model: &Model, view: &View) -> Scene {
     let live: Vec<&crate::model::Phase> = model
         .phases
         .iter()
-        .filter(|p| p.diff.as_deref() != Some("removed"))
+        .filter(|p| !region_removed(overlay, &p.id))
         .collect();
     if let (Some(first), Some(last)) = (live.first(), live.last()) {
         let bx = |c: i64| col_left(clamp_idx(c)); // left x of a (clamped) column
@@ -519,8 +523,10 @@ pub(crate) fn board_scene(model: &Model, view: &View) -> Scene {
     }
 
     draw_lanes(&mut p, &present, &lane_top, &lane_h, width);
-    draw_edges(&mut p, model, &elements, &idx_of, &centers, &hidden_el);
-    draw_stickies(&mut p, &elements, &centers, &hidden_el, &diff_meta);
+    draw_edges(
+        &mut p, model, &elements, &idx_of, &centers, &hidden_el, overlay,
+    );
+    draw_stickies(&mut p, &elements, &centers, &hidden_el, overlay);
     draw_legend(&mut p, &present, height);
 
     Scene {
@@ -537,7 +543,7 @@ fn draw_header(
     model: &Model,
     width: f64,
     height: f64,
-    diff_meta: &Option<(String, String)>,
+    overlay: Option<&Overlay>,
     elements: &[Element],
 ) {
     p.push(Shape::rect(0.0, 0.0, width, height).with("fill", "#fbfbfd"));
@@ -554,27 +560,31 @@ fn draw_header(
             ),
     );
 
-    // Diff subtitle: rev labels + per-status counts with dashed swatches.
-    if let Some((a, b)) = diff_meta {
+    // Diff subtitle: rev labels + per-tone counts with dashed swatches.
+    if let Some(o) = overlay {
+        let (a, b) = (&o.meta.0, &o.meta.1);
         p.push(
             Shape::text(20.0, 56.0, format!("{a} \u{2192} {b}"))
                 .with("font-size", 12.0)
                 .with("fill", "#777"),
         );
         let mut lx2 = 40.0 + 7.0 * ((a.chars().count() + b.chars().count() + 3) as f64);
-        for k in ["added", "removed", "changed", "moved"] {
+        for tone in [Tone::Added, Tone::Removed, Tone::Changed, Tone::Moved] {
+            // Counted over the *drawn* elements, so an off-grammar sticky the projection dropped
+            // is never tallied in a legend that has nothing to point at.
             let n = elements
                 .iter()
-                .filter(|e| e.diff.as_deref() == Some(k))
+                .filter(|e| o.element(&e.id).tone() == Some(tone))
                 .count();
             if n == 0 {
                 continue;
             }
+            let k = tone.as_str();
             p.push(
                 Shape::rect(lx2, 46.0, 12.0, 12.0)
                     .with("rx", 3.0)
                     .with("fill", "none")
-                    .with("stroke", diff_colour(k))
+                    .with("stroke", diff_colour(tone))
                     .with("stroke-width", 2.5)
                     .with("stroke-dasharray", "3 2"),
             );
@@ -635,6 +645,7 @@ fn draw_edges(
     idx_of: &HashMap<&str, usize>,
     centers: &[(f64, f64)],
     hidden_el: &[bool],
+    overlay: Option<&Overlay>,
 ) {
     // Lever B (F-edge-routing): fan connectors that share a box face apart so they don't collapse
     // onto one anchor — see `fan_offsets`. `ends[ei]` resolves each edge's endpoints once (reusing
@@ -672,20 +683,21 @@ fn draw_edges(
             .with("fill", "none");
         // Four connector registers, one shape each: a diff-added wire, a diff-removed one, a
         // hotspot concern (dotted, arrow-less — a concern is not a flow), and the plain flow.
-        p.push(match edge.status.as_deref() {
-            Some("added") => wire
-                .with("stroke", diff_colour("added"))
+        let verdict = overlay.map(|o| o.edge(edge)).unwrap_or_default();
+        p.push(match verdict {
+            EdgeVerdict::Added => wire
+                .with("stroke", diff_colour(Tone::Added))
                 .with("stroke-width", 1.8)
                 .with("stroke-dasharray", "6 4")
                 .with("marker-end", "url(#arrow)")
                 .with("opacity", 0.9),
-            Some("removed") => wire
-                .with("stroke", diff_colour("removed"))
+            EdgeVerdict::Removed => wire
+                .with("stroke", diff_colour(Tone::Removed))
                 .with("stroke-width", 1.6)
                 .with("stroke-dasharray", "3 4")
                 .with("marker-end", "url(#arrow)")
                 .with("opacity", 0.5),
-            _ if is_hot => wire
+            EdgeVerdict::Unchanged if is_hot => wire
                 .with("stroke", EDGE_HOTSPOT)
                 .with("stroke-width", 1.4)
                 .with("stroke-dasharray", "0.1 6")
@@ -702,7 +714,7 @@ fn draw_edges(
         // where it crosses a line. Suppressed on a fading "removed" diff edge (its endpoints are
         // going away). Calm-instrument register: never a loud tag.
         if let Some(lbl) = edge.label.as_deref().filter(|l| !l.is_empty()) {
-            if edge.status.as_deref() != Some("removed") {
+            if verdict != EdgeVerdict::Removed {
                 let (sx, sy) = centers[si];
                 let (dx, dy) = centers[di];
                 p.push(
@@ -727,7 +739,7 @@ fn draw_stickies(
     elements: &[Element],
     centers: &[(f64, f64)],
     hidden_el: &[bool],
-    diff_meta: &Option<(String, String)>,
+    overlay: Option<&Overlay>,
 ) {
     // Stickies — each a clickable <g id="..."> the sidecar targets by id.
     for (i, e) in elements.iter().enumerate() {
@@ -752,14 +764,17 @@ fn draw_stickies(
             "#ffffff"
         };
         let shape_i: i64 = if is_hotspot { 2 } else { 8 };
-        let status = e.diff.as_deref();
+        // No overlay ⇒ no verdict at all: a plain board's sticky wears no `diff-*` class, exactly
+        // as before. Under an overlay every drawn sticky carries one, `diff-unchanged` included.
+        let verdict = overlay.map(|o| o.element(&e.id));
+        let tone = verdict.and_then(ElementVerdict::tone);
 
         let mut cls = format!("sticky {}", e.kind);
         if resolved {
             cls.push_str(" resolved");
         }
-        if let Some(s) = status {
-            cls.push_str(&format!(" diff-{}", s));
+        if let Some(v) = verdict {
+            cls.push_str(&format!(" diff-{}", v.as_str()));
         }
         // A sticky is the primary control: it must be reachable and operable without a mouse.
         // `role=button` + `tabindex=0` put it in the tab order; the aria-label names it the way a
@@ -784,13 +799,15 @@ fn draw_stickies(
         let data_links = (!e.links.is_empty()).then(|| e.links.join("\n"));
 
         let mut kids: Vec<Shape> = Vec::new();
-        if matches!(status, Some("added") | Some("changed") | Some("moved")) {
-            let s = status.unwrap();
+        if matches!(
+            tone,
+            Some(Tone::Added) | Some(Tone::Changed) | Some(Tone::Moved)
+        ) {
             kids.push(
                 Shape::rect(x - 4.0, y - 4.0, STICKY_W + 8.0, STICKY_H + 8.0)
                     .with("rx", (shape_i + 3) as f64)
                     .with("fill", "none")
-                    .with("stroke", diff_colour(s))
+                    .with("stroke", diff_colour(tone.unwrap()))
                     .with("stroke-width", 3.0)
                     .with("stroke-dasharray", "6 4"),
             );
@@ -846,18 +863,18 @@ fn draw_stickies(
                 .with("stroke-linejoin", "round"),
             );
         }
-        if status == Some("removed") {
+        if tone == Some(Tone::Removed) {
             kids.push(
                 Shape::line(x + 6.0, cy, x + STICKY_W - 6.0, cy)
-                    .with("stroke", diff_colour("removed"))
+                    .with("stroke", diff_colour(Tone::Removed))
                     .with("stroke-width", 2.5),
             );
         }
-        if let Some(badge) = status.and_then(diff_badge) {
-            let s = status.unwrap();
+        if let Some(t) = tone {
+            let badge = diff_badge(t);
             kids.push(
                 Shape::circle(x + STICKY_W, y, 9.0)
-                    .with("fill", diff_colour(s))
+                    .with("fill", diff_colour(t))
                     .with("stroke", "#fff")
                     .with("stroke-width", 1.5),
             );
@@ -870,10 +887,10 @@ fn draw_stickies(
             );
         }
 
-        let tip = match (status, diff_meta) {
-            (Some(_), Some(meta)) => Some(diff_tooltip(e, meta)).filter(|t| !t.is_empty()),
-            _ => None,
-        };
+        let tip = verdict
+            .zip(overlay)
+            .map(|(v, o)| diff_tooltip(e, v, &o.meta))
+            .filter(|t| !t.is_empty());
         let mut g = Shape::group(kids)
             .with("id", e.id.as_str())
             .with("class", cls)
@@ -889,7 +906,7 @@ fn draw_stickies(
             .maybe("data-y", data_y)
             .maybe("data-links", data_links)
             .with("style", "cursor:pointer");
-        if status == Some("removed") {
+        if tone == Some(Tone::Removed) {
             g = g.with("opacity", 0.4);
         }
         if let Some(t) = tip {
@@ -954,7 +971,7 @@ mod tests {
     /// Render with the identity lens (nothing collapsed) — the default for every test that isn't
     /// exercising F-region-collapse itself, so the `View` argument stays out of the assertions.
     fn rsvg(model: &Model) -> String {
-        render_svg(model, &View::none())
+        render_svg(model, &View::none(), None)
     }
 
     // The client's instant-move replay reads col / lane / centre off the sticky group; if these
@@ -972,12 +989,9 @@ mod tests {
                 y: None,
                 resolved: false,
                 links: Vec::new(),
-                diff: None,
-                was: None,
             }],
             edges: vec![],
             level: Level::default(),
-            diff_meta: None,
         }
     }
 
@@ -988,7 +1002,6 @@ mod tests {
             elements: vec![],
             edges: vec![],
             level: Level::default(),
-            diff_meta: None,
         }
     }
 
@@ -1042,7 +1055,11 @@ mod tests {
             }
         }
         let mut out = Vec::new();
-        walk(&board_scene(model, &View::none()).shapes, attr, &mut out);
+        walk(
+            &board_scene(model, &View::none(), None).shapes,
+            attr,
+            &mut out,
+        );
         out
     }
 
@@ -1080,14 +1097,14 @@ mod tests {
     /// The scene a plain (nothing folded) render produces — the `shapes_with` subject for every
     /// test that is not itself exercising the collapse lens.
     fn plain_scene(model: &Model) -> Scene {
-        board_scene(model, &View::none())
+        board_scene(model, &View::none(), None)
     }
 
     /// Every connector path whose `attr` equals `value`, as `(d, start-anchor Y)`. Reads the
     /// `Scene`, so an edge-routing assertion works off the path the layout produced rather than
     /// hunting for `M` in a serialized document.
     fn edge_anchors(model: &Model, attr: &str, value: &str) -> Vec<f64> {
-        board_scene(model, &View::none())
+        board_scene(model, &View::none(), None)
             .shapes
             .iter()
             .filter_map(|s| match s {
@@ -1129,13 +1146,10 @@ mod tests {
                     y: None,
                     resolved: false,
                     links: Vec::new(),
-                    diff: None,
-                    was: None,
                 })
                 .collect(),
             edges: vec![],
             level: Level::default(),
-            diff_meta: None,
         }
     }
 
@@ -1232,8 +1246,6 @@ mod tests {
             y: None,
             resolved: false,
             links: Vec::new(),
-            diff: None,
-            was: None,
         });
         assert_eq!(distinct(&rsvg(&m), "data-cx"), 2);
         // col -3 is the leftmost authored column → slot 0 → classic single-cell centre 255.0.
@@ -1253,14 +1265,19 @@ mod tests {
         assert_eq!(attr_nums(&m, "data-cx"), vec![255.0]);
     }
 
-    fn phase(id: &str, label: &str, from: i64, to: i64, diff: Option<&str>) -> Phase {
+    fn phase(id: &str, label: &str, from: i64, to: i64) -> Phase {
         Phase {
             id: id.into(),
             label: label.into(),
             from_col: from,
             to_col: to,
-            diff: diff.map(Into::into),
         }
+    }
+
+    /// The `(union board, overlay)` a real comparison produces — the only way a test gets a ghost
+    /// now that "removed" is a verdict beside the board, never a field on it.
+    fn diffed(base: &Model, new: &Model) -> (Model, Overlay) {
+        crate::render::diff::diff_boards(base, new, ("v1".into(), "v2".into()))
     }
 
     // ---- F-region-collapse -------------------------------------------------------------------
@@ -1275,14 +1292,13 @@ mod tests {
         Model {
             title: "t".into(),
             phases: vec![
-                phase("K1", "Alpha", 0, 1, None),
-                phase("K2", "Beta", 2, 3, None),
-                phase("K3", "Gamma", 4, 5, None),
+                phase("K1", "Alpha", 0, 1),
+                phase("K2", "Beta", 2, 3),
+                phase("K3", "Gamma", 4, 5),
             ],
             elements: (0..6).map(|c| el(&format!("E{c}"), "event", c)).collect(),
             edges: vec![],
             level: Level::default(),
-            diff_meta: None,
         }
     }
 
@@ -1294,6 +1310,7 @@ mod tests {
             &View {
                 collapsed: ids.iter().map(|s| s.to_string()).collect(),
             },
+            None,
         )
     }
 
@@ -1303,6 +1320,7 @@ mod tests {
             &View {
                 collapsed: ids.iter().map(|s| s.to_string()).collect(),
             },
+            None,
         )
     }
 
@@ -1385,13 +1403,11 @@ mod tests {
                 src: "E2".into(),
                 dst: "E3".into(),
                 label: None,
-                status: None,
             }, // wholly inside K2
             Edge {
                 src: "E1".into(),
                 dst: "E4".into(),
                 label: None,
-                status: None,
             }, // crosses K2, both ends visible
         ];
         let f = folded_scene(&m, &["K2"]);
@@ -1415,7 +1431,7 @@ mod tests {
         let mut m = three_region_board(); // elements in cols 0..=5, ncols = 6
                                           // A trailing region past all content — clamp_idx(8)=clamp_idx(9)=5 would otherwise pin it onto
                                           // col 5 (owned by K3) and hide E5.
-        m.phases.push(phase("K9", "Ghosttail", 8, 9, None));
+        m.phases.push(phase("K9", "Ghosttail", 8, 9));
         let f = folded(&m, &["K9"]);
         assert!(
             f.contains("id=\"E5\""),
@@ -1441,15 +1457,24 @@ mod tests {
 
     // A removed-ghost region (diff overlay) must NOT fold, even if its id is in the collapse set: it
     // has no live tab to expand, so folding it would hide *current* elements in its old columns with
-    // no way back. Under `?collapse=K2&base=`, diff_models feeds a removed ghost K2 whose old span
-    // still overlaps live stickies; the fold must skip it (mirrors the frontier `live` filter).
+    // no way back. Under `?collapse=K2&base=`, `diff_boards` feeds back a removed ghost K2 whose
+    // old span still overlaps live stickies; the fold must skip it (mirrors the frontier `live`
+    // filter).
     #[test]
     fn a_collapsed_removed_ghost_region_does_not_fold_live_elements() {
-        let mut m = three_region_board();
-        // Simulate the diff-overlay shape: K2 is a removed ghost, but live elements still sit in its
-        // old columns 2..=3 (layout follows the new side).
-        m.phases[1] = phase("K2", "Beta", 2, 3, Some("removed"));
-        let f = folded(&m, &["K2"]);
+        // The diff-overlay shape, from a real comparison: K2 is gone on the new side, so the union
+        // board carries it as a ghost while live elements still sit in its old columns 2..=3.
+        let base = three_region_board();
+        let mut new = three_region_board();
+        new.phases.remove(1);
+        let (m, o) = diffed(&base, &new);
+        let f = render_svg(
+            &m,
+            &View {
+                collapsed: vec!["K2".to_string()],
+            },
+            Some(&o),
+        );
         // The live stickies in the ghost's old span stay on the board — not swallowed by a stale fold.
         assert!(
             f.contains("id=\"E2\"") && f.contains("id=\"E3\""),
@@ -1463,7 +1488,7 @@ mod tests {
         // The board is NOT shortened by folding a ghost.
         assert_eq!(
             svg_root_width(&f),
-            svg_root_width(&rsvg(&m)),
+            svg_root_width(&render_svg(&m, &View::none(), Some(&o))),
             "ghost fold changed board width"
         );
     }
@@ -1475,11 +1500,10 @@ mod tests {
     fn region_renders_as_a_labelled_outline_with_frontier_handles_and_pivotal_node() {
         let m = Model {
             title: "t".into(),
-            phases: vec![phase("K1", "Context A", 0, 2, None)],
+            phases: vec![phase("K1", "Context A", 0, 2)],
             elements: vec![el("E1", "event", 0), el("E2", "event", 1)],
             edges: vec![],
             level: Level::default(),
-            diff_meta: None,
         };
         assert!(
             rsvg(&m).contains(">Context A<"),
@@ -1550,14 +1574,13 @@ mod tests {
         let m = Model {
             title: "t".into(),
             phases: vec![
-                phase("K1", "A", 0, 1, None),
-                phase("K2", "B", 2, 3, None),
-                phase("K3", "C", 4, 5, None),
+                phase("K1", "A", 0, 1),
+                phase("K2", "B", 2, 3),
+                phase("K3", "C", 4, 5),
             ],
             elements: vec![el("E1", "event", 0), el("E2", "event", 5)],
             edges: vec![],
             level: Level::default(),
-            diff_meta: None,
         };
         assert_eq!(
             shapes_with(&plain_scene(&m), &[("class", "frontier")]),
@@ -1596,7 +1619,6 @@ mod tests {
             elements: vec![el("E1", "event", 0), el("E2", "event", 2)],
             edges: vec![],
             level: Level::default(),
-            diff_meta: None,
         };
         for col in 0..=2 {
             assert_eq!(
@@ -1610,21 +1632,26 @@ mod tests {
         }
     }
 
-    // Review #4: `diff_phases` feeds *removed* regions into `model.phases`. Render must read
-    // `Phase.diff` and ghost them — otherwise a removed band paints as a phantom unstyled region,
-    // and offers a resize handle for something that no longer exists.
+    // Review #4: a comparison feeds *removed* regions back into the union board. Render must read
+    // the overlay's verdict and ghost them — otherwise a removed band paints as a phantom unstyled
+    // region, and offers a resize handle for something that no longer exists.
     #[test]
     fn removed_region_is_ghosted_and_drops_its_grab_handle() {
-        let m = Model {
+        let base = Model {
             title: "t".into(),
-            phases: vec![phase("K9", "Gone", 0, 1, Some("removed"))],
+            phases: vec![phase("K9", "Gone", 0, 1)],
             elements: vec![el("E1", "event", 0)],
             edges: vec![],
             level: Level::default(),
-            diff_meta: Some(("v1".into(), "v2".into())),
         };
+        let new = Model {
+            phases: vec![],
+            ..base.clone()
+        };
+        let (m, o) = diffed(&base, &new);
+        let scene = board_scene(&m, &View::none(), Some(&o));
         assert_eq!(
-            shapes_with(&plain_scene(&m), &[("opacity", "0.45")]),
+            shapes_with(&scene, &[("opacity", "0.45")]),
             1,
             "removed region is not ghosted"
         );
@@ -1632,18 +1659,12 @@ mod tests {
         // to tell regions apart even when removed), but must not offer a resize handle or a
         // rename tab for something that no longer exists.
         assert_eq!(
-            shapes_with(
-                &plain_scene(&m),
-                &[("class", "region-edge"), ("data-region", "K9")]
-            ),
+            shapes_with(&scene, &[("class", "region-edge"), ("data-region", "K9")]),
             0,
             "a removed region must not offer a resize handle"
         );
         assert_eq!(
-            shapes_with(
-                &plain_scene(&m),
-                &[("class", "region-tab"), ("data-region", "K9")]
-            ),
+            shapes_with(&scene, &[("class", "region-tab"), ("data-region", "K9")]),
             0,
             "a removed region must not offer a rename tab"
         );
@@ -1685,8 +1706,6 @@ mod tests {
             y: None,
             resolved: false,
             links: Vec::new(),
-            diff: None,
-            was: None,
         }
     }
 
@@ -1702,7 +1721,6 @@ mod tests {
                 src: "C1".into(),
                 dst: "E1".into(),
                 label: Some("emits".into()),
-                status: None,
             }],
             ..Default::default()
         };
@@ -1725,7 +1743,6 @@ mod tests {
                 src: "C1".into(),
                 dst: "E1".into(),
                 label: None,
-                status: None,
             }],
             ..Default::default()
         };
@@ -1753,17 +1770,14 @@ mod tests {
                     src: "X1".into(),
                     dst: "E_lo".into(),
                     label: None,
-                    status: None,
                 },
                 Edge {
                     src: "E_hi".into(),
                     dst: "R1".into(),
                     label: None,
-                    status: None,
                 },
             ],
             level: Level::default(),
-            diff_meta: None,
         };
         let svg = rsvg(&m);
         assert!(
@@ -1803,17 +1817,14 @@ mod tests {
                     src: "X1".into(),
                     dst: "C1".into(),
                     label: None,
-                    status: None,
                 },
                 Edge {
                     src: "X1".into(),
                     dst: "C2".into(),
                     label: None,
-                    status: None,
                 },
             ],
             level: Level::default(),
-            diff_meta: None,
         };
         // Each edge path's start anchor Y. They must differ by the fan spread.
         let starts = edge_anchors(&m, "class", "edge");
@@ -1838,7 +1849,6 @@ mod tests {
                 src: "X1".into(),
                 dst: format!("C{k}"),
                 label: None,
-                status: None,
             });
         }
         let m = Model {
@@ -1847,7 +1857,6 @@ mod tests {
             elements,
             edges,
             level: Level::default(),
-            diff_meta: None,
         };
         let cy = cy_of(&rsvg(&m), "X1");
         let anchors = edge_anchors(&m, "data-src", "X1");

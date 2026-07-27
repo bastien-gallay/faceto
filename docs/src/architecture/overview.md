@@ -6,10 +6,10 @@ event-log.jsonl → replay → Model → Scene → SVG → HTML
 ```
 
 Seven modules, one stage each: `json` (a hand-written parser — no serde), `events` (the log,
-replay, genesis, compaction), `model` (the typed board, normalisation, diffing), `lint` (a pure
-graph pass), `render` (layout and the board's visual language, plus HTML and the export formats),
-`scene` (geometric primitives and the one SVG serializer), `serve` (a `TcpListener` and threads —
-no web framework). `main.rs` is CLI dispatch only.
+replay, genesis, compaction), `model` (the typed board and its normalisation), `lint` (a pure
+graph pass), `render` (layout and the board's visual language, the board-to-board diff, plus HTML
+and the export formats), `scene` (geometric primitives and the one SVG serializer), `serve` (a
+`TcpListener` and threads — no web framework). `main.rs` is CLI dispatch only.
 
 `Scene` is the seam between the two halves of drawing. A board's own vocabulary — lanes, columns,
 stickies, regions, frontiers — lives in `render` and never crosses it; what crosses is geometry

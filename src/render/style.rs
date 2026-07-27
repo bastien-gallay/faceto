@@ -1,5 +1,7 @@
 //! Colour grammar, lane order, and layout constants — the visual vocabulary.
 
+use super::diff::Tone;
+
 // Canonical lane order (top → bottom). `command` and `hotspot` are deepened from their classic
 // event-storming swatches so white label text clears WCAG 4.5:1.
 pub(crate) const LANES: [&str; 8] = [
@@ -62,35 +64,24 @@ pub(crate) const EDGE_HOTSPOT: &str = "#C39086";
 // not decoration, so they must be readable.
 pub(crate) const AXIS_LABEL: &str = "#5b6b75";
 
-pub(crate) fn diff_colour(s: &str) -> &'static str {
-    match s {
-        "added" => "#27ae60",
-        "removed" => "#EB5757",
-        "changed" | "moved" => "#E59500",
-        _ => "#999999",
+/// The diff palette: one colour per [`Tone`]. The overlay's vocabulary is a closed enum, so this
+/// is total — there is no "unknown verdict" fallback to drift.
+pub(crate) fn diff_colour(tone: Tone) -> &'static str {
+    match tone {
+        Tone::Added => "#27ae60",
+        Tone::Removed => "#EB5757",
+        Tone::Changed | Tone::Moved => "#E59500",
     }
 }
 
-pub(crate) fn diff_badge(s: &str) -> Option<&'static str> {
-    match s {
-        "added" => Some("+"),
-        "removed" => Some("\u{2013}"), // en dash
-        "changed" => Some("\u{2260}"), // ≠
-        "moved" => Some("\u{2192}"),   // →
-        _ => None,
-    }
-}
-
-/// Map a region's diff verdict (added / removed / renamed / resized) onto the element-diff colour +
-/// badge vocabulary, so a changed region speaks the same visual language as a changed sticky: a
-/// rename reads like a relabel (`≠`), a resize like a relocation (`→`). `None` ⇒ no diff styling.
-pub(crate) fn phase_diff_kind(diff: Option<&str>) -> Option<&'static str> {
-    match diff {
-        Some("added") => Some("added"),
-        Some("removed") => Some("removed"),
-        Some("renamed") => Some("changed"),
-        Some("resized") => Some("moved"),
-        _ => None,
+/// The corner badge a changed thing wears — the glyph half of the same closed vocabulary, so a
+/// renamed region reads like a relabelled sticky (`≠`) and a resized one like a relocated one (`→`).
+pub(crate) fn diff_badge(tone: Tone) -> &'static str {
+    match tone {
+        Tone::Added => "+",
+        Tone::Removed => "\u{2013}", // en dash
+        Tone::Changed => "\u{2260}", // ≠
+        Tone::Moved => "\u{2192}",   // →
     }
 }
 
