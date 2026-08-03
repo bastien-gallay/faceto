@@ -5,9 +5,10 @@ event-log.jsonl → replay → Model → Scene → SVG → HTML
         model.json ↗ (bootstrap / read-only source)
 ```
 
-Seven modules, one stage each: `json` (a hand-written parser — no serde), `events` (the log,
+Eight modules, one stage each: `json` (a hand-written parser — no serde), `events` (the log,
 replay, genesis, compaction), `model` (the typed board and its normalisation), `lint` (a pure
-graph pass), `render` (layout and the board's visual language, the board-to-board diff, plus HTML
+graph pass), `extract` (semantic sub-board selection — a second pure pass over a board, beside
+`lint`), `render` (layout and the board's visual language, the board-to-board diff, plus HTML
 and the export formats), `scene` (geometric primitives and the one SVG serializer), `serve` (a
 `TcpListener` and threads — no web framework). `main.rs` is CLI dispatch only.
 

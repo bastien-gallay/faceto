@@ -19,7 +19,11 @@ refused: an id is forever, so a box blanked by accident would stay blank forever
 same vertical slice of the story, whatever their lane. It is **not** a per-lane index.
 
 Order within a lane is nothing more than sort-by-`col`. A missing `col` is auto-assigned in file
-order.
+order — and that assignment is part of the rule, not a drawing detail: every reader of a position
+resolves it the same way. The board places a `col`-less sticky by it, and
+[`extract --region`](../reference/cli/extract.md) selects by it, so the region you see a sticky in
+is the region a cut takes it from. An extract writes the resolved value out, so the smaller board
+cannot re-derive a different one.
 
 ## `type` selects the lane and the colour
 
