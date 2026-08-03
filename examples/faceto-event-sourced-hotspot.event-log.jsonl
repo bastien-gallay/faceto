@@ -1,0 +1,22 @@
+{"event":"BoardTitled","title":"faceto — event-sourced (the log is truth; the model is a projection replayed from it) · hotspot lane"}
+{"event":"PhaseAdded","id":"K1","label":"author","fromCol":0,"toCol":1}
+{"event":"PhaseAdded","id":"K2","label":"persist","fromCol":2,"toCol":3}
+{"event":"PhaseAdded","id":"K3","label":"project","fromCol":4,"toCol":5}
+{"event":"PhaseAdded","id":"K4","label":"serve","fromCol":6,"toCol":7}
+{"event":"PhaseAdded","id":"K5","label":"maintain","fromCol":8,"toCol":9}
+{"event":"ElementAdded","id":"H6","type":"hotspot","label":"Who mints ids for added elements & regions?","col":1,"y":0.88}
+{"event":"HotspotResolved","id":"H6","resolution":"Ids are minted server-side, never by the client: <PREFIX><N>, one past the highest suffix ever added under that lane's prefix in the log (removed-but-not-compacted ids stay reserved), computed under the appends lock so concurrent adds can't collide. Regions share the rule via resolve_region_id (K<n>)."}
+{"event":"ElementAdded","id":"H3","type":"hotspot","label":"Event schema versioning / migration over time","col":2,"y":0.5}
+{"event":"HotspotResolved","id":"H3","resolution":"Schema grows by additive change (new optional fields ignored, new event kinds skipped on read = forward compat); a renamed event *kind* is migrated forward at events::upcast, the single read-path seam (backward compat), shape-detected so no version counter and no log-format change. Fields evolve additively only. Seeded with CommentAdded/Comment → ElementAnnotated."}
+{"event":"ElementAdded","id":"H4","type":"hotspot","label":"Concurrency: ordering of appends from multiple clients","col":3,"y":0.5}
+{"event":"HotspotResolved","id":"H4","resolution":"All appends serialize through one mutex in serve.rs so concurrent POST /comment handlers never interleave a half-written line and the log's order is causal."}
+{"event":"ElementAdded","id":"H1","type":"hotspot","label":"Replay cost: rebuild per request, or cache the projection?","col":4,"y":0.5}
+{"event":"HotspotResolved","id":"H1","resolution":"Cache the projection: version = fnv12(log bytes); reuse serve.rs's existing ring keyed on the log hash; replay only on a cache miss; compact caps replay length by folding to a snapshot."}
+{"event":"ElementAdded","id":"H2","type":"hotspot","label":"Is model.json a derived snapshot, or gone entirely?","col":9,"y":0.85}
+{"event":"HotspotResolved","id":"H2","resolution":"log-only (pure ES): model.json is derived & gitignored, never hand-edited; the log is the only write path; render & serve replay the log; an existing model.json bootstraps as a genesis batch of events. F-auto-genesis killed the legacy serve-from-model mode entirely."}
+{"event":"ElementAdded","id":"H5","type":"hotspot","label":"Migrate the legacy comments.jsonl inbox into the log","col":3,"y":0.85}
+{"event":"HotspotResolved","id":"H5","resolution":"faceto genesis folds a sibling comments.jsonl after the model's genesis batch: each stored comment maps through events::comment_to_events (the same mapping the live server uses) into ElementAnnotated/HotspotResolved/ElementRenamed/ElementMoved/ElementRemoved. Best-effort: blank/unparseable/elemId-less lines are skipped and counted."}
+{"event":"ElementAdded","id":"H7","type":"hotspot","label":"Can regions overlap or leave holes?","col":0,"y":0.5}
+{"event":"HotspotResolved","id":"H7","resolution":"No. Regions are a contiguous partition of the timeline. Frontier moves set one border and replay's normalize re-borders the neighbour atomically; legacy independent spans (PhaseResized) are projected onto a gap-free, overlap-free partition too. Remove = merge under the partition (the neighbour absorbs the freed columns; a board-end removal extends the outermost survivor)."}
+{"event":"ElementAdded","id":"H8","type":"hotspot","label":"F-region-edge-fold: what happens to edges crossing a collapsed region?","col":7,"y":0.95}
+{"event":"ElementAdded","id":"H9","type":"hotspot","label":"F-region-collapse: fold a region to one summary column?","col":9,"y":0.15}

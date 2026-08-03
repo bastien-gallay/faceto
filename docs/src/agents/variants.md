@@ -18,6 +18,14 @@ cp orders.event-log.jsonl orders-async.event-log.jsonl
 Two files, two boards, no shared state. They are sibling boards, so each owns its own outputs —
 nothing collides.
 
+On a large board, branch a *part* instead: [`extract`](../reference/cli/extract.md) carves out one
+region, one neighbourhood or one lane as a real sub-board, keeping ids and columns so it diffs
+against the original exactly like a copy does.
+
+```bash
+faceto extract orders.event-log.jsonl --region K2   # → orders-K2.event-log.jsonl
+```
+
 **2. Build the alternative.** Serve the copy and edit it, or point an agent at it and let it
 propose the change wholesale. Either way the original is untouched, because it is a different
 file.

@@ -62,6 +62,11 @@ faceto serve  path/to/model.json -p 9000       # custom port
 faceto genesis examples/sample.model.json      # migrate → examples/sample.event-log.jsonl
 faceto render  examples/sample.event-log.jsonl # render/serve also accept a log (by extension)
 faceto compact examples/sample.event-log.jsonl # fold a log to a snapshot, bounding replay
+
+# Semantic sub-board extraction (one selector per run; ids + cols preserved, so it diffs cleanly):
+faceto extract examples/sample.model.json --region K2        # → sample-K2.event-log.jsonl
+faceto extract examples/sample.model.json --focus E2 --hops 2 # → sample-E2-h2.event-log.jsonl
+faceto extract examples/sample.model.json --type hotspot     # → sample-hotspot.event-log.jsonl
 ```
 
 A local `.pre-commit-config.yaml` runs these gates automatically — install it with
@@ -80,14 +85,15 @@ lockstep. For board behaviour not covered by tests, render `examples/sample.mode
 ## Architecture
 
 The pipeline is `event-log.jsonl → replay → Model → Scene → SVG → HTML`; the `model.json → Model`
-path is the genesis/bootstrap input and a read-only `render` / `lint` source (serving always goes
-through the log). **Seven Rust modules**, each one stage — `json`/`model`/`lint`/`scene` are single
-files, `events`/`render`/`serve` are directories with a `mod.rs` plus one file per concern — plus
-the client, which is not a Rust module and gets the eighth bullet below. (The count is stated this
-way on purpose — it has been wrong twice, once as "Seven" over six names and once as "Eight" over
-seven. `grep -c '^mod .*;' src/main.rs` settles it: **7**. Keep the `;` — a bare `^mod` prefix also matches
-`mod tests {` at the foot of the file and answers 8, which is how you talk yourself back into the
-off-by-one this sentence exists to prevent.)
+path is the genesis/bootstrap input and a read-only `render` / `lint` / `extract` source (serving
+always goes through the log). **Eight Rust modules**, each one stage — `json`/`model`/`lint`/
+`extract`/`scene` are single files, `events`/`render`/`serve` are directories with a `mod.rs` plus
+one file per concern — plus the client, which is not a Rust module and gets the ninth bullet below.
+(The count is stated this way on purpose — it has been wrong twice, once as "Seven" over six names
+and once as "Eight" over seven. `grep -c '^mod .*;' src/main.rs` settles it: **8** as of
+`src/extract.rs`. Keep the `;` — a bare `^mod` prefix also matches `mod tests {` at the foot of the
+file and answers 9, which is how you talk yourself back into the off-by-one this sentence exists to
+prevent.)
 
 - **`src/json.rs`** — minimal JSON parser/serializer (`parse`, `to_string`, the `Json` enum with
   `get`/`as_str`/`as_f64`/`as_bool`/`as_array`). Everything else builds on this.
@@ -109,6 +115,12 @@ off-by-one this sentence exists to prevent.)
   the stable `id` (the comment-sidecar join key). A real edge connects two distinct existing
   elements. Findings surface in `serve`'s `/comments` sidebar as `kind:"lint"` entries, computed on
   read and suppressed once the element is `resolved` (see `src/serve/`).
+- **`src/extract.rs`** — semantic sub-board extraction (F-extract). `extract(&Model, &Selector) ->
+  Result<Model, String>`, a pure pass (no IO, no clocks) beside `lint`: carve out a region, a
+  bounded BFS neighbourhood around one element (undirected, `--hops`), or a lane. **Ids and `col`
+  are preserved**, so the sub-board is a valid `--base` for a diff against its origin; an edge
+  with one endpoint outside the cut is dropped and `lint` reports the hole. `main.rs` writes the
+  result as a genesis'd sibling log via the same exclusive create `genesis` uses.
 - **`src/scene.rs`** — the Scene IR (F-scene-ir). Geometric primitives (`Rect`/`Line`/`Text`/
   `Circle`/`Path` + a **nesting** `Group`), a `Scene`, and the single `render_scene` serializer.
   **Geometric, never semantic**: a sticky, a lane, a region are event-storming words that stay on
@@ -144,8 +156,8 @@ off-by-one this sentence exists to prevent.)
   back to `localStorage` when offline — offline structural ops are local-only, not resynced).
   Pure helpers are checked by `tests/js/board-logic.test.mjs` (plain node, no deps).
 
-`src/main.rs` is the CLI dispatch only (`render` / `lint` / `serve` / `genesis` / `compact` /
-`help` / `version`).
+`src/main.rs` is the CLI dispatch only (`render` / `lint` / `serve` / `export` / `extract` /
+`genesis` / `compact` / `help` / `version`).
 
 ## Domain invariants (do not break these)
 

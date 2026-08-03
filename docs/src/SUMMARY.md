@@ -25,6 +25,7 @@
   - [`serve`](./reference/cli/serve.md)
   - [`lint`](./reference/cli/lint.md)
   - [`export`](./reference/cli/export.md)
+  - [`extract`](./reference/cli/extract.md)
   - [`genesis`](./reference/cli/genesis.md)
   - [`compact`](./reference/cli/compact.md)
 - [The model format](./reference/model-format.md)
