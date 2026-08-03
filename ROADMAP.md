@@ -130,8 +130,10 @@ carry the meaning — the seam ES barely exercises. Together the four formats re
 not a list of diagram types: *event storming → context map → bounded context canvas → core domain
 chart*.
 
-**Now (crowned)** — the conversational **AI-loop core**, the extract → variant → diff "what if"
-loop no competitor offers:
+**Now (crowned) — discharged 2026-08-03.** The conversational **AI-loop core**, the extract →
+variant → diff "what if" loop no competitor offers, is **shipped in full**; all three items below
+are struck through. The crown is kept as the record of what was bet on and delivered, not as a
+work list — what to do next is under the list.
 
 1. ~~**`F-extract` #90**~~ — ✅ shipped 2026-08-03 — semantic sub-board extraction (standalone JTBD
    *and* proves the differentiation). **The loop is now closed end to end**: extract → variant →
@@ -140,6 +142,14 @@ loop no competitor offers:
    predicted (`diff_models` + the SVG overlay already existed).
 3. ~~**`F-context-pack` #97**~~ — ✅ shipped — the H2 wedge (typed-model-as-spec), rode the `export`
    seam. Its story partner **`F-pitch-benefits` #102** (📐 · S) is **still open**.
+
+**What sits at the top of Now instead**, for whoever arrives next — the crown is empty, and an
+empty crown is a decision to take, not a vacancy to fill with whatever is nearest:
+
+- **`F-spike-wardley` #115** is the only remaining `☐ | Now` row in the catalog below — and it is
+  a *timeboxed throwaway probe*, not a build. Its deliverable is a constraints note.
+- **`F-pitch-benefits` #102** is open, and newly overdue: until 2026-08-03 the pitch could describe
+  the AI loop as partly missing and be right. It now describes something a user can run today.
 
 *Corrected 2026-07-26:* two of the crowned three had shipped while this list still read as pending.
 `just sync-roadmap` rewrites the `Status` / `Horizon` **columns of tracked rows** only — it never

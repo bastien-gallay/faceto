@@ -85,8 +85,10 @@ lockstep. For board behaviour not covered by tests, render `examples/sample.mode
 ## Architecture
 
 The pipeline is `event-log.jsonl → replay → Model → Scene → SVG → HTML`; the `model.json → Model`
-path is the genesis/bootstrap input and a read-only `render` / `lint` / `extract` source (serving
-always goes through the log). **Eight Rust modules**, each one stage — `json`/`model`/`lint`/
+path is the genesis/bootstrap input and a read-only `render` / `lint` source (serving always goes
+through the log — and so does `extract`, which *persists* what it reads and therefore resolves a
+model to its sibling log when one exists, via `existing_log_for`; unlike `serve` it never creates
+one). **Eight Rust modules**, each one stage — `json`/`model`/`lint`/
 `extract`/`scene` are single files, `events`/`render`/`serve` are directories with a `mod.rs` plus
 one file per concern — plus the client, which is not a Rust module and gets the ninth bullet below.
 (The count is stated this way on purpose — it has been wrong twice, once as "Seven" over six names
@@ -119,8 +121,11 @@ prevent.)
   Result<Model, String>`, a pure pass (no IO, no clocks) beside `lint`: carve out a region, a
   bounded BFS neighbourhood around one element (undirected, `--hops`), or a lane. **Ids and `col`
   are preserved**, so the sub-board is a valid `--base` for a diff against its origin; an edge
-  with one endpoint outside the cut is dropped and `lint` reports the hole. `main.rs` writes the
-  result as a genesis'd sibling log via the same exclusive create `genesis` uses.
+  with one endpoint outside the cut is dropped and `lint` reports the hole. Placement is read
+  through `model::resolved_cols`, never `element.col`, so the cut and the board agree about where
+  a sticky is; the resolved value is written onto the extract so the smaller board cannot re-derive
+  a different one. `main.rs` writes the result as a genesis'd sibling log via the same exclusive
+  create `genesis` uses.
 - **`src/scene.rs`** — the Scene IR (F-scene-ir). Geometric primitives (`Rect`/`Line`/`Text`/
   `Circle`/`Path` + a **nesting** `Group`), a `Scene`, and the single `render_scene` serializer.
   **Geometric, never semantic**: a sticky, a lane, a region are event-storming words that stay on
@@ -168,7 +173,11 @@ come from violating them:
   identity from text or position. The model file convention is: never renumber an `id`, only add.
 - **`col` is a global timeline coordinate** shared across all lanes (left→right = time), *not* a
   per-lane index. Order within a lane is just sort-by-`col`. Missing `col` auto-assigns in file
-  order.
+  order — through **`model::resolved_cols`**, which every reader of a position must go through.
+  Read `element.col` directly and you are reading a *different board* from the one on screen: the
+  rule lived inside `board_scene` until F-extract, so `extract --region` judged membership on the
+  raw field and silently cut away stickies the board was visibly drawing inside that band (#142).
+  The same shape will recur for any future pass that reasons about placement.
 - **`type` selects the lane and colour** from the fixed 8-lane grammar: `actor`, `command`,
   `aggregate`, `event`, `policy`, `readmodel`, `external`, `hotspot`. Keep `LANES` (`src/render/`) and
   this set in sync.

@@ -117,6 +117,18 @@ after the lane filter, and a guess there is worse than a refusal. `--hops` is he
 rule: without `--focus` it is rejected rather than silently ignored, and given twice it is rejected
 rather than silently taking the last one.
 
+Giving no selector at all is a usage error too — there is no default cut:
+
+```text
+extract needs a selector: --region ID, --focus ID [--hops N], or --type KIND
+```
+
+A selector's value may not begin with `-`, so a missing value cannot swallow the next flag:
+
+```text
+--focus needs a value, and --type looks like a flag (values cannot start with '-')
+```
+
 ## When the selector matches nothing
 
 A typo must not produce a valid, empty, useless board, so an empty selection is an error (exit 1):
