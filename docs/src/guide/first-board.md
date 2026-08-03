@@ -90,5 +90,6 @@ always exits 0: a big-picture board is legitimately incomplete
 ## Where to go next
 
 - Hand the board to a coding agent: [the context pack](../agents/context-pack.md)
+- Carve out the part that concerns one app: [`extract`](../reference/cli/extract.md)
 - Group the timeline into bounded contexts: [regions](../board/regions.md)
 - Understand what the log guarantees: [the event log](../reference/event-log.md)
