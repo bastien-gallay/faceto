@@ -348,14 +348,13 @@ fn cmd_export(source: &str, format: Format) {
 /// no caller-side guard to forget, and no check-then-write race can clobber a live log. The model
 /// is loaded *before* the write, so a malformed model surfaces its own error even when a log is
 /// also present.
-fn write_genesis(model_path: &Path) -> Result<(PathBuf, String), String> {
-    let model = model::load(model_path)?;
-    warn_if_empty(&model, model_path);
-    let out = log_beside(model_path);
-    let batch = events::from_model(&model);
-
-    // Exclusive create: refuse to overwrite an existing log (append-only truth), race-free.
-    let mut f = match OpenOptions::new().write(true).create_new(true).open(&out) {
+/// Write a batch of events to a **new** log file, or fail. The write *is* the guard: the file is
+/// opened with an exclusive create, so "a log is append-only truth" holds even against a
+/// concurrent process — there is no check-then-write race and no caller-side check to forget.
+/// The one place a fresh log is created, so every future caller inherits that rule rather than
+/// re-deriving it.
+fn create_log_exclusive(out: &Path, batch: &[events::Event]) -> Result<(), String> {
+    let mut f = match OpenOptions::new().write(true).create_new(true).open(out) {
         Ok(f) => f,
         Err(e) if e.kind() == ErrorKind::AlreadyExists => {
             return Err(format!(
@@ -365,8 +364,16 @@ fn write_genesis(model_path: &Path) -> Result<(PathBuf, String), String> {
         }
         Err(e) => return Err(format!("writing {}: {e}", out.display())),
     };
-    f.write_all(events::to_jsonl(&batch).as_bytes())
-        .map_err(|e| format!("writing {}: {e}", out.display()))?;
+    f.write_all(events::to_jsonl(batch).as_bytes())
+        .map_err(|e| format!("writing {}: {e}", out.display()))
+}
+
+fn write_genesis(model_path: &Path) -> Result<(PathBuf, String), String> {
+    let model = model::load(model_path)?;
+    warn_if_empty(&model, model_path);
+    let out = log_beside(model_path);
+    let batch = events::from_model(&model);
+    create_log_exclusive(&out, &batch)?;
 
     let summary = format!(
         "seeded {} events from {} → {}",
