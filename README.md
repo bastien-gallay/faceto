@@ -250,9 +250,10 @@ architecture and domain invariants.
 Extracted from the daily-ops inception event-storm harness. The event-sourced spine is the current
 shape: the log is truth, the model is a projection, comments are events.
 
-Already shipped from the **conversational AI loop**: **variants** (render or serve a board against
-a sibling log as a diff) and the **context pack** (`export --format context`, above). What is left
-of that loop is `extract` — carve a semantic sub-board out of a big one.
+The **conversational AI loop** is complete as of 2026-08-03: **extract** (carve a semantic
+sub-board out of a big one, above), **variants** (render or serve a board against a sibling log as
+a diff) and the **context pack** (`export --format context`, above). Extract → try a variant →
+diff, on files you own, offline.
 
 The **kernel/format split** that lets a second board format exist at all is under way. Its first
 piece shipped: a **Scene IR** (2026-07-26) — the board is built as geometry and one serializer
