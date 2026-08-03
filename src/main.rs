@@ -555,6 +555,27 @@ fn cmd_genesis(model_path: &str) {
     }
 }
 
+/// The log that already holds a source's truth, if there is one: the source itself when it *is* a
+/// log, or a `<name>.event-log.jsonl` sitting beside a model. `None` means "no log exists yet" —
+/// this never creates one, so a read-only caller can prefer the truth without a write as a side
+/// effect. `verb` is the gerund used in the notice ("serving" / "extracting from").
+fn existing_log_for(source: &Path, verb: &str) -> Option<PathBuf> {
+    if events::is_log_path(source) {
+        return Some(source.to_path_buf());
+    }
+    let log = log_beside(source);
+    if log.exists() {
+        println!(
+            "{} exists beside {} — {} the log (it is the truth; the model is derived)",
+            log.display(),
+            source.display(),
+            verb
+        );
+        return Some(log);
+    }
+    None
+}
+
 /// Resolve the source a `serve` command must mutate to an event log, auto-running genesis for a
 /// bare `model.json` (F-auto-genesis). Serving mutates, and every mutation must land in the log —
 /// the truth — never in the derived model, so:
@@ -569,29 +590,21 @@ fn cmd_genesis(model_path: &str) {
 /// This is what kills legacy mode: `serve` never opens a `model.json` for writing, so no mutation
 /// can ever land outside the log.
 fn serve_log_path(source: &Path) -> Result<std::path::PathBuf, String> {
-    if events::is_log_path(source) {
-        return Ok(source.to_path_buf());
-    }
-    let log = log_beside(source);
-    if log.exists() {
-        println!(
-            "{} exists beside {} — serving the log (it is the truth; the model is derived)",
-            log.display(),
-            source.display()
-        );
+    if let Some(log) = existing_log_for(source, "serving") {
         return Ok(log);
     }
     // Upgrade footgun: pre-F-output-naming logs were the bare `event-log.jsonl`. If one sits beside
     // the model under that old name, it is *not* this model's derived log, so genesis below would
     // mint a fresh empty-history log and silently strand the user's real one. Point them at the
     // rename rather than skip it in silence.
+    let expected = log_beside(source);
     let legacy = dir_of(source).join("event-log.jsonl");
-    if legacy != log && legacy.exists() {
+    if legacy != expected && legacy.exists() {
         eprintln!(
             "warning: found a legacy {} that is not this model's log — rename it to {} to keep its \
              history (genesis is creating a fresh log instead)",
             legacy.display(),
-            log.display()
+            expected.display()
         );
     }
     let (out, summary) = write_genesis(source)?;

@@ -3,7 +3,7 @@ use super::diff::{region_removed, EdgeVerdict, ElementVerdict, Overlay, RegionVe
 use super::geometry::*;
 use super::style::*;
 use super::text::*;
-use crate::model::{is_pivotal, Element, Model};
+use crate::model::{is_pivotal, resolved_cols, Element, Model};
 use crate::scene::{render_scene, Scene, Shape};
 use std::collections::{HashMap, HashSet};
 
@@ -81,13 +81,12 @@ pub(crate) fn board_scene(model: &Model, view: &View, overlay: Option<&Overlay>)
     // a hoverable add-target. (Previously this filtered to lanes that held an element.)
     let present: Vec<&str> = LANES.to_vec();
 
-    // Auto-assign a column to any element missing `col`, preserving file order.
-    let mut auto: i64 = 0;
-    for e in elements.iter_mut() {
-        if e.col.is_none() {
-            e.col = Some(auto);
-            auto += 1;
-        }
+    // Auto-assign a column to any element missing `col`, preserving file order. The rule lives in
+    // `model` because `extract` selects regions by the same columns — when the two disagreed, a
+    // `--region` cut silently dropped stickies the board was drawing inside that very band.
+    let cols = resolved_cols(&elements);
+    for (e, col) in elements.iter_mut().zip(cols) {
+        e.col = Some(col);
     }
     // Column geometry is indexed by `col - min_col`, so a hand-authored negative or sparse `col`
     // lands at the left edge instead of casting to a wild `usize` (panic) or sizing a vast `ncols`

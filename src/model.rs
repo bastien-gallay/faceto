@@ -215,6 +215,33 @@ fn edge_from(j: &Json) -> Option<Edge> {
     })
 }
 
+/// Resolve every element's column, filling in the ones the file left out: a missing `col`
+/// auto-assigns in **file order**, counting up from 0. Returns one column per element, positionally
+/// — the input is untouched, so nothing has to clone a board to ask where its stickies sit.
+///
+/// This is a domain rule, not a drawing detail (`col` is the global timeline coordinate), and it
+/// has two callers that must agree: the renderer places stickies by it, and `extract` selects a
+/// region by it. When they disagreed, `--region` silently dropped `col`-less elements the board
+/// was visibly drawing *inside* that band — what you saw was not what you cut.
+///
+/// One divergence is deliberate and harmless: the renderer numbers only the elements it can place
+/// (it drops kinds outside the 8-lane grammar first), so a board carrying an off-grammar,
+/// `col`-less sticky can number the rest one step higher here. Such an element is not drawn at
+/// all, so it cannot be seen inside a band either way.
+pub fn resolved_cols(elements: &[Element]) -> Vec<i64> {
+    let mut auto = 0;
+    elements
+        .iter()
+        .map(|e| {
+            e.col.unwrap_or_else(|| {
+                let c = auto;
+                auto += 1;
+                c
+            })
+        })
+        .collect()
+}
+
 /// The `col` for a lane-title `+` add (the left-edge gesture). When the target lane is **empty**
 /// this is the board's current first column, so the new element aligns to the left edge *without*
 /// shoving the other lanes right; when the lane already holds elements it is one column further
