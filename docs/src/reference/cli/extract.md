@@ -43,6 +43,20 @@ step. The name is derived from the [board name](../cli.md#the-board-name) and a 
 Like [`genesis`](./genesis.md), the write is an exclusive create: if that file already exists,
 `extract` fails rather than overwrite it. Move the old one aside yourself.
 
+## It reads the truth, not the bootstrap file
+
+Point `extract` at a `model.json` that already has an event log beside it and it reads the **log**:
+
+```text
+orders.event-log.jsonl exists beside orders.model.json — extracting from the log
+(it is the truth; the model is derived)
+```
+
+Once a log exists, every edit made on the live board landed there and none of them went back to
+the model. A `render` from the stale model costs you a re-run; an `extract` would *persist* the
+stale board into a new file. Unlike [`serve`](./serve.md), it never creates a log that does not
+exist yet — reading is not a reason to write.
+
 ## Ids and columns are preserved
 
 Nothing is renumbered and nothing is re-based to column 0. That is what makes the sub-board a
@@ -72,13 +86,19 @@ accept it: an extract of one context legitimately ends at its borders.
 
 ## Regions come along, clipped
 
-The extract keeps the bands that still cover something, trimmed to the columns its elements
-actually occupy, then re-projected onto the gap-free partition every board owes. `--region K2`
-produces a board that still says "K2".
+The extract keeps every band its survivors' column span **crosses**, trimmed to that span, then
+re-projected onto the gap-free partition every board owes. `--region K2` produces a board that
+still says "K2".
 
-A selection whose elements have no `col` at all keeps no regions — there is no timeline span to
-clip against. For the same reason, an element with no `col` belongs to no region and is never
-picked by `--region`.
+Crossed is wider than occupied: a `--type hotspot` cut with stickies in the first and last regions
+keeps the empty ones in between, because the timeline between two survivors is continuous and
+dropping the middle would hand their columns to a neighbour they never belonged to. Only bands
+entirely outside the span are dropped.
+
+A model file may leave `col` out, in which case the board assigns one in file order — and `extract`
+reads the same assignment, so `--region` cuts exactly the stickies you can see inside the band. The
+resolved column is then **written out** explicitly on the extract, so the sub-board cannot
+re-derive a different one from its smaller element set.
 
 The board's `title` gains the selector as a suffix (`Orders · region K2`), and its
 [`level`](./lint.md) is inherited, so the sub-board lints exactly as strictly as its origin.
@@ -93,8 +113,9 @@ extract takes one selector, not two (region K2 and hotspot lane)
 ```
 
 Combining them would have to define whether `--focus E4 --hops 2 --type hotspot` walks before or
-after the lane filter, and a guess there is worse than a refusal. `--hops` without `--focus` is
-rejected for the same reason — it is named rather than silently ignored.
+after the lane filter, and a guess there is worse than a refusal. `--hops` is held to the same
+rule: without `--focus` it is rejected rather than silently ignored, and given twice it is rejected
+rather than silently taking the last one.
 
 ## When the selector matches nothing
 

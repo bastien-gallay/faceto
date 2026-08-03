@@ -61,8 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a valid baseline for a diff against its origin — `faceto render orders-K2.event-log.jsonl --base
   orders.event-log.jsonl` reports `0 moved, 0 changed`. Exactly one selector per run (two is a
   usage error, not an intersection); an edge with one endpoint outside the cut is dropped and
-  `lint` surfaces the hole; regions come along, clipped to the survivors. Like `genesis`, the write
-  refuses to overwrite an existing log. See
+  `lint` surfaces the hole; regions come along, clipped to the survivors. A `col` the model file
+  left out is resolved the way the board resolves it — so `--region` cuts what you can see inside
+  the band — and written out explicitly on the result. Handed a `model.json` that already has a log
+  beside it, `extract` reads the **log**, since the model is a stale bootstrap form by then (it
+  never creates one, unlike `serve`). Like `genesis`, the write refuses to overwrite an existing
+  log. See
   [the `extract` page](https://bastien-gallay.github.io/faceto/reference/cli/extract.html).
 
 - **A documentation site** (F-docs-book): the manual now lives in `docs/src/` as an mdBook,

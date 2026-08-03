@@ -11,7 +11,9 @@
 //!   came from (F-variants), which is the whole point of extracting before a "what if".
 //! - **`col` is preserved too.** A sub-board is not re-based to column 0: `col` is a global
 //!   timeline coordinate, and shifting it would read as a `moved` verdict on every element in the
-//!   very diff the id-preservation exists to keep clean.
+//!   very diff the id-preservation exists to keep clean. A column the source left *implicit* is
+//!   resolved the way the board resolves it ([`crate::model::resolved_cols`]) and written out, so
+//!   the cut is judged on — and records — the placement the user can actually see.
 //!
 //! An edge with one endpoint outside the selection is **dropped**. The hole is deliberate and
 //! visible: `lint` will report the orphaned event or the input-less policy, which is exactly the
@@ -69,16 +71,28 @@ impl Selector {
 /// not have, or matches no element at all: a typo'd region id or a mistyped lane must not
 /// silently produce a valid, empty, useless extract.
 pub fn extract(m: &Model, sel: &Selector) -> Result<Model, String> {
-    let keep = select(m, sel)?;
+    // The columns the *board* uses, with the file's omissions filled in the way the renderer fills
+    // them. Computed once and used for both halves of the job: deciding what the cut contains, and
+    // recording where the survivors sit.
+    let cols = crate::model::resolved_cols(&m.elements);
+    let keep = select(m, &cols, sel)?;
     if keep.is_empty() {
         return Err(format!("{} matched no elements", sel.label()));
     }
 
+    // An auto-assigned column is **materialised** onto the extract. Left implicit, it would be
+    // re-derived from scratch in the smaller board — counting from 0 over a different set of
+    // elements — so a sticky that sat in the third column would silently move to the first, in a
+    // sub-board whose whole promise is that nothing moved.
     let elements: Vec<_> = m
         .elements
         .iter()
-        .filter(|e| keep.contains(e.id.as_str()))
-        .cloned()
+        .zip(&cols)
+        .filter(|(e, _)| keep.contains(e.id.as_str()))
+        .map(|(e, &col)| crate::model::Element {
+            col: Some(col),
+            ..e.clone()
+        })
         .collect();
     // Both endpoints must survive: a half-edge would point at an element the sub-board does not
     // contain, which replays into a dangling reference `lint` already treats as no edge at all.
@@ -105,8 +119,9 @@ pub fn extract(m: &Model, sel: &Selector) -> Result<Model, String> {
     })
 }
 
-/// The ids a selector picks out, or an error naming what the board does not have.
-fn select<'a>(m: &'a Model, sel: &Selector) -> Result<HashSet<&'a str>, String> {
+/// The ids a selector picks out, or an error naming what the board does not have. `cols` is the
+/// board's resolved placement, positional with `m.elements`.
+fn select<'a>(m: &'a Model, cols: &[i64], sel: &Selector) -> Result<HashSet<&'a str>, String> {
     match sel {
         Selector::Region(id) => {
             let band = m.phases.iter().find(|p| &p.id == id).ok_or_else(|| {
@@ -116,16 +131,16 @@ fn select<'a>(m: &'a Model, sel: &Selector) -> Result<HashSet<&'a str>, String> 
                     false => format!("no region {id} (this board has {})", known.join(", ")),
                 }
             })?;
-            // Spatial membership, so an element with no `col` sits in no band at all — `col` is
-            // assigned at render time, and inventing one here would make the cut depend on file
-            // order rather than on the timeline the user is looking at.
+            // Membership is spatial, and it must be judged on the columns the *board* uses — so a
+            // `col`-less element is placed by `resolved_cols`, exactly as the renderer places it,
+            // rather than treated as belonging nowhere. Judging on the raw `col` cut stickies the
+            // user could plainly see inside the band, which is the one thing a semantic extract
+            // must never do.
             Ok(m.elements
                 .iter()
-                .filter(|e| {
-                    e.col
-                        .is_some_and(|c| band.from_col <= c && c <= band.to_col)
-                })
-                .map(|e| e.id.as_str())
+                .zip(cols)
+                .filter(|(_, &c)| band.from_col <= c && c <= band.to_col)
+                .map(|(e, _)| e.id.as_str())
                 .collect())
         }
         Selector::Focus { id, hops } => {
@@ -182,9 +197,14 @@ fn neighbourhood<'a>(m: &'a Model, start: &'a str, hops: usize) -> HashSet<&'a s
 /// The bands that survive the cut, clipped to the columns the selection actually occupies.
 ///
 /// An extract keeps its regions rather than coming out phase-less: `--region K2` should produce a
-/// board that still says "K2". Bands that no longer cover anything are dropped, and the rest are
-/// trimmed to the surviving `[min, max]` column span, then re-projected by
-/// [`crate::model::normalize`] onto the contiguous, gap-free partition every `Model` owes.
+/// board that still says "K2". Every band the surviving `[min, max]` span **crosses** is kept and
+/// trimmed to it, then re-projected by [`crate::model::normalize`] onto the contiguous, gap-free
+/// partition every `Model` owes. Only bands entirely outside the span go.
+///
+/// Note that "crosses" is wider than "holds a survivor": a `--type hotspot` cut whose stickies sit
+/// in the first and last regions keeps the empty ones **between** them. That is deliberate — the
+/// timeline between two survivors is continuous, and dropping the middle bands would leave the
+/// partition claiming those columns belong to a neighbour they never belonged to.
 ///
 /// A selection with no columns at all (every element `col`-less) keeps no bands: there is no
 /// timeline span to clip against.
@@ -255,6 +275,54 @@ mod tests {
         assert_eq!(sub.phases.len(), 1, "only the selected band survives");
         assert_eq!(sub.phases[0].id, "K2", "the region keeps its identity");
         assert_eq!((sub.phases[0].from_col, sub.phases[0].to_col), (2, 4));
+    }
+
+    /// A `col`-less element is *drawn* somewhere — the board assigns it a column in file order —
+    /// so the cut has to see it there. Judged on the raw `col` it belonged to no band at all, and
+    /// `--region` silently dropped a sticky the user could see inside the band.
+    #[test]
+    fn region_sees_col_less_elements_where_the_board_draws_them() {
+        let m = from_json(
+            &json::parse(
+                r#"{"phases":[{"id":"K1","label":"a","fromCol":0,"toCol":0},
+                              {"id":"K2","label":"b","fromCol":1,"toCol":9}],
+                    "elements":[{"id":"E1","type":"event","label":"first"},
+                                {"id":"E2","type":"event","label":"second"},
+                                {"id":"E3","type":"event","label":"pinned","col":5}]}"#,
+            )
+            .unwrap(),
+        );
+        // Auto-assignment gives E1 col 0 (K1) and E2 col 1 (K2) — file order, counting from 0.
+        assert_eq!(
+            ids(&extract(&m, &Selector::Region("K1".into())).unwrap()),
+            ["E1"]
+        );
+        let k2 = extract(&m, &Selector::Region("K2".into())).unwrap();
+        assert_eq!(ids(&k2), ["E2", "E3"]);
+    }
+
+    /// …and the placement the cut was made on is written out, or the smaller board would re-derive
+    /// a different one from its own element order and the sticky would move.
+    #[test]
+    fn an_auto_assigned_column_is_materialised_onto_the_extract() {
+        let m = from_json(
+            &json::parse(
+                r#"{"phases":[{"id":"K1","label":"a","fromCol":0,"toCol":9}],
+                    "elements":[{"id":"E1","type":"event","label":"first"},
+                                {"id":"H1","type":"hotspot","label":"q"},
+                                {"id":"E2","type":"event","label":"third"}]}"#,
+            )
+            .unwrap(),
+        );
+        let sub = extract(&m, &Selector::Kind("event".into())).unwrap();
+        assert_eq!(
+            sub.elements
+                .iter()
+                .map(|e| (e.id.as_str(), e.col))
+                .collect::<Vec<_>>(),
+            [("E1", Some(0)), ("E2", Some(2))],
+            "E2 keeps column 2 — re-deriving in the sub-board would have made it 1"
+        );
     }
 
     #[test]
@@ -405,17 +473,13 @@ mod tests {
     }
 
     #[test]
-    fn a_col_less_selection_keeps_no_bands() {
+    fn a_board_with_no_regions_extracts_without_any() {
         let m = from_json(
-            &json::parse(
-                r#"{"phases":[{"id":"K1","label":"p","fromCol":0,"toCol":3}],
-                    "elements":[{"id":"E1","type":"event","label":"a"}]}"#,
-            )
-            .unwrap(),
+            &json::parse(r#"{"elements":[{"id":"E1","type":"event","label":"a"}]}"#).unwrap(),
         );
         let sub = extract(&m, &Selector::Kind("event".into())).unwrap();
         assert_eq!(ids(&sub), ["E1"]);
-        assert!(sub.phases.is_empty(), "no span to clip against");
+        assert!(sub.phases.is_empty(), "nothing to keep");
     }
 
     // ---- naming --------------------------------------------------------------------------

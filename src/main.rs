@@ -375,7 +375,14 @@ fn extract_out_path(source: &Path, sel: &extract::Selector) -> PathBuf {
 /// The source is read-only and loads through `load_source`, so a `model.json` works as well as a
 /// log. Writing goes through `create_log_exclusive`: an extract never clobbers an existing log.
 fn cmd_extract(source: &str, sel: &extract::Selector) {
-    let path = Path::new(source);
+    let given = Path::new(source);
+    // Read the *truth*. Handed a `model.json` that already has a log beside it, the model is a
+    // stale bootstrap form — every edit made on the board since genesis lives in the log. `render`
+    // getting that wrong costs a re-run; `extract` writes a new board out of it, so the staleness
+    // would be persisted. The board name (and so the output filename) still comes from the source
+    // the user named: a model and its log resolve to the same stem anyway.
+    let owned = existing_log_for(given, "extracting from");
+    let path = owned.as_deref().unwrap_or(given);
     let model = match load_source(path) {
         Ok(m) => m,
         Err(e) => {
@@ -436,9 +443,16 @@ fn parse_extract(args: &[String]) -> (String, extract::Selector) {
     };
 
     while i < args.len() {
+        // A value is never allowed to start with `-`: `--focus --type hotspot` must not read the
+        // next flag as an element id. The message says so, rather than the misleading bare "needs
+        // a value" a `-`-leading argument used to get.
         let value = |flag: &str| match args.get(i + 1) {
             Some(v) if !v.starts_with('-') => v.clone(),
-            _ => {
+            Some(v) => {
+                eprintln!("{flag} needs a value, and {v} looks like a flag (values cannot start with '-')");
+                exit(2);
+            }
+            None => {
                 eprintln!("{flag} needs a value");
                 exit(2);
             }
@@ -463,7 +477,15 @@ fn parse_extract(args: &[String]) -> (String, extract::Selector) {
                 i += 2;
             }
             "--hops" => {
-                match value("--hops").parse() {
+                let v = value("--hops");
+                // Repeated, `--hops` is refused rather than last-wins — the same rule a repeated
+                // selector gets. Two different depths in one command line is a mistake, and
+                // silently honouring the last one hides it behind a plausible result.
+                if let Some(had) = hops {
+                    eprintln!("--hops given twice ({had} and {v}) — pick one depth");
+                    exit(2);
+                }
+                match v.parse() {
                     Ok(n) => hops = Some(n),
                     Err(_) => {
                         eprintln!("--hops needs a whole number of edges (e.g. --hops 2)");
@@ -557,8 +579,14 @@ fn cmd_genesis(model_path: &str) {
 
 /// The log that already holds a source's truth, if there is one: the source itself when it *is* a
 /// log, or a `<name>.event-log.jsonl` sitting beside a model. `None` means "no log exists yet" —
-/// this never creates one, so a read-only caller can prefer the truth without a write as a side
-/// effect. `verb` is the gerund used in the notice ("serving" / "extracting from").
+/// this never creates one, so a read-only verb can prefer the truth without a write as a side
+/// effect.
+///
+/// Once a log exists the model beside it is a stale bootstrap form: every board edit since genesis
+/// landed in the log and none of them went back to the model. A verb that reads the model anyway
+/// silently works from an older board — harmless for a render you can re-run, but `extract`
+/// *persists* what it read, which is why it resolves through here too. `verb` is the gerund used
+/// in the notice ("serving" / "extracting from").
 fn existing_log_for(source: &Path, verb: &str) -> Option<PathBuf> {
     if events::is_log_path(source) {
         return Some(source.to_path_buf());
@@ -904,6 +932,35 @@ mod tests {
             ),
             PathBuf::from("boards/orders-E4-h2.event-log.jsonl")
         );
+    }
+
+    #[test]
+    fn existing_log_for_prefers_the_log_without_ever_creating_one() {
+        let dir = scratch("truth");
+        let model = dir.join("orders.model.json");
+        std::fs::write(&model, MODEL).unwrap();
+
+        // No log yet: `None`, and — unlike `serve_log_path` — nothing is written. A read-only verb
+        // must not mint a log as a side effect of being pointed at a model.
+        assert!(existing_log_for(&model, "extracting from").is_none());
+        assert!(!dir.join("orders.event-log.jsonl").exists());
+
+        // Once a log exists it is the truth, and the model beside it is a stale bootstrap form.
+        let log = dir.join("orders.event-log.jsonl");
+        std::fs::write(&log, "PRIOR\n").unwrap();
+        assert_eq!(
+            existing_log_for(&model, "extracting from"),
+            Some(log.clone())
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "PRIOR\n");
+
+        // A log source is itself, untouched, with no filesystem lookup.
+        let direct = Path::new("/nowhere/x.event-log.jsonl");
+        assert_eq!(
+            existing_log_for(direct, "extracting from"),
+            Some(direct.to_path_buf())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
