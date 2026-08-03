@@ -53,6 +53,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`faceto extract` — semantic sub-board extraction** (F-extract, #90). Carve a smaller board out
+  of a bigger one by *meaning* rather than by geometry: `--region K2` (a band), `--focus E4
+  --hops 2` (a bounded, undirected walk out from one element), or `--type hotspot` (a lane). The
+  result is written beside the source as an already-genesis'd log (`orders-K2.event-log.jsonl`), so
+  `render` and `serve` take it directly. **Ids and columns are preserved**, which makes the extract
+  a valid baseline for a diff against its origin — `faceto render orders-K2.event-log.jsonl --base
+  orders.event-log.jsonl` reports `0 moved, 0 changed`. Exactly one selector per run (two is a
+  usage error, not an intersection); an edge with one endpoint outside the cut is dropped and
+  `lint` surfaces the hole; regions come along, clipped to the survivors. Like `genesis`, the write
+  refuses to overwrite an existing log. See
+  [the `extract` page](https://bastien-gallay.github.io/faceto/reference/cli/extract.html).
+
 - **A documentation site** (F-docs-book): the manual now lives in `docs/src/` as an mdBook,
   published to <https://bastien-gallay.github.io/faceto/> — a board guide organised by what you are
   looking at, a per-verb CLI reference, the lint rules, and a "Working with agents" part covering

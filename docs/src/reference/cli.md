@@ -5,6 +5,8 @@ faceto render  [SOURCE] [--base OTHER]              write <name>.svg + <name>.ht
 faceto serve   [SOURCE] [-p PORT] [--base OTHER]    serve the live board (default :8753)
 faceto lint    [SOURCE]                             check the ES grammar (warn-only)
 faceto export  [SOURCE] [--format mermaid|context]  print the board to stdout
+faceto extract [SOURCE] (--region ID | --focus ID [--hops N] | --type KIND)
+                                                    carve a sub-board out into a sibling log
 faceto genesis [MODEL]                              migrate a model.json into its event log
 faceto compact [LOG]                                fold a log to a snapshot
 faceto help | version
@@ -19,8 +21,9 @@ Every verb takes one positional `SOURCE`, defaulting to `./model.json` — excep
 - a **model file** — any `.json` that is not a log, e.g. `orders.model.json`; or
 - an **event log** — `.jsonl` or `.log`, e.g. `orders.event-log.jsonl`.
 
-The extension chooses the reader. `render`, `lint` and `export` accept both and never mutate
-anything. `serve` mutates, so it always resolves to the log first (see
+The extension chooses the reader. `render`, `lint`, `export` and [`extract`](./cli/extract.md)
+accept both and never mutate their source — `extract` writes a *new* sibling log, it does not
+touch the one it read. `serve` mutates, so it always resolves to the log first (see
 [`serve`](./cli/serve.md)).
 
 ## The board name
@@ -42,8 +45,8 @@ A model and *its* log resolve to the **same** name, so `render` of either writes
 | Code | Meaning |
 | --- | --- |
 | `0` | success — including `lint` findings, which are warnings, never a gate |
-| `1` | an operational error: unreadable source, malformed JSON, a refused write |
-| `2` | a usage error: unknown command, unknown flag, `--base` or `--format` missing its value |
+| `1` | an operational error: unreadable source, malformed JSON, a refused write, an `extract` selector that matches nothing |
+| `2` | a usage error: unknown command, unknown flag, `--base` / `--format` / an `extract` selector missing its value, or two `extract` selectors at once |
 
 An unknown flag always fails loudly rather than being misread as a file path.
 

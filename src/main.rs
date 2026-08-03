@@ -4,6 +4,7 @@
 //!   faceto lint    [SOURCE]           check the board against the ES-grammar rules (warn-only)
 //!   faceto serve   [SOURCE] [-p PORT] [--base OTHER]  serve the live board + comment sidecar
 //!   faceto export  [SOURCE] [--format mermaid|context]  print the board (mermaid, or a context pack) to stdout
+//!   faceto extract [SOURCE] --region ID | --focus ID [--hops N] | --type KIND  carve a sub-board out
 //!   faceto genesis [MODEL]            migrate a model.json into a <name>.event-log.jsonl
 //!   faceto compact [LOG]              fold a log to a snapshot, bounding replay length
 //!
@@ -11,6 +12,7 @@
 //! ./model.json. Zero dependencies, offline.
 
 mod events;
+mod extract;
 mod json;
 mod lint;
 mod model;
@@ -76,6 +78,10 @@ fn main() {
         "export" => {
             let (source, format) = parse_export(&args[2..]);
             cmd_export(&source, format);
+        }
+        "extract" => {
+            let (source, selector) = parse_extract(&args[2..]);
+            cmd_extract(&source, &selector);
         }
         "genesis" => {
             let model = args.get(2).map(String::as_str).unwrap_or("model.json");
@@ -348,11 +354,163 @@ fn cmd_export(source: &str, format: Format) {
 /// no caller-side guard to forget, and no check-then-write race can clobber a live log. The model
 /// is loaded *before* the write, so a malformed model surfaces its own error even when a log is
 /// also present.
+/// The log an extract is written to: the source's board name, the selector's slug, and the log
+/// suffix (`orders.event-log.jsonl` + `--region K2` → `orders-K2.event-log.jsonl`). A sibling of
+/// the source, never a nested path — the slug is sanitised to plain filename characters.
+fn extract_out_path(source: &Path, sel: &extract::Selector) -> PathBuf {
+    dir_of(source).join(format!(
+        "{}-{}{EVENT_LOG_SUFFIX}",
+        output_stem(source),
+        sel.slug()
+    ))
+}
+
+/// Carve a sub-board out of a source and write it beside it as a genesis'd log (F-extract).
+///
+/// The output is a **log**, not a `model.json`: `events::from_model` already exists, so the
+/// extract lands directly on the spine and is immediately `render`/`serve`-able with no second
+/// migration step. Ids and columns are preserved, so `faceto render sub --base origin` is a
+/// meaningful diff — the extract → variant → diff loop this verb exists to open.
+///
+/// The source is read-only and loads through `load_source`, so a `model.json` works as well as a
+/// log. Writing goes through `create_log_exclusive`: an extract never clobbers an existing log.
+fn cmd_extract(source: &str, sel: &extract::Selector) {
+    let path = Path::new(source);
+    let model = match load_source(path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            exit(1);
+        }
+    };
+    warn_if_empty(&model, path);
+    let sub = match extract::extract(&model, sel) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            exit(1);
+        }
+    };
+    let out = extract_out_path(path, sel);
+    let batch = events::from_model(&sub);
+    if let Err(e) = create_log_exclusive(&out, &batch) {
+        eprintln!("error: {e}");
+        exit(1);
+    }
+    let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+    println!(
+        "extracted {} — {}, {}, {} → {}",
+        sel.label(),
+        plural(sub.elements.len(), "element"),
+        plural(sub.edges.len(), "edge"),
+        plural(sub.phases.len(), "region"),
+        out.display()
+    );
+}
+
+/// `extract [SOURCE] --region ID | --focus ID [--hops N] | --type KIND`.
+///
+/// **Exactly one selector**: a second one is a usage error (exit 2), not an intersection —
+/// `--focus E4 --hops 2 --type hotspot` would have to define whether the walk runs before or
+/// after the lane filter, and guessing is worse than refusing. `--hops` defaults to 1 and is
+/// meaningless without `--focus`, so it says so rather than being silently ignored.
+fn parse_extract(args: &[String]) -> (String, extract::Selector) {
+    use extract::Selector;
+    let mut source = "model.json".to_string();
+    let mut selector: Option<Selector> = None;
+    let mut hops: Option<usize> = None;
+    let mut i = 0;
+
+    // One arm for all three selectors: each needs a value, and each must be the only one.
+    let set = |sel: Selector, current: &mut Option<Selector>| {
+        if let Some(had) = current {
+            eprintln!(
+                "extract takes one selector, not two ({} and {})\n(--region / --focus / --type \
+                 are alternatives, not filters that combine)",
+                had.label(),
+                sel.label()
+            );
+            exit(2);
+        }
+        *current = Some(sel);
+    };
+
+    while i < args.len() {
+        let value = |flag: &str| match args.get(i + 1) {
+            Some(v) if !v.starts_with('-') => v.clone(),
+            _ => {
+                eprintln!("{flag} needs a value");
+                exit(2);
+            }
+        };
+        match args[i].as_str() {
+            "--region" => {
+                set(Selector::Region(value("--region")), &mut selector);
+                i += 2;
+            }
+            "--focus" => {
+                set(
+                    Selector::Focus {
+                        id: value("--focus"),
+                        hops: 1,
+                    },
+                    &mut selector,
+                );
+                i += 2;
+            }
+            "--type" => {
+                set(Selector::Kind(value("--type")), &mut selector);
+                i += 2;
+            }
+            "--hops" => {
+                match value("--hops").parse() {
+                    Ok(n) => hops = Some(n),
+                    Err(_) => {
+                        eprintln!("--hops needs a whole number of edges (e.g. --hops 2)");
+                        exit(2);
+                    }
+                }
+                i += 2;
+            }
+            _ => {
+                reject_flag(&args[i]);
+                source = args[i].clone();
+                i += 1;
+            }
+        }
+    }
+
+    let selector = match selector {
+        Some(s) => s,
+        None => {
+            eprintln!(
+                "extract needs a selector: --region ID, --focus ID [--hops N], or --type KIND"
+            );
+            exit(2);
+        }
+    };
+    // `--hops` is applied after the fact so flag order never matters (`--hops 2 --focus E4` reads
+    // the same as the reverse), and so a `--hops` on a non-focus selector can be *named* rather
+    // than dropped in silence.
+    match (hops, selector) {
+        (Some(n), Selector::Focus { id, .. }) => (source, Selector::Focus { id, hops: n }),
+        (Some(_), other) => {
+            eprintln!(
+                "--hops only means something with --focus (it bounds the walk out from one \
+                 element); {} selects no neighbourhood",
+                other.label()
+            );
+            exit(2);
+        }
+        (None, selector) => (source, selector),
+    }
+}
+
 /// Write a batch of events to a **new** log file, or fail. The write *is* the guard: the file is
 /// opened with an exclusive create, so "a log is append-only truth" holds even against a
 /// concurrent process — there is no check-then-write race and no caller-side check to forget.
-/// The one place a fresh log is created, so every future caller inherits that rule rather than
-/// re-deriving it.
+/// Shared by `genesis` (migrating a model) and `extract` (emitting a sub-board), so the two paths
+/// into a fresh log cannot drift on the one rule that protects an existing one.
 fn create_log_exclusive(out: &Path, batch: &[events::Event]) -> Result<(), String> {
     let mut f = match OpenOptions::new().write(true).create_new(true).open(out) {
         Ok(f) => f,
@@ -623,12 +781,15 @@ fn print_help() {
          \x20 faceto lint    [SOURCE]            check the board against the ES-grammar rules (warn-only)\n\
          \x20 faceto serve   [SOURCE] [-p PORT] [--base OTHER]  serve the live board + comment sidecar (default :8753)\n\
          \x20 faceto export  [SOURCE] [--format mermaid|context]  print the board to stdout (mermaid diagram, or a markdown context pack for a coding agent)\n\
+         \x20 faceto extract [SOURCE] (--region ID | --focus ID [--hops N] | --type KIND)  carve a sub-board out into a sibling log\n\
          \x20 faceto genesis [MODEL]             migrate a model.json into a <name>.event-log.jsonl\n\
          \x20 faceto compact [LOG]               fold a log to a snapshot, bounding replay (default model.event-log.jsonl)\n\
          \x20 faceto help | version\n\
          \n\
          SOURCE is a model.json or an event log (*.jsonl / *.log); it defaults to ./model.json.\n\
-         lint reads the board's \"level\" (big-picture | design); a design board adds stricter rules.",
+         lint reads the board's \"level\" (big-picture | design); a design board adds stricter rules.\n\
+         extract takes exactly one selector and keeps ids + columns, so the sub-board diffs\n\
+         cleanly against the board it came from (faceto render SUB --base ORIGIN).",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -677,6 +838,96 @@ mod tests {
         let r = parse_render(&args(&["--base", "before.jsonl", "after.jsonl"]));
         assert_eq!(r.source, "after.jsonl");
         assert_eq!(r.base.as_deref(), Some("before.jsonl"));
+    }
+
+    #[test]
+    fn parse_extract_reads_each_selector_in_any_order() {
+        use extract::Selector;
+
+        let (src, sel) = parse_extract(&args(&["orders.jsonl", "--region", "K2"]));
+        assert_eq!(src, "orders.jsonl");
+        assert_eq!(sel, Selector::Region("K2".into()));
+
+        // No positional → the same default every other verb uses.
+        let (src, sel) = parse_extract(&args(&["--type", "hotspot"]));
+        assert_eq!(src, "model.json");
+        assert_eq!(sel, Selector::Kind("hotspot".into()));
+
+        // `--hops` defaults to 1 and applies whichever side of `--focus` it is written on.
+        let (_, sel) = parse_extract(&args(&["--focus", "E4"]));
+        assert_eq!(
+            sel,
+            Selector::Focus {
+                id: "E4".into(),
+                hops: 1
+            }
+        );
+        let (_, sel) = parse_extract(&args(&["--hops", "3", "--focus", "E4"]));
+        assert_eq!(
+            sel,
+            Selector::Focus {
+                id: "E4".into(),
+                hops: 3
+            }
+        );
+    }
+
+    #[test]
+    fn extract_out_path_is_a_sibling_log_named_for_the_selector() {
+        use extract::Selector;
+        let src = Path::new("boards/orders.event-log.jsonl");
+        assert_eq!(
+            extract_out_path(src, &Selector::Region("K2".into())),
+            PathBuf::from("boards/orders-K2.event-log.jsonl")
+        );
+        // A model source resolves to the same board name, so both entry points name one file.
+        assert_eq!(
+            extract_out_path(
+                Path::new("boards/orders.model.json"),
+                &Selector::Focus {
+                    id: "E4".into(),
+                    hops: 2
+                }
+            ),
+            PathBuf::from("boards/orders-E4-h2.event-log.jsonl")
+        );
+    }
+
+    #[test]
+    fn an_extracted_log_replays_to_the_sub_board() {
+        // The end-to-end contract of the verb: what lands on disk is a log that replays to
+        // exactly the sub-board `extract` computed — ids and columns intact, so the result is a
+        // legitimate `--base` for a diff against the origin.
+        let board = model_of(
+            r#"{"title":"Orders",
+                "phases":[{"id":"K1","label":"a","fromCol":0,"toCol":1},
+                          {"id":"K2","label":"b","fromCol":2,"toCol":3}],
+                "elements":[{"id":"C1","type":"command","label":"Do","col":2},
+                            {"id":"E1","type":"event","label":"Done","col":3},
+                            {"id":"A1","type":"actor","label":"Who","col":0}],
+                "edges":[["A1","C1"],["C1","E1"]]}"#,
+        );
+        let sub = extract::extract(&board, &extract::Selector::Region("K2".into())).unwrap();
+
+        let dir = scratch("extract");
+        let out = dir.join("orders-K2.event-log.jsonl");
+        create_log_exclusive(&out, &events::from_model(&sub)).unwrap();
+
+        let replayed = events::load(&out).unwrap();
+        assert_eq!(replayed, sub, "the log round-trips the extracted board");
+        assert_eq!(
+            replayed
+                .elements
+                .iter()
+                .map(|e| (e.id.as_str(), e.col))
+                .collect::<Vec<_>>(),
+            [("C1", Some(2)), ("E1", Some(3))],
+            "ids and columns survive the trip to disk"
+        );
+
+        // Same refusal as genesis: an extract never clobbers a log that already exists.
+        let err = create_log_exclusive(&out, &events::from_model(&sub)).unwrap_err();
+        assert!(err.contains("refusing to overwrite"), "{err}");
     }
 
     #[test]

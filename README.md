@@ -156,6 +156,31 @@ overlay against the version you were just looking at** — no git, no page reloa
 reworded or relocated sticky reads as **changed** / **moved**, not drop-plus-add. **Plain** clears
 the overlay and re-baselines.
 
+## Extract the part that concerns you
+
+A 147-sticky board is the whole system; the app you are about to change is a corner of it.
+`extract` carves that corner out — by **meaning**, not by geometry. A whiteboard can only crop a
+rectangle.
+
+```bash
+faceto extract orders.event-log.jsonl --region K2           # one bounded context
+faceto extract orders.event-log.jsonl --focus E4 --hops 2   # the flow around one event
+faceto extract orders.event-log.jsonl --type hotspot        # every open question
+# → orders-K2.event-log.jsonl — a real board: render it, serve it, edit it
+```
+
+Ids and columns are **preserved**, so the sub-board is a legitimate baseline for a diff against
+the board it came from:
+
+```bash
+faceto render orders-K2.event-log.jsonl --base orders.event-log.jsonl
+# 0 added, 7 removed, 0 moved, 0 changed  ← nothing drifted; the cut is the only difference
+```
+
+Extract → try a variant → diff is the "what if" loop, and it runs on files you own, offline.
+Edges that leave the cut are dropped on purpose: `faceto lint` then reports the holes, which is
+how you find out your cut ran through the middle of a flow.
+
 ## Context pack for a coding agent
 
 The board you built in the workshop *is* the domain model — so hand it to your coding agent
