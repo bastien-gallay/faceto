@@ -22,7 +22,7 @@ A JSON Schema for one line ships at `docs/schema/event-log-line.schema.json`.
 {"event":"ElementAnnotated","id":"E1","text":"is this the pivotal one?"}
 ```
 
-File order **is** causal order. Reading applies four rules, and the difference between them is the
+File order **is** causal order. Reading applies five rules, and the difference between them is the
 difference between a typo and a schema you have not met yet:
 
 | Line | Outcome |
@@ -31,11 +31,17 @@ difference between a typo and a schema you have not met yet:
 | not valid JSON | **hard error**, naming the line number |
 | a known `event` kind missing a required field, or with a mis-typed one | **hard error** |
 | an unknown `event` kind | **skipped**, silently |
+| a line with no `event` key, or a non-string one | **skipped**, silently — a typo'd key loses the fact |
 
 The third row is the one worth dwelling on. A malformed *known* event is a fact that exists in the
 append-only truth but would vanish from the projection, so it stops the read rather than quietly
 shrinking your board. An unknown kind, by contrast, is how forward compatibility works: a log
 written by a newer faceto still replays here.
+
+The last row is the sharp edge of a hand-edited log: `{"evnt":"ElementAdded",…}` is well-formed
+JSON with no recognisable kind, so it takes the same path a future kind does and vanishes without a
+diagnostic. Validate against the schema when you edit a log by hand — it enumerates the kinds
+strictly, which is exactly the check the runtime cannot make.
 
 ## Event kinds
 
@@ -92,9 +98,9 @@ writes against; see [the narrate skill](../agents/narrate.md).
 | `add` | `type` (a lane), `text` (label) | `col`, `prepend`, `detail` | `ElementAdded` — **server mints the id** |
 | `move` | `elemId`, and `col` and/or `y` | `swapId` + `swapCol` | `ElementMoved` (two, on a swap) |
 | `rename` | `elemId`, `text` | — | `ElementRenamed` |
-| `resolve` | `elemId` | `text` (the resolution note) | `HotspotResolved` |
+| `resolve` | `elemId` | `text` (the resolution note) | `HotspotResolved` — an omitted `text` stores an **empty** note, clearing any previous one |
 | `drop` | `elemId` | — | `ElementRemoved` |
-| `connect` | `src`, `dst` (distinct) | — | `EdgeAdded` |
+| `connect` | `src`, `dst` (distinct, non-blank) | — | `EdgeAdded` |
 | `disconnect` | `src`, `dst` | — | `EdgeRemoved` |
 | `region-add` | `text`, `fromCol` < `toCol` | — | `PhaseAdded` — **server mints the id** |
 | `phase-split` | `regionId`, `atCol`, `text` | — | `PhaseSplit` — **server mints the right half's id** |
@@ -102,7 +108,7 @@ writes against; see [the narrate skill](../agents/narrate.md).
 | `region-rename` | `regionId`, `text` | — | `PhaseRenamed` |
 | `region-remove` | `regionId` | — | `PhaseRemoved` |
 | `region-resize` | `regionId`, `fromCol`, `toCol` | — | `PhaseResized` (legacy — prefer `frontier-move`) |
-| anything else with an `elemId` | `elemId`, `text` | — | `ElementAnnotated` |
+| anything else with an `elemId` | `elemId` | `text` | `ElementAnnotated` — same: an omitted or blank `text` **clears** the element's note |
 
 The guards are deliberate, and each one exists because its absence would write something permanent
 and wrong:
@@ -110,9 +116,14 @@ and wrong:
 - a **blank label** on `add` or `rename` is refused (`400`) — an id is never renumbered, so a box
   blanked by accident would stay blank forever;
 - an **off-grammar `type`** on `add` is refused, because it would mint into a real lane's id space;
-- a **self-loop** and a **missing endpoint** on `connect` are refused;
+- a **self-loop**, and an absent or blank `src` / `dst`, are refused on `connect`;
 - an **inverted or zero-width span** on `region-add` / `region-resize` is refused;
 - a `move` carrying neither `col` nor `y` persists **nothing** — it would replay as a no-op.
+
+Endpoint **existence** is *not* among them: `connect` sees only the posted comment, never the
+board, so a typo'd id is accepted and appends a dangling edge. Replay tolerates it — nothing is
+drawn, and the edge is cascade-cleaned if its element is later removed — but nothing tells you
+either. Post ids you actually read back from the log.
 
 A request that maps to no event is a `400`, not a silent success. The last row of the table is the
 catch-all: an unrecognised `kind` naming an element becomes an advisory note, never a structural

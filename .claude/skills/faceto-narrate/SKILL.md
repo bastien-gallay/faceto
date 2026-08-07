@@ -177,7 +177,7 @@ non-blank.
 | `resolve` | `elemId` | `text` (resolution note) | `HotspotResolved` |
 | `drop` | `elemId` | — | `ElementRemoved` |
 | *(anything else with an `elemId`)* | `elemId`, `text` | — | `ElementAnnotated` (advisory note) |
-| `connect` | `src`, `dst` (distinct, both existing) | — | `EdgeAdded` — the directed arrow `src → dst` |
+| `connect` | `src`, `dst` (distinct, non-blank) | — | `EdgeAdded` — the directed arrow `src → dst` |
 | `disconnect` | `src`, `dst` | — | `EdgeRemoved` |
 | `region-add` | `text`, `fromCol`, `toCol` (`fromCol < toCol`) | — | `PhaseAdded` — **server mints the id** |
 | `phase-split` | `regionId`, `atCol` (strictly inside), `text` (right-half label) | — | `PhaseSplit` — **server mints the right half's id** |
@@ -186,6 +186,10 @@ non-blank.
 | `region-remove` | `regionId` | — | `PhaseRemoved` |
 | `region-resize` | `regionId`, `fromCol`, `toCol` | — | `PhaseResized` (legacy — prefer `frontier-move`) |
 
+- The server does **not** check that an endpoint exists — `connect` never sees the board, so a
+  typo'd id returns `200` and appends a permanently dangling edge. Nothing is drawn and nothing
+  warns you. This is why the rule above says both ids must be ones you actually read from the log;
+  it is a discipline, not a guard.
 - `col` is a **global timeline coordinate** (left→right = time), shared across all lanes —
   not a per-lane index. `y` (0–1) is an optional in-lane vertical sub-position; the server
   clamps and rounds it. Omit both on an `add` to let it append at the lane's right edge; send
