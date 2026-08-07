@@ -52,6 +52,7 @@ skips the Rust jobs, a Rust-only change skips markdownlint/actionlint, and so on
 | `js`        | `tests/js/**`, `src/client/**`                                                  |
 | `roadmap`   | `ROADMAP.md`, `scripts/sync_roadmap.py`                                         |
 | `docs`      | `docs/**`                                                                       |
+| `keyboard`  | `src/template.html`, `docs/src/board/keyboard.md`, `scripts/check_keyboard_sheet.py` |
 
 > **Why `src/template.html` + `src/client/**` count as a Rust change.** The shell template and the
 > client modules are `include_str!`'d into the binary by `render.rs`, so editing any of them rebuilds
@@ -82,6 +83,7 @@ job-level skips — see the [static-names gotcha](#the-static-names-gotcha).
 | `client-logic (node)`     | ubuntu          | `js`                             | `node tests/js/board-logic.test.mjs` — pure client helpers |
 | `roadmap-check`           | ubuntu          | `roadmap`                        | `ROADMAP.md` reconciled with issues (Now/Next rows tracked; no orphan open issues) |
 | `docs book`               | ubuntu          | `docs`                           | `mdbook build docs` — the manual builds, and every promised page exists |
+| `keyboard sheet`          | ubuntu          | `keyboard`                       | The in-app `#help` dialog and the book's gesture page list the same keys |
 
 Notes on the less-obvious ones:
 
@@ -113,6 +115,15 @@ Notes on the less-obvious ones:
   table of contents promises can never ship as a silent empty page. It does *not* check in-page
   links, and it does not render the sample board (that needs a Rust build — the deploy workflow does
   it). `AGENTS.md` §*Documentation is part of the feature* is the rule this job enforces mechanically.
+- **`keyboard sheet`** runs `python3 scripts/check_keyboard_sheet.py` (stdlib-only, like
+  `roadmap-check`). The board's gestures are written twice by hand — the `#help` dialog in
+  `src/template.html` and [`docs/src/board/keyboard.md`](../docs/src/board/keyboard.md) — with no
+  generator between them, a trap `AGENTS.md` records the project falling into. The check compares
+  the `<kbd>` tokens **in both directions**, so a binding added to the app without a doc entry fails
+  and a key the book still promises after the app dropped it fails too. Descriptions are
+  deliberately not compared: the app sheet is terse and the page expands, and a check that nags
+  about wording is a check that gets deleted. Intended asymmetries live in two named constants in
+  the script, each with its reason.
 - The macOS jobs (`clippy (macos-latest)`, `test (macos-latest)`) are **not required checks**; they
   run only on `push`/`workflow_dispatch`, never on PRs.
 
@@ -157,7 +168,10 @@ detect changes ─┬─► rustfmt
                 ├─► markdownlint
                 ├─► actionlint
                 ├─► justfile
-                └─► client-logic (node)
+                ├─► client-logic (node)
+                ├─► docs book
+                ├─► keyboard sheet
+                └─► roadmap-check
 ```
 
 There is intentionally **no aggregate "CI passed" gate job**. The required checks are the granular
@@ -227,7 +241,7 @@ Every gate has a local equivalent, wired up as [`just`](https://github.com/casey
 the repo's [`justfile`](../justfile). Run the whole set before pushing:
 
 ```bash
-just ci      # format → lint → test → markdown → book → zero-deps → size → actionlint → justfile
+just ci      # format → lint → test → markdown → book → keyboard → zero-deps → size → actionlint → justfile
 ```
 
 Or run one gate at a time:
@@ -239,6 +253,7 @@ Or run one gate at a time:
 | `just test`        | `test (…)`           | `cargo test --all-targets`                  |
 | `just md`          | `markdownlint`       | `markdownlint-cli2 "**/*.md"`               |
 | `just docs`        | `docs book`          | render the sample board, then `mdbook build docs` |
+| `just keyboard-check` | `keyboard sheet`  | assert both keyboard sheets list the same keys |
 | `just zero-deps`   | `zero dependencies`  | assert `cargo tree -e normal` is faceto-only |
 | `just binary-size` | `binary size budget` | assert the release binary is under 2 MiB    |
 | `just actionlint`  | `actionlint`         | `actionlint`                                |

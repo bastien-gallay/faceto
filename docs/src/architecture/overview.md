@@ -19,6 +19,3 @@ knowing what a board is. One serializer, written once, for every board format.
 
 Everything is pure Rust standard library at runtime. See
 [the design decisions](./decisions.md) for why.
-
-> **This page is still being written.** The behaviour it covers is shipped; the
-> documentation is not. Follow [#111](https://github.com/bastien-gallay/faceto/issues/111).

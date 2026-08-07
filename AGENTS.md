@@ -241,7 +241,10 @@ Three traps this table exists to prevent, each one already met:
 
 - **The keyboard sheet is duplicated.** `src/template.html`'s `#help` dialog and
   `docs/src/board/keyboard.md` are two hand-maintained lists of the same gestures. Change a
-  binding and you must change both — there is no generator keeping them honest yet.
+  binding and you must change both — there is no generator. CI's `keyboard sheet` job
+  (`just keyboard-check`) compares the two `<kbd>` sets in both directions, so a key added or
+  dropped on one side fails the build; it does **not** compare the descriptions, which still drift
+  silently.
 - **The narrate skill documents `comment_to_events`.** Its write-contract table is a hand-copy of
   the code. Add a comment `kind` without updating it and the agent will not know the action
   exists (this is exactly how the shipped `connect`/`disconnect` kinds went unlisted).

@@ -163,20 +163,21 @@ the job.
 
 ## Write contract — `POST http://127.0.0.1:<port>/comment`
 
-JSON body, **one action per request**. Response is `{"ok":true}` (200) or a bare status
-`400`/`500` on rejection. `type` on an `add` must be one of the 8 lanes — `actor`,
-`command`, `aggregate`, `event`, `policy`, `readmodel`, `external`, `hotspot` — an
-off-grammar type is a 400. Labels must be non-blank.
+JSON body, **one action per request**. Response is `{"ok":true}` (200) or `{"ok":false}` with
+status `400` (nothing to persist / a guard refused it) or `500` (the append itself failed).
+`type` on an `add` must be one of the 8 lanes — `actor`, `command`, `aggregate`, `event`,
+`policy`, `readmodel`, `external`, `hotspot` — an off-grammar type is a 400. Labels must be
+non-blank.
 
 | `kind` | required | optional | appends |
 | --- | --- | --- | --- |
 | `add` | `type` (a lane), `text` (label) | `col`, `prepend:true`, `detail` | `ElementAdded` — **server mints the id** |
 | `move` | `elemId`, and `col` and/or `y` | `swapId`+`swapCol` | `ElementMoved` (two lines on a swap) |
 | `rename` | `elemId`, `text` | — | `ElementRenamed` |
-| `resolve` | `elemId`, `text` (resolution) | — | `HotspotResolved` |
+| `resolve` | `elemId` | `text` (resolution note) | `HotspotResolved` |
 | `drop` | `elemId` | — | `ElementRemoved` |
 | *(anything else with an `elemId`)* | `elemId`, `text` | — | `ElementAnnotated` (advisory note) |
-| `connect` | `src`, `dst` (distinct, both existing) | — | `EdgeAdded` — the directed arrow `src → dst` |
+| `connect` | `src`, `dst` (distinct, non-blank) | — | `EdgeAdded` — the directed arrow `src → dst` |
 | `disconnect` | `src`, `dst` | — | `EdgeRemoved` |
 | `region-add` | `text`, `fromCol`, `toCol` (`fromCol < toCol`) | — | `PhaseAdded` — **server mints the id** |
 | `phase-split` | `regionId`, `atCol` (strictly inside), `text` (right-half label) | — | `PhaseSplit` — **server mints the right half's id** |
@@ -185,10 +186,16 @@ off-grammar type is a 400. Labels must be non-blank.
 | `region-remove` | `regionId` | — | `PhaseRemoved` |
 | `region-resize` | `regionId`, `fromCol`, `toCol` | — | `PhaseResized` (legacy — prefer `frontier-move`) |
 
+- The server does **not** check that an endpoint exists — `connect` never sees the board, so a
+  typo'd id returns `200` and appends a permanently dangling edge. Nothing is drawn and nothing
+  warns you. This is why the rule above says both ids must be ones you actually read from the log;
+  it is a discipline, not a guard.
 - `col` is a **global timeline coordinate** (left→right = time), shared across all lanes —
   not a per-lane index. `y` (0–1) is an optional in-lane vertical sub-position; the server
   clamps and rounds it. Omit both on an `add` to let it append at the lane's right edge; send
   `prepend:true` for the left edge.
+- The same contract is published for humans in `docs/src/reference/event-log.md`, so a change
+  here has a second home to update.
 - Source of truth is the code, not this table: `events::comment_to_events`,
   `serve::add_from_comment` / `add_region_from_comment` / `split_region_from_comment`
   (`src/events/comments.rs`, `src/serve/comment.rs`). **If they diverge, the code wins** —
