@@ -46,6 +46,7 @@ jobs:
       js: ${{ steps.filter.outputs.js }}
       roadmap: ${{ steps.filter.outputs.roadmap }}
       docs: ${{ steps.filter.outputs.docs }}
+      keyboard: ${{ steps.filter.outputs.keyboard }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
@@ -78,6 +79,12 @@ jobs:
               - 'scripts/sync_roadmap.py'
             docs:
               - 'docs/**'
+            keyboard:
+              # The gesture list is hand-maintained in two places; either one changing must
+              # re-run the comparison (as must the checker itself).
+              - 'src/template.html'
+              - 'docs/src/board/keyboard.md'
+              - 'scripts/check_keyboard_sheet.py'
 
   fmt:
     name: rustfmt
@@ -253,6 +260,19 @@ jobs:
       # No sample board here: rendering it needs a full Rust build, and the tour's iframe
       # degrades to an empty frame rather than a broken build. The deploy workflow renders it.
       - run: mdbook build docs
+
+  # The board's gestures are listed by hand in two places — the in-app `#help` dialog and
+  # docs/src/board/keyboard.md — with no generator keeping them honest. AGENTS.md names this as a
+  # trap the project has already fallen into. This compares the key tokens in both directions;
+  # descriptions are deliberately not compared (see the script's docstring).
+  keyboard-check:
+    name: keyboard sheet
+    needs: changes
+    if: needs.changes.outputs.keyboard == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: python3 scripts/check_keyboard_sheet.py
 
   # Single-source-of-truth gate: ROADMAP.md must stay reconciled with issues (see its
   # "Single source of truth" section). The board (user Project #2) needs `project` scope,

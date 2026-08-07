@@ -13,7 +13,7 @@ default:
 
 # Run every CI gate in order (format → lint → test → markdown → book → firewall → size → workflows
 # → justfile). `docs` needs mdbook installed, like `md` needs markdownlint-cli2.
-ci: fmt clippy test test-js md docs zero-deps binary-size actionlint lint-justfile
+ci: fmt clippy test test-js md docs keyboard-check zero-deps binary-size actionlint lint-justfile
     @echo "✓ all local CI gates passed"
 
 # Formatting is law: cargo fmt --all --check.
@@ -100,6 +100,12 @@ docs:
     cp examples/sample.html docs/src/assets/sample.html
     mdbook build docs
     echo "✓ book built → docs/book/index.html"
+
+# The keyboard sheet is written twice by hand (in-app #help dialog + the book page) with no
+# generator between them; this compares their key tokens so a new or dropped binding can't
+# silently lie in one of them. Stdlib-only python3, same as sync-roadmap.
+keyboard-check:
+    python3 scripts/check_keyboard_sheet.py
 
 # Serve the book locally with live reload.
 docs-serve port="3000":
