@@ -12,5 +12,6 @@ The durable ones, in short:
 - **Local-first, not local-only.** Collaboration is allowed to exist; it just is not the default.
 
 Longer arguments live in the repository: `docs/event-sourcing-status.md`,
-`docs/source-of-truth.md`, `docs/multi-format-architecture.md`. Relocating them into this chapter
-is part of [#111](https://github.com/bastien-gallay/faceto/issues/111).
+`docs/source-of-truth.md`, `docs/multi-format-architecture.md`. Turning this page into a numbered
+ADR index — starting with ADR-1, the `external` → `system` rename — is
+[#127](https://github.com/bastien-gallay/faceto/issues/127).
