@@ -16,11 +16,16 @@ It deliberately does **not** compare the descriptions. The app sheet is terse by
 book page expands; forcing them to match word for word would make the check a nuisance and get it
 deleted. Keys are the part that must not drift.
 
-Asymmetries that are real and intended are declared below, one constant each. Adding to those sets
-is a decision, not a workaround — write down why.
+Asymmetries that are real and intended are declared below, one constant each, and the declaration
+is held to be *exact*: an entry that is no longer observed on the side it names also fails. A
+permanently permissive exemption is the same drift one level further in — it would keep a key out
+of the comparison forever, silently, which is what this file exists to prevent. So adding to those
+sets is a decision, and so is leaving one there.
 
 Usage:  python3 scripts/check_keyboard_sheet.py
-Exit:   0 when the two sheets agree, 1 on drift (the differences are printed).
+Exit:   0 when the sheets agree *and* every declared asymmetry is still real; 1 otherwise, with
+        the differences printed. Note the third failure mode: two sheets can agree perfectly and
+        still fail here, when a constant claims an asymmetry that has gone away.
 """
 
 from __future__ import annotations
@@ -77,8 +82,20 @@ def main() -> int:
 
     undocumented = app - book - APP_ONLY
     stale = book - app - BOOK_ONLY
-    if not undocumented and not stale:
-        print(f"keyboard-check OK: {len(app)} keys, both sheets agree")
+    # A declared asymmetry that is no longer observed is a dead exemption: it keeps a key exempt
+    # from comparison forever, silently, which is the drift this check exists to catch — one
+    # direction further in. So the constants must stay true, not merely permissive.
+    dead = (APP_ONLY - (app - book)) | (BOOK_ONLY - (book - app))
+    if not undocumented and not stale and not dead:
+        # On this path the observed asymmetries and the declared ones are provably the same sets
+        # — `undocumented` empty gives one inclusion, `dead` empty gives the other — so these
+        # numbers equal len(APP_ONLY)/len(BOOK_ONLY). Compute them from the sheets anyway: the day
+        # that stops being true is a bug in the guard above, and a line derived from the constants
+        # would keep printing agreement right through it.
+        print(
+            f"keyboard-check OK: {len(app & book)} keys agree "
+            f"({len(app - book)} app-only, {len(book - app)} book-only, both declared)"
+        )
         return 0
 
     print("keyboard-check FAIL: the in-app sheet and the book page disagree.")
@@ -94,6 +111,11 @@ def main() -> int:
             + ", ".join(sorted(stale))
         )
         print("    → the book promises a key the app no longer offers, or the app sheet lost it.")
+    if dead:
+        print("  declared one-sided, but no longer one-sided: " + ", ".join(sorted(dead)))
+        print("    → either the sheets converged (delete the entry from APP_ONLY / BOOK_ONLY),")
+        print("      or the key was removed from the side that had it — check which before")
+        print("      deleting the constant, because only one of those is good news.")
     print("  (A genuinely one-sided key belongs in APP_ONLY / BOOK_ONLY, with a reason.)")
     return 1
 
