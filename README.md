@@ -240,8 +240,9 @@ cargo clippy --all-targets -- -D warnings         # lints
 ```
 
 These mirror CI, which runs clippy + tests on Linux for every pull request and adds macOS on
-`main`. Also gated there: markdownlint, actionlint, a justfile lint, the book build, and the
-runtime-only dependency firewall — see [docs/ci.md](docs/ci.md). See
+`main`. Also gated there: markdownlint, actionlint, a justfile lint, the book build, the
+client-logic tests, a keyboard-sheet drift check, and the two runtime-promise jobs (`zero
+dependencies` + `binary size budget`) — [docs/ci.md](docs/ci.md) is the canonical list. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the (one) hard rule and [AGENTS.md](AGENTS.md) for the
 architecture and domain invariants.
 

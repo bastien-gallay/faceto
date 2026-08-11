@@ -11,8 +11,8 @@ export RUSTFLAGS := "-D warnings"
 default:
     @just --list
 
-# Run every CI gate in order (format → lint → test → markdown → book → keyboard → firewall → size
-# → workflows → justfile). `docs` needs mdbook installed, like `md` needs markdownlint-cli2.
+# Run the gate set in CI's order (format → lint → test → js → markdown → book → keyboard →
+# firewall → size → workflows → justfile). Not `roadmap-check` — that one needs network. `docs` needs mdbook installed, like `md` needs markdownlint-cli2.
 ci: fmt clippy test test-js md docs keyboard-check zero-deps binary-size actionlint lint-justfile
     @echo "✓ all local CI gates passed"
 
