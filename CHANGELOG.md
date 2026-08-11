@@ -69,6 +69,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   log. See
   [the `extract` page](https://bastien-gallay.github.io/faceto/reference/cli/extract.html).
 
+- **The keyboard sheet can no longer drift** (F-docs-reference, #129). The board's gestures are
+  written twice by hand — the in-app `?` dialog and the manual's gesture page — with no generator
+  between them. A CI job
+  (`keyboard sheet`, locally `just keyboard-check`) now compares the two key sets in *both*
+  directions, so a binding added to the app without a doc entry turns the check red, and so does a
+  key the manual still promises after the app dropped it. (Red, not blocking: the job is not in the
+  branch ruleset yet — see `docs/ci.md`.) Descriptions are deliberately not compared.
+
+- **The model format and the event log are documented** (F-docs-reference, #129). Both reference
+  pages had shipped as placeholders pointing at a closed issue; they are now the real thing. [The
+  model format](https://bastien-gallay.github.io/faceto/reference/model-format.html) carries every
+  `model.json` field with its type and default, the `id` / `col` / `type` rules, and — new to any
+  surface — a table of **what the lenient parser drops in silence**, which nothing warned you about
+  before. [The event log](https://bastien-gallay.github.io/faceto/reference/event-log.html) carries
+  the five outcomes of reading a line, all 17 event kinds with their effect on replay, the id-mint
+  prefix table, and the whole `POST /comment` write contract with the reason behind each guard —
+  including the two things it does *not* guard: `connect` never checks that its endpoints exist,
+  and an omitted `text` on `resolve` clears the element's note rather than leaving it.
+
 - **A documentation site** (F-docs-book): the manual now lives in `docs/src/` as an mdBook,
   published to <https://bastien-gallay.github.io/faceto/> — a board guide organised by what you are
   looking at, a per-verb CLI reference, the lint rules, and a "Working with agents" part covering
