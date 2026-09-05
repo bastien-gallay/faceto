@@ -42,7 +42,7 @@
   "$defs": {
     "elementType": {
       "type": "string",
-      "description": "Selects the lane AND the colour from the fixed 8-lane event-storming grammar. An off-grammar value does not crash but has no lane and renders drably — stay within the enum.",
+      "description": "Selects the lane AND the colour from the fixed 8-lane event-storming grammar. An off-grammar value is dropped when the file is read, so the element simply does not appear — stay within the enum. `external` is the pre-ADR-1 spelling of `system`: still read, never written.",
       "enum": [
         "actor",
         "command",
@@ -50,6 +50,7 @@
         "event",
         "policy",
         "readmodel",
+        "system",
         "external",
         "hotspot"
       ]

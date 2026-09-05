@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The `external` lane is now `system`** (ADR-1, #117). The pink sticky never meant "outside the
+  company" — it means *a software system this board does not open up*, which is as often one of
+  your own services as a third party's, and it lines up with C4's software system. Boards written
+  with `external` keep working: the old spelling is **read** as `system` and never written back,
+  and the lane still mints `G1`, `G2`, … so no id — and therefore no comment and no diff verdict —
+  moves.
+
 - **A sticky's `type` is a closed set, enforced at the edges** (F-lane-enum, #117). It was a
   string that every reader had to re-check, each with its own fallback for a lane that cannot
   exist; it is now a type, so the fallbacks are gone. Two things a user can notice: an element

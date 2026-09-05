@@ -20,7 +20,8 @@ pub fn lane_prefix(lane: Lane) -> char {
         Lane::Event => 'E',
         Lane::Policy => 'P',
         Lane::ReadModel => 'R',
-        Lane::External => 'G',
+        // ADR-1 renamed the lane, not the prefix: `G1…` ids stay valid, and an id is identity.
+        Lane::System => 'G',
         Lane::Hotspot => 'H',
     }
 }
@@ -42,7 +43,7 @@ pub(crate) fn colour(lane: Lane) -> &'static str {
         Lane::Event => "#FF9F1C",
         Lane::Policy => "#C39BD3",
         Lane::ReadModel => "#6FCF97",
-        Lane::External => "#F2A0C9",
+        Lane::System => "#F2A0C9",
         Lane::Hotspot => "#C0392B",
     }
 }
@@ -50,12 +51,7 @@ pub(crate) fn colour(lane: Lane) -> &'static str {
 pub(crate) fn text_dark(lane: Lane) -> bool {
     matches!(
         lane,
-        Lane::Actor
-            | Lane::Aggregate
-            | Lane::Event
-            | Lane::Policy
-            | Lane::ReadModel
-            | Lane::External
+        Lane::Actor | Lane::Aggregate | Lane::Event | Lane::Policy | Lane::ReadModel | Lane::System
     )
 }
 
@@ -126,6 +122,9 @@ mod tests {
         assert_eq!(lane_prefix(Lane::Actor), 'X'); // not 'A' — aggregate owns that
         assert_eq!(lane_prefix(Lane::Aggregate), 'A');
         assert_eq!(lane_prefix(Lane::Hotspot), 'H');
+        // ADR-1 renamed `external` to `system` but not its prefix: an id is identity, so every
+        // `G1…` already in a log stays the id of the sticky it names.
+        assert_eq!(lane_prefix(Lane::System), 'G');
         // Two lanes sharing a prefix would mint colliding ids into each other's space.
         let mut seen: Vec<char> = LANES.iter().map(|&l| lane_prefix(l)).collect();
         seen.sort_unstable();

@@ -218,7 +218,7 @@ the diagram; run `faceto export --help` for the full list.)
 | `event` | something that happened (past tense) | `#FF9F1C` |
 | `policy` | a reaction: *when X, do Y* | `#C39BD3` |
 | `readmodel` | a view the actor reads | `#6FCF97` |
-| `external` | a system outside the boundary | `#F2A0C9` |
+| `system` | a software system this board does not decompose | `#F2A0C9` |
 | `hotspot` | an open question / risk (loud red until resolved) | `#C0392B` |
 
 ## Why zero dependencies

@@ -32,7 +32,7 @@ const LANE_HEADINGS: [&str; LANES.len()] = [
     "Events",
     "Policies",
     "Read models",
-    "External systems",
+    "Systems",
     "Hotspots",
 ];
 

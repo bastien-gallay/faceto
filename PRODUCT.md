@@ -90,7 +90,7 @@ The board should explicitly NOT look like any of these:
   `prefers-reduced-motion: reduce`; any new motion must ship a reduced-motion
   alternative (crossfade or instant).
 - **Colorblind-safe lane grammar.** The 8-lane colour grammar (`actor`, `command`,
-  `aggregate`, `event`, `policy`, `readmodel`, `external`, `hotspot`) must never be the
+  `aggregate`, `event`, `policy`, `readmodel`, `system`, `hotspot`) must never be the
   *only* signal. Lane position and the element label already carry meaning; preserve a
   non-colour cue (lane, label, and/or shape) so colour-blind users are never lost. Diff
   states (added / removed / changed-moved) likewise need a non-colour tell.

@@ -27,7 +27,7 @@ fn shape(lane: Lane) -> (&'static str, &'static str) {
         Lane::Event => ("(", ")"),       // rounded
         Lane::Policy => ("{{", "}}"),    // hexagon
         Lane::ReadModel => ("[/", "/]"), // parallelogram
-        Lane::External => ("[(", ")]"),  // cylinder
+        Lane::System => ("[(", ")]"),    // cylinder
         Lane::Hotspot => ("{", "}"),     // rhombus
     }
 }

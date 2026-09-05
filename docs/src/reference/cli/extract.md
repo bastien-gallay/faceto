@@ -134,7 +134,7 @@ than cutting an empty board:
 
 ```text
 --type hotspots is not one of the eight lanes: actor, command, aggregate, event, policy,
-readmodel, external, hotspot
+readmodel, system, hotspot
 ```
 
 ## When the selector matches nothing

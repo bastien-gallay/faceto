@@ -91,7 +91,7 @@ Never write an id yourself into a live board. `serve` mints `<PREFIX><N>` under 
 past the highest suffix **ever** used under that prefix — so a removed id is never handed out again,
 and two concurrent adds cannot collide.
 
-| Lane | `actor` | `command` | `aggregate` | `event` | `policy` | `readmodel` | `external` | `hotspot` |
+| Lane | `actor` | `command` | `aggregate` | `event` | `policy` | `readmodel` | `system` | `hotspot` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Prefix | `X` | `C` | `A` | `E` | `P` | `R` | `G` | `H` |
 

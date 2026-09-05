@@ -187,7 +187,8 @@ come from violating them:
   top-to-bottom order are the single `model::LANES` array (`render::style` re-exports it, so the
   two can no longer drift). `colour` / `lane_index` / `lane_prefix` are total; an off-grammar value
   is dropped at every read boundary rather than carried into the model. The lanes, in order:
-  `actor`, `command`, `aggregate`, `event`, `policy`, `readmodel`, `external`, `hotspot`.
+  `actor`, `command`, `aggregate`, `event`, `policy`, `readmodel`, `system`, `hotspot` (`external`
+  is read as the pre-ADR-1 spelling of `system`, and never written).
 
 `render::diff_boards` joins old vs new on `id` and returns **two** values: the union board (a
 plain `Model` — the new side's layout plus the old side's ghosts) and an `Overlay` judging each

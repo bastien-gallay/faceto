@@ -57,7 +57,7 @@ empty event-storming one. See [board formats](./board-formats.md).
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `id` | string | **yes** | Stable identity: the comment join key *and* the diff key. Never derived from text or position. |
-| `type` | string | **yes** | One of the eight lanes — `actor`, `command`, `aggregate`, `event`, `policy`, `readmodel`, `external`, `hotspot`. Selects the lane *and* the colour. |
+| `type` | string | **yes** | One of the eight lanes — `actor`, `command`, `aggregate`, `event`, `policy`, `readmodel`, `system`, `hotspot`. Selects the lane *and* the colour. `external` is read as a legacy spelling of `system`. |
 | `label` | string | **yes** | The sticky's headline text. |
 | `col` | integer | no | Global timeline coordinate. Omit to auto-assign in file order. |
 | `detail` | string | no | A smaller second line under the label. With no `detail`, a trailing `(parenthetical)` in the label becomes one — an explicit `detail` wins. |

@@ -105,7 +105,11 @@ pub enum Lane {
     Event,
     Policy,
     ReadModel,
-    External,
+    /// Any software system the board treats as a unit — a third-party API, but equally a service
+    /// of your own that this board is not modelling. Was `external` until ADR-1: the pink sticky
+    /// never meant "outside the company", only "not decomposed here", and half the boards that
+    /// needed it were drawing their own services.
+    System,
     Hotspot,
 }
 
@@ -119,7 +123,7 @@ pub const LANES: [Lane; 8] = [
     Lane::Event,
     Lane::Policy,
     Lane::ReadModel,
-    Lane::External,
+    Lane::System,
     Lane::Hotspot,
 ];
 
@@ -139,7 +143,12 @@ pub fn lane_from_str(s: &str) -> Option<Lane> {
         "event" => Lane::Event,
         "policy" => Lane::Policy,
         "readmodel" => Lane::ReadModel,
-        "external" => Lane::External,
+        "system" => Lane::System,
+        // ADR-1's legacy value. A renamed *kind* is repaired in `events::upcast`, but a renamed
+        // lane *value* has to be read from `model.json` as well as from the log, and this is the
+        // one function both go through. Reading both and writing only the current one is the same
+        // additive contract the rest of the schema keeps: no tracked log is ever rewritten.
+        "external" => Lane::System,
         "hotspot" => Lane::Hotspot,
         _ => return None,
     })
@@ -156,7 +165,7 @@ pub fn lane_to_str(lane: Lane) -> &'static str {
         Lane::Event => "event",
         Lane::Policy => "policy",
         Lane::ReadModel => "readmodel",
-        Lane::External => "external",
+        Lane::System => "system",
         Lane::Hotspot => "hotspot",
     }
 }
@@ -509,6 +518,31 @@ mod tests {
     // ---- F-es-lint: board level ------------------------------------------------------------
 
     // ---- F-format-tag: board format ---------------------------------------------------------
+
+    // ---- ADR-1: `external` became `system` -------------------------------------------------
+
+    #[test]
+    fn the_renamed_lane_reads_from_both_names_and_writes_only_the_new_one() {
+        assert_eq!(lane_from_str("system"), Some(Lane::System));
+        assert_eq!(
+            lane_from_str("external"),
+            Some(Lane::System),
+            "ADR-1 legacy value"
+        );
+        assert_eq!(
+            lane_to_str(Lane::System),
+            "system",
+            "only the new name is written"
+        );
+        // Both spellings land in one lane, so a board mixing them is one lane, not two.
+        let m = model_of(
+            r#"{"elements":[
+                {"id":"G1","type":"external","label":"legacy"},
+                {"id":"G2","type":"system","label":"current"}]}"#,
+        );
+        assert_eq!(m.elements.len(), 2);
+        assert!(m.elements.iter().all(|e| e.kind == Lane::System));
+    }
 
     #[test]
     fn an_off_grammar_type_drops_the_element_at_the_parse_boundary() {
