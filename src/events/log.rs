@@ -24,8 +24,13 @@ pub fn load(path: &Path) -> Result<Model, String> {
 
 /// Read a log file into its events (file order = causal order).
 pub fn read_log(path: &Path) -> Result<Vec<Event>, String> {
+    Ok(read_log_full(path)?.events)
+}
+
+/// [`read_log`], keeping the skipped-record count — the read `compact` must use.
+pub fn read_log_full(path: &Path) -> Result<LogRead, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {}", path.display(), e))?;
-    parse_log(&text)
+    parse_log_full(&text)
 }
 
 /// Iterate the meaningful records of JSONL text: each non-blank line, trimmed, paired with its
@@ -46,8 +51,23 @@ pub(crate) fn jsonl_records(text: &str) -> impl Iterator<Item = (usize, &str)> {
 /// way — how a *foreign format's* log would read as an empty event-storming board. Nothing in a
 /// single line separates the two, so the count decides.
 pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
+    Ok(parse_log_full(text)?.events)
+}
+
+/// A log read, plus the number of records it could not project. `skipped` is the count `compact`
+/// needs: folding a log rewrites it from the projection, so a record the read dropped would be
+/// **deleted from append-only truth**. Every other caller only renders, and can ignore it.
+pub struct LogRead {
+    pub events: Vec<Event>,
+    pub skipped: usize,
+}
+
+/// [`parse_log`], keeping the count of records it skipped.
+pub fn parse_log_full(text: &str) -> Result<LogRead, String> {
     let mut events = Vec::new();
     let mut foreign = 0usize;
+    let mut unknown_lane = 0usize;
+    let mut unnamed = 0usize;
     for (n, line) in jsonl_records(text) {
         let j = json::parse(line).map_err(|e| format!("event-log line {}: {}", n, e))?;
         match parse_event(&j) {
@@ -58,8 +78,9 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
                 }
                 events.push(ev)
             }
-            Err(Rejected::UnknownKind) | Err(Rejected::UnknownLane) => foreign += 1,
-            Err(Rejected::Unnamed) => {}
+            Err(Rejected::UnknownKind) => foreign += 1,
+            Err(Rejected::UnknownLane) => unknown_lane += 1,
+            Err(Rejected::Unnamed) => unnamed += 1,
             Err(Rejected::Malformed) => {
                 let kind = j.get("event").and_then(Json::as_str).unwrap_or("?");
                 return Err(format!(
@@ -69,14 +90,28 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
             }
         }
     }
-    if events.is_empty() && foreign > 0 {
-        return Err(format!(
-            "event-log: {} record(s), none of a recognised event kind — this log is from another \
-             board format, or from a newer faceto",
-            foreign
-        ));
+    if events.is_empty() {
+        // Two different diagnoses, told apart by *what* was unreadable. An unknown kind may be a
+        // whole other notation; an unknown lane cannot be — the kinds were ours.
+        if foreign > 0 {
+            return Err(format!(
+                "event-log: {} record(s), none of a recognised event kind — this log is from \
+                 another board format, or from a newer faceto",
+                foreign
+            ));
+        }
+        if unknown_lane > 0 {
+            return Err(format!(
+                "event-log: {} record(s), every one naming a lane this faceto does not know — \
+                 the log is from a newer faceto",
+                unknown_lane
+            ));
+        }
     }
-    Ok(events)
+    Ok(LogRead {
+        events,
+        skipped: foreign + unknown_lane + unnamed,
+    })
 }
 
 #[cfg(test)]
@@ -122,6 +157,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn an_unknown_lane_is_not_evidence_of_a_foreign_format() {
+        // The kinds here are recognised; only the lane is not. Counting them as foreign sends the
+        // reader after a notation problem when the log is simply from a newer faceto.
+        let err = parse_log(
+            "{\"event\":\"ElementAdded\",\"id\":\"T1\",\"type\":\"timer\",\"label\":\"A\"}\n",
+        )
+        .unwrap_err();
+        assert!(err.contains("lane"), "{}", err);
+        assert!(!err.contains("another board format"), "{}", err);
+    }
+
+    #[test]
+    fn a_read_reports_what_it_skipped_so_compact_cannot_fold_it_away() {
+        // `compact` rewrites the log from the projection, so a skipped record would be deleted
+        // from append-only truth. The count is how the caller knows not to.
+        let read = parse_log_full(
+            "{\"event\":\"ElementAdded\",\"id\":\"E1\",\"type\":\"event\",\"label\":\"A\"}\n\
+             {\"event\":\"ElementAdded\",\"id\":\"T1\",\"type\":\"timer\",\"label\":\"B\"}\n\
+             {\"event\":\"FromTheFuture\",\"x\":1}\n",
+        )
+        .unwrap();
+        assert_eq!(read.events.len(), 1);
+        assert_eq!(read.skipped, 2, "one unknown lane + one unknown kind");
     }
 
     #[test]

@@ -33,7 +33,9 @@ difference between a typo and a schema you have not met yet:
 | an unknown `event` kind | **skipped**, silently |
 | a line with no `event` key, or a non-string one | **skipped**, silently — a typo'd key loses the fact |
 | a `BoardFormat` naming a format this build cannot project | **hard error** |
+| a sticky whose `type` names no lane this build knows | **skipped**, silently |
 | records present, but **not one** of a recognised kind | **hard error** |
+| records present, but **every one** naming an unknown lane | **hard error** |
 
 The last two rows arrived with the [format tag](./board-formats.md), and they are the one place the
 skipping rule is suspended. Skipping unknown kinds is how an older faceto reads a newer log — and it
@@ -42,8 +44,19 @@ event-storming board. Nothing in a line distinguishes the two. So the count deci
 some recognised events keeps the lenient reading, while a log carrying **none** has told the reader
 nothing it can project, and says so instead of drawing a blank board.
 
-Only *named* kinds count towards that last row. A line with no `event` key names no kind at all, so
-it stays a silent skip: a typo is a broken line, not evidence of another notation.
+Only *named* kinds count towards the foreign-format row. A line with no `event` key names no kind
+at all, so it stays a silent skip: a typo is a broken line, not evidence of another notation. An
+unknown **lane** does not count towards it either — the kinds there were ours, so the log is not
+from another notation, only from a faceto that knows a lane this one does not. That case gets its
+own error saying so.
+
+### Skipping is safe to render, and not safe to fold
+
+A skipped record is missing from the projection but still present in the log, so rendering or
+serving a log with skips simply draws less than the file holds. [`faceto compact`](./cli/compact.md)
+is the exception: it rewrites the log *from* the projection, so a skipped record would be deleted
+from the append-only truth. It therefore **refuses to fold a log it could not fully read** and exits
+1, leaving the file untouched — compact with a build that reads the whole log.
 
 The third row is the one worth dwelling on. A malformed *known* event is a fact that exists in the
 append-only truth but would vanish from the projection, so it stops the read rather than quietly

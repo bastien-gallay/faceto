@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it was never drawn), and `faceto extract --type` now **refuses a misspelled lane by name**
   instead of cutting an empty board. The rendered SVG, HTML and context pack are byte-identical.
 
+- **`faceto compact` refuses a log it cannot fully read**, instead of deleting the parts it could
+  not project. Compaction rewrites the log from the replayed board, so a sticky whose `type` names
+  a lane this build does not know — skipped on read, which is harmless everywhere else — was folded
+  straight out of the append-only truth, silently and with exit 0. It now reports how many records
+  it could not project, exits 1, and leaves the log untouched (no `.bak`, no rewrite): the log is
+  not broken, this build is simply not the one that should be folding it. Relatedly, a log whose
+  records all name an **unknown lane** no longer reports itself as coming from another board
+  format — the event kinds were recognised, only the lane was not, so it gets its own message.
+
 - **A log faceto cannot project is now an error, not an empty board.** Skipping unrecognised event
   kinds is how an older faceto reads a newer log; pointed at a log from a *different* notation, the
   same rule produced a valid, completely empty board and exit code 0. Three reads now stop instead:

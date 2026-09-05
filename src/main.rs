@@ -673,13 +673,27 @@ fn cmd_compact(log_path: &str) {
         );
         exit(1);
     }
-    let original = match events::read_log(path) {
-        Ok(e) => e,
+    let read = match events::read_log_full(path) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("error: {e}");
             exit(1);
         }
     };
+    // Folding rewrites the log from the projection, so anything the read could not project would
+    // be **deleted from append-only truth** — an element in a lane this build does not know, and
+    // silently, exit 0. Refuse instead: the log is fine, this build is the one that cannot read
+    // all of it, and a newer faceto will fold it losslessly.
+    if read.skipped > 0 {
+        eprintln!(
+            "error: {} refuses to compact — {} record(s) could not be projected by this build, \
+             and folding would delete them from the log. Compact with a faceto that reads them.",
+            path.display(),
+            read.skipped
+        );
+        exit(1);
+    }
+    let original = read.events;
     let folded = events::compact(&original);
 
     // Preserve the prior log alongside before overwriting the truth file.
