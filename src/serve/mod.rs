@@ -19,10 +19,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
-mod comment;
 mod hash;
 mod http;
 mod ids;
+mod mint;
 mod sidebar;
 
 #[cfg(test)]
