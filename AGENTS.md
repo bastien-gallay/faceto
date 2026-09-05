@@ -106,8 +106,9 @@ prevent.)
   `get`/`as_str`/`as_f64`/`as_bool`/`as_array`). Everything else builds on this.
 - **`src/events/`** — the event-sourced spine. The `Event` enum (one JSON object per log line),
   `parse_log`/`read_log`, `replay(&[Event]) -> Model` (the projection), `from_model` (genesis/
-  migration), `comment_to_events` (map one posted comment to the events it implies — the single
-  source of truth shared with `serve`'s `POST /comment`), and `compact`
+  migration), the **command boundary** in `command.rs` — `parse_command(&Json) -> Result<Command,
+  Rejection>` reads one posted `POST /comment` body and `fold_to_events` maps the commands the
+  server can persist alone to their events, the pair `serve` goes through — and `compact`
   (fold a log to a `LogCompacted` marker + genesis snapshot). Schema evolves additively — unknown
   event kinds are skipped and unknown fields ignored on read (forward compatibility) — and a
   renamed event *kind* is migrated forward at the `upcast` read-path seam (backward compatibility;
@@ -148,10 +149,13 @@ prevent.)
   before calling `serve`, auto-running genesis if no log exists yet, so the server only ever
   mutates the log). Routes: `GET /` (page), `GET /board.svg` (re-rendered each request,
   `?base=<version>` produces a diff overlay), `GET /model-version`, `GET /comments`, `GET /health`,
-  `POST /comment`. `POST /comment` appends an *event* (the comment's `kind` maps to
-  `ElementAdded`/`ElementMoved`/`ElementRenamed`/`HotspotResolved`/`ElementRemoved` (`drop`)/
-  `ElementAnnotated`); `add` mints a server-side type-prefixed id. All appends serialize through
-  one mutex so concurrent posts never interleave (H4).
+  `POST /comment`. `POST /comment` parses the body through `events::parse_command` and appends an
+  *event* (the command's `kind` maps to `ElementAdded`/`ElementMoved`/`ElementRenamed`/
+  `HotspotResolved`/`ElementRemoved` (`drop`)/`ElementAnnotated`). A `Command` splits along the two
+  server paths: a **`Mint`** needs an id only the server can assign (`add` mints a type-prefixed
+  one) and is dispatched by `serve/mint.rs` under the lock; a **`Fold`** carries everything its
+  events need. Every guard on a posted field lives in the parse, so a `Command` in hand is already
+  legal. All appends serialize through one mutex so concurrent posts never interleave (H4).
 - **`src/template.html` + `src/client/*.js` + `src/client/style.css`** — the client. `template.html`
   is a thin shell (head, static body DOM, four placeholders); the CSS and the ~1.6k lines of JS live
   in sibling files, split into nine cohesive modules (`core` → `layout` → `drag` → `connect` →
@@ -247,7 +251,7 @@ Where each change lands:
 | a keybinding or a mouse gesture | `docs/src/board/keyboard.md` **and** the in-app sheet in `src/template.html` |
 | an element/edge/region behaviour or guard | the matching `docs/src/board/*.md` page |
 | a lint rule (added, removed, level-gated) | `docs/src/reference/lint-rules.md` |
-| an `Event` variant or a `comment_to_events` kind | `docs/src/reference/event-log.md` **and** the write-contract table in [`.claude/skills/faceto-narrate/SKILL.md`](.claude/skills/faceto-narrate/SKILL.md) |
+| an `Event` variant or a `parse_command` kind | `docs/src/reference/event-log.md` **and** the write-contract table in [`.claude/skills/faceto-narrate/SKILL.md`](.claude/skills/faceto-narrate/SKILL.md) |
 | a `model.json` field | `docs/src/reference/model-format.md` + `docs/schema/*.schema.json` |
 | an export format | `docs/src/reference/cli/export.md` + `docs/src/agents/context-pack.md` |
 | an invariant, or the pipeline | `docs/src/architecture/` |
@@ -260,9 +264,12 @@ Three traps this table exists to prevent, each one already met:
   (`just keyboard-check`) compares the two `<kbd>` sets in both directions, so a key added or
   dropped on one side fails the build; it does **not** compare the descriptions, which still drift
   silently.
-- **The narrate skill documents `comment_to_events`.** Its write-contract table is a hand-copy of
-  the code. Add a comment `kind` without updating it and the agent will not know the action
-  exists (this is exactly how the shipped `connect`/`disconnect` kinds went unlisted).
+- **The narrate skill documents the command boundary.** Its write-contract table is a hand-copy of
+  `parse_command`'s accepted kinds. Add a `kind` without updating it and the agent will not know
+  the action exists (this is exactly how the shipped `connect`/`disconnect` kinds went unlisted).
+  The table has now been hand-copied across one rename (`comment_to_events` → `parse_command` /
+  `fold_to_events`, #120); F-docs-reference's advice was to generate it the next time it moved, and
+  that time has come.
 - **The schemas are documentation too.** An additive model field that never reaches
   `docs/schema/` silently stops being discoverable.
 
