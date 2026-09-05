@@ -142,7 +142,7 @@ writes against; see [the narrate skill](../agents/narrate.md).
 | `region-rename` | `regionId`, `text` | — | `PhaseRenamed` |
 | `region-remove` | `regionId` | — | `PhaseRemoved` |
 | `region-resize` | `regionId`, `fromCol`, `toCol` | — | `PhaseResized` (legacy — prefer `frontier-move`) |
-| anything else with an `elemId` | `elemId` | `text` | `ElementAnnotated` — same: an omitted or blank `text` **clears** the element's note |
+| `comment` \| `question` \| `split` | `elemId` | `text` | `ElementAnnotated` — same: an omitted or blank `text` **clears** the element's note |
 
 The guards are deliberate, and each one exists because its absence would write something permanent
 and wrong:
@@ -152,16 +152,22 @@ and wrong:
 - an **off-grammar `type`** on `add` is refused, because it would mint into a real lane's id space;
 - a **self-loop**, and an absent or blank `src` / `dst`, are refused on `connect`;
 - an **inverted or zero-width span** on `region-add` / `region-resize` is refused;
-- a `move` carrying neither `col` nor `y` persists **nothing** — it would replay as a no-op.
+- a `move` carrying neither `col` nor `y` is refused — it would replay as a no-op;
+- a **`kind` not in the table** is refused. The set is closed: the sixteen above, plus an absent
+  `kind`, which means `comment`.
 
 Endpoint **existence** is *not* among them: `connect` sees only the posted comment, never the
 board, so a typo'd id is accepted and appends a dangling edge. Replay tolerates it — nothing is
 drawn, and the edge is cascade-cleaned if its element is later removed — but nothing tells you
 either. Post ids you actually read back from the log.
 
-A request that maps to no event is a `400`, not a silent success. The last row of the table is the
-catch-all: an unrecognised `kind` naming an element becomes an advisory note, never a structural
-edit.
+A request that maps to no event is a `400`, not a silent success — and that now includes a `kind`
+the server does not know. It used to be the table's catch-all: any unrecognised word naming an
+element was filed as an advisory note, so a typo (`renmae`) and a newer client's op both came back
+`200` and arrived as a comment nobody wrote. The closed set is the opposite bargain from the one
+the *read* path makes, and deliberately so: a log line whose kind is unknown is skipped, because a
+log may have been written by a faceto that knows more than this one, and there is nobody to tell.
+A posted command has a client waiting for an answer.
 
 ## How the schema evolves
 

@@ -6,7 +6,8 @@
 //!
 //! A *log* read skips kinds it does not recognise — that tolerance is how an older faceto reads a
 //! newer log, and it belongs at the `upcast` seam (`codec.rs`). A command is the opposite
-//! situation: a client is waiting for an answer, so an unreadable one is refused, not stored.
+//! situation: a client is waiting for an answer, so an unrecognised one is refused by name. The
+//! set below is therefore closed, and `comment`/`question`/`split` are listed, not defaulted to.
 
 use super::Event;
 use crate::json::Json;
@@ -126,9 +127,12 @@ impl Frontier {
     }
 }
 
-/// Why a posted body is not a command. Answers `400`.
+/// Why a posted body is not a command. Both answer `400`; the distinction is for the operator
+/// reading the console, where a misspelled kind and a missing field send you to two places.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Rejection {
+    /// A `kind` this build has no command for — a typo, or a client newer than the server.
+    UnknownKind(String),
     /// A known kind whose payload is missing, blank, or out of range. Carries the sentence the
     /// console prints, so each guard states its reason where it is enforced.
     Malformed(&'static str),
@@ -137,6 +141,7 @@ pub enum Rejection {
 impl std::fmt::Display for Rejection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Rejection::UnknownKind(kind) => write!(f, "no command named {kind:?}"),
             Rejection::Malformed(why) => f.write_str(why),
         }
     }
@@ -252,11 +257,11 @@ fn parse_fold(v: &Json, kind: &str) -> Result<Fold, Rejection> {
         "drop" => Ok(Fold::Drop {
             id: elem_id(v, "drop: no elemId to remove")?,
         }),
-        // `comment`, `question`, `split` — and, for now, any other word.
-        _ => Ok(Fold::Annotate {
+        "comment" | "question" | "split" => Ok(Fold::Annotate {
             id: elem_id(v, "comment: no elemId to annotate")?,
             text: text(v),
         }),
+        other => Err(Rejection::UnknownKind(other.to_string())),
     }
 }
 
@@ -658,11 +663,37 @@ mod tests {
     }
 
     #[test]
+    fn a_kind_this_build_has_no_command_for_is_refused_by_name() {
+        // It used to be stored as an annotation on the element: a client typo, or a newer
+        // client's op, came back 200 and turned into a comment nobody wrote.
+        assert_eq!(
+            parse(r#"{"elemId":"E1","kind":"renmae","text":"Paid"}"#),
+            Err(Rejection::UnknownKind("renmae".into()))
+        );
+        // The three the modal offers still annotate, and so does a body naming no kind.
+        for kind in ["comment", "question", "split"] {
+            let body = format!(r#"{{"elemId":"E1","kind":"{kind}","text":"hm"}}"#);
+            assert_eq!(
+                evs(&body),
+                vec![Event::ElementAnnotated {
+                    id: "E1".into(),
+                    text: "hm".into()
+                }],
+                "{kind}"
+            );
+        }
+    }
+
+    #[test]
     fn a_rejection_says_which_command_and_why() {
         // The server prints this to its console; "rename: …" and "no command named …" send the
         // operator to two different places.
         assert!(why(r#"{"elemId":"E1","kind":"rename","text":" "}"#).starts_with("rename:"));
         assert!(why(r#"{"kind":"add","type":"epic","text":"S"}"#).starts_with("add:"));
+        assert_eq!(
+            why(r#"{"elemId":"E1","kind":"nope"}"#),
+            r#"no command named "nope""#
+        );
     }
 
     proptest! {

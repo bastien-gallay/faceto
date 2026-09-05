@@ -155,7 +155,10 @@ prevent.)
   server paths: a **`Mint`** needs an id only the server can assign (`add` mints a type-prefixed
   one) and is dispatched by `serve/mint.rs` under the lock; a **`Fold`** carries everything its
   events need. Every guard on a posted field lives in the parse, so a `Command` in hand is already
-  legal. All appends serialize through one mutex so concurrent posts never interleave (H4).
+  legal, and the `kind` set is **closed**: an unrecognised one is a `400`, never an annotation.
+  That is the deliberate opposite of the log read's unknown-kind tolerance — a log may come from a
+  faceto that knows more, a posted command has a client waiting for an answer. All appends
+  serialize through one mutex so concurrent posts never interleave (H4).
 - **`src/template.html` + `src/client/*.js` + `src/client/style.css`** — the client. `template.html`
   is a thin shell (head, static body DOM, four placeholders); the CSS and the ~1.6k lines of JS live
   in sibling files, split into nine cohesive modules (`core` → `layout` → `drag` → `connect` →
