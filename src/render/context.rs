@@ -108,21 +108,22 @@ fn backtick_fence(content: &str) -> String {
 /// header → ubiquitous language (lanes, in `LANES` order) → flows (edges, model order) → regions
 /// (phases) → open questions (unresolved hotspots + lint) → embedded Mermaid diagram.
 ///
-/// Parity with `render_svg`/`render_mermaid`: elements whose `kind` is off the 8-lane grammar are
-/// dropped, and flows touching a dropped or undefined endpoint are skipped.
+/// Parity with `render_svg`/`render_mermaid`: a flow touching an endpoint the board does not
+/// define is skipped. There is no off-grammar element to drop — `Lane` closed that at the read
+/// boundary (F-lane-enum), so every element the model carries has a lane.
 pub fn render_context(model: &Model) -> String {
-    let live: Vec<&Element> = model.elements.iter().collect();
+    let live: &[Element] = &model.elements;
 
-    // Index live elements by id once, so flows resolve endpoints in O(1) rather than scanning.
-    let by_id: HashMap<&str, &Element> = live.iter().map(|&e| (e.id.as_str(), e)).collect();
+    // Index elements by id once, so flows resolve endpoints in O(1) rather than scanning.
+    let by_id: HashMap<&str, &Element> = live.iter().map(|e| (e.id.as_str(), e)).collect();
 
     let mut out = String::new();
 
     header(&mut out, model);
-    ubiquitous_language(&mut out, &live);
+    ubiquitous_language(&mut out, live);
     flows(&mut out, model, &by_id);
-    regions(&mut out, model, &live);
-    open_questions(&mut out, model, &live);
+    regions(&mut out, model, live);
+    open_questions(&mut out, model, live);
     diagram(&mut out, model);
 
     out
@@ -147,7 +148,7 @@ fn header(out: &mut String, model: &Model) {
     );
 }
 
-fn ubiquitous_language(out: &mut String, live: &[&Element]) {
+fn ubiquitous_language(out: &mut String, live: &[Element]) {
     out.push_str("## Ubiquitous language\n\n");
     let mut any = false;
     for &kind in LANES.iter() {
@@ -209,7 +210,7 @@ fn flows(out: &mut String, model: &Model, by_id: &HashMap<&str, &Element>) {
     out.push('\n');
 }
 
-fn regions(out: &mut String, model: &Model, live: &[&Element]) {
+fn regions(out: &mut String, model: &Model, live: &[Element]) {
     if model.phases.is_empty() {
         return;
     }
@@ -217,7 +218,7 @@ fn regions(out: &mut String, model: &Model, live: &[&Element]) {
     // once per element here is O(V·P) instead of O(V·P²) if re-derived inside the per-phase loop.
     // Insertion preserves live (model) order within each region, matching the vocabulary ordering.
     let mut members: HashMap<&str, Vec<&Element>> = HashMap::new();
-    for &e in live {
+    for e in live {
         if let Some(c) = e.col {
             if let Some(r) = region_of(model, c) {
                 members.entry(r.id.as_str()).or_default().push(e);
@@ -245,9 +246,9 @@ fn regions(out: &mut String, model: &Model, live: &[&Element]) {
     }
 }
 
-fn open_questions(out: &mut String, model: &Model, live: &[&Element]) {
+fn open_questions(out: &mut String, model: &Model, live: &[Element]) {
     // Feeder 1: unresolved hotspots.
-    let hotspots: Vec<&&Element> = live
+    let hotspots: Vec<&Element> = live
         .iter()
         .filter(|e| e.kind == Lane::Hotspot && !e.resolved)
         .collect();
