@@ -39,9 +39,8 @@ pub fn replay(events: &[Event]) -> Model {
     for ev in events {
         match ev {
             Event::BoardTitled { title } => m.title = title.clone(),
-            // `parse_log` rejects a format this build cannot project, so anything reaching replay
-            // is recognised; an in-process event carrying a foreign string falls back to the
-            // default rather than making this pure fold fallible.
+            // `parse_log` has already refused an unreadable format. An in-process event carrying
+            // a foreign string falls back rather than making this pure fold fallible.
             Event::BoardFormat { format } => {
                 m.format = crate::model::format_from_str(format).unwrap_or_default()
             }

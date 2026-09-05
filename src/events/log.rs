@@ -38,17 +38,13 @@ pub(crate) fn jsonl_records(text: &str) -> impl Iterator<Item = (usize, &str)> {
         .filter(|(_, line)| !line.is_empty())
 }
 
-/// Parse JSONL text into events. Blank lines are skipped; a line that does not parse as
-/// JSON is a hard error (the log is the source of truth); a well-formed object whose
-/// `"event"` is unknown is skipped (forward compatibility across schema versions).
+/// Parse JSONL text into events. [`Rejected`] carries the per-line rule; the read-outcome table in
+/// `docs/src/reference/event-log.md` is its user-facing form.
 ///
-/// Two things stop the read rather than shrinking the board silently (F-format-tag):
-/// a `BoardFormat` naming a format this build cannot project, and a log with records but **no**
-/// recognised event at all. The second is where forward compatibility and format discrimination
-/// are the same mechanism pointed in opposite directions: skipping unknown kinds is exactly how an
-/// older faceto reads a newer log, and it is also how a *foreign format's* log reads as an empty
-/// event-storming board. A log with some recognised events keeps the lenient reading; a log with
-/// none of them has told us nothing we can project, so it is a diagnostic, not a blank canvas.
+/// The one rule that is not per-line: a log with records but **not one** recognised kind stops the
+/// read. Skipping unknown kinds is how an older faceto reads a newer log, and — pointed the other
+/// way — how a *foreign format's* log would read as an empty event-storming board. Nothing in a
+/// single line separates the two, so the count decides.
 pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
     let mut events = Vec::new();
     let mut foreign = 0usize;
@@ -62,11 +58,6 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
                 }
                 events.push(ev)
             }
-            // A future/other-tool kind, and a lane a later faceto adds, are both the schema
-            // growing: skip the line and keep reading. A *known* kind that still didn't build has
-            // a required field missing or mis-typed (a numeric `id`, an absent `fromCol`) — that
-            // fact is in the append-only truth but would vanish from the projection, so it stops
-            // the read, like a line that isn't valid JSON at all.
             Err(Rejected::UnknownKind) | Err(Rejected::UnknownLane) => foreign += 1,
             Err(Rejected::Unnamed) => {}
             Err(Rejected::Malformed) => {
@@ -114,8 +105,6 @@ mod tests {
 
     #[test]
     fn a_log_of_nothing_but_unknown_kinds_is_an_error_not_an_empty_board() {
-        // The defect F-format-tag exists to close (spike #114): a log from another board format is
-        // all-unknown-kinds, so the lenient read projected it as a silently empty ES board.
         let err = parse_log(
             "{\"event\":\"CanvasNamed\",\"name\":\"Billing\"}\n\
              {\"event\":\"SlotFilled\",\"slot\":\"ubiquitous-language\"}\n",
@@ -127,8 +116,6 @@ mod tests {
 
     #[test]
     fn one_recognised_event_keeps_the_lenient_forward_compatible_read() {
-        // The distinction the error above must not blur: a log carrying *some* future events is an
-        // older faceto reading a newer log, which is the whole point of skipping unknown kinds.
         let log = parse_log(
             "{\"event\":\"ElementAdded\",\"id\":\"E1\",\"type\":\"event\",\"label\":\"A\"}\n\
              {\"event\":\"FromTheFuture\",\"x\":1}\n",

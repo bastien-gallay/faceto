@@ -477,8 +477,8 @@ fn parse_extract(args: &[String]) -> (String, extract::Selector) {
                 i += 2;
             }
             "--type" => {
-                // A lane typed on the command line is worth refusing loudly, unlike one met in a
-                // log: there is a person here to correct it, and the alternative is an empty cut.
+                // Unlike a lane met in a log, one typed on the command line has a person here to
+                // correct it — and the alternative is a silently empty cut.
                 let v = value("--type");
                 match model::lane_from_str(&v) {
                     Some(lane) => set(Selector::Kind(lane), &mut selector),

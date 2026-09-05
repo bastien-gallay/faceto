@@ -31,10 +31,9 @@ pub enum Event {
     BoardTitled {
         title: String,
     },
-    /// The board format this log is written in (`"event-storming"`). Stores the raw wire string
-    /// like `BoardTitled` stores the raw title; the log codec rejects a value this build cannot
-    /// project, so `replay` only ever parses a recognised one. Additive kind — an old log never
-    /// has it and replays as the default `EventStorming`.
+    /// The board format this log is written in. Holds the raw wire string, as `BoardTitled` holds
+    /// a raw title; the codec has already refused any value this build cannot project. Additive —
+    /// an old log carries none and replays as the default.
     BoardFormat {
         format: String,
     },
@@ -90,8 +89,8 @@ pub enum Event {
     },
     ElementAdded {
         id: String,
-        /// The sticky's lane. A `type` outside the eight-lane grammar never reaches here — the
-        /// codec skips the line, the way it skips an unknown event kind.
+        /// The sticky's lane. An off-grammar `type` never reaches here: the codec skips the line,
+        /// the way it skips an unknown event kind.
         kind: Lane,
         label: String,
         col: Option<i64>,

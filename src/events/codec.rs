@@ -74,22 +74,20 @@ pub(crate) fn is_known_kind(kind: &str) -> bool {
     KNOWN_KINDS.contains(&kind)
 }
 
-/// Why a raw record did not become an `Event` — the caller needs the reason, because two of the
-/// three are the ordinary way schemas evolve and one is a corrupt log.
+/// Why a raw record did not become an `Event`. The caller needs the reason: three of these four
+/// are the ordinary way a schema evolves, and one is a corrupt log.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum Rejected {
-    /// The record names no kind at all — not an object, or an absent/non-string `event`. Skipped
-    /// like an unknown kind, but told apart from one: a typo'd key is a broken line, not evidence
-    /// that the log belongs to another board format.
+    /// Not an object, or an absent/non-string `event`. Skipped like an unknown kind but told
+    /// apart from one: a typo'd key is a broken line, not evidence of another board format.
     Unnamed,
     /// A kind this build does not know: a future faceto's, or another tool's. Skipped.
     UnknownKind,
-    /// A known kind naming a lane outside the eight-lane grammar. Skipped like an unknown kind —
-    /// field *values* evolve additively too, so a log naming a lane a later faceto adds still
-    /// reads here, minus the stickies this build has nowhere to put.
+    /// A known kind naming a lane outside the grammar. Skipped: values evolve additively too, so
+    /// a log naming a lane a later faceto adds still reads, minus the stickies it cannot place.
     UnknownLane,
     /// A known kind missing a required field or mis-typing one. The fact is in the append-only
-    /// truth but would vanish from the projection, so the caller stops rather than shrinking.
+    /// truth but would vanish from the projection, so the caller stops rather than shrink.
     Malformed,
 }
 

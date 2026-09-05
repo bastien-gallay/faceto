@@ -18,9 +18,8 @@ fn required_label(v: &json::Json) -> Result<String, u16> {
 /// `col`/`detail`. The server mints the id (H6). Returns the HTTP status to fail with: `400` for
 /// a missing/empty type or label, `500` if the append itself fails.
 pub(crate) fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
-    // `type` must name one of the eight lanes. Refused at the boundary rather than dropped the
-    // way a log line is: this is a live command with a client to answer, and a 400 is a better
-    // answer than a 200 whose sticky never appears.
+    // Refused here rather than dropped the way a log line is: there is a client waiting, and a
+    // 400 is a better answer than a 200 whose sticky never appears.
     let kind = v
         .get_str("type")
         .and_then(crate::model::lane_from_str)

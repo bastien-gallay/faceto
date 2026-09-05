@@ -164,12 +164,8 @@ pub(crate) fn region_removed(overlay: Option<&Overlay>, id: &str) -> bool {
     overlay.is_some_and(|o| o.region(id) == RegionVerdict::Removed)
 }
 
-/// Merge two boards into the union board plus its overlay: every element / region / edge judged
-/// added / removed / changed / moved / unchanged, keyed on stable `id` (never text, never
-/// position). Layout follows the *new* side (`b`); removed elements and regions keep their old slot
-/// and are appended as ghosts, so the board still knows where they used to sit.
-/// Whether two boards may be diffed: only under one format. The join key is `id`, and `id` means
-/// something different in each grammar, so a cross-format overlay would judge unrelated stickies
+/// Whether two boards may be diffed: only under one format. The join key is `id`, which names a
+/// different thing in each grammar, so a cross-format overlay would judge unrelated stickies
 /// `moved`. Checked at the CLI boundary — `--base` takes any file, either side.
 pub fn comparable(base: &Model, new: &Model) -> Result<(), String> {
     if base.format == new.format {
@@ -183,6 +179,10 @@ pub fn comparable(base: &Model, new: &Model) -> Result<(), String> {
     ))
 }
 
+/// Merge two boards into the union board plus its overlay: every element / region / edge judged
+/// added / removed / changed / moved / unchanged, keyed on stable `id` (never text, never
+/// position). Layout follows the *new* side (`b`); removed elements and regions keep their old slot
+/// and are appended as ghosts, so the board still knows where they used to sit.
 pub fn diff_boards(a: &Model, b: &Model, meta: (String, String)) -> (Model, Overlay) {
     let old: HashMap<&str, &crate::model::Element> =
         a.elements.iter().map(|e| (e.id.as_str(), e)).collect();
@@ -256,8 +256,8 @@ pub fn diff_boards(a: &Model, b: &Model, meta: (String, String)) -> (Model, Over
         } else {
             a.title.clone()
         },
-        // A diff is a render-only artifact (lint never runs on it); layout follows the new side,
-        // so the tags do too. Callers pass two boards of one format — see `comparable`.
+        // Layout follows the new side, so the tags do too. Both sides share a format —
+        // see `comparable`.
         format: b.format,
         level: b.level,
         phases,

@@ -3,7 +3,7 @@
 
 use super::replay::replay;
 use super::Event;
-use crate::model::{Format, Level, Model};
+use crate::model::Model;
 
 /// Turn an existing model into the genesis batch of events that reconstructs it — the
 /// migration and bootstrap path (an old `model.json` becomes the start of a log). A
@@ -16,25 +16,12 @@ pub fn from_model(m: &Model) -> Vec<Event> {
             title: m.title.clone(),
         });
     }
-    // Same non-default guard as the level below: a board in the default format writes no
-    // `BoardFormat`, so its genesis batch is byte-identical to before the tag existed. Guarding on
-    // `!= default` (not on a named variant) means a future format is emitted too, via the
-    // exhaustive `format_to_str`.
-    if m.format != Format::default() {
-        ev.push(Event::BoardFormat {
-            format: crate::model::format_to_str(m.format).into(),
-        });
-    }
-    // Emit the level only when it differs from the default, mirroring the title guard: a
-    // big-picture (default) board writes no `BoardLeveled`, so its genesis batch is byte-identical
-    // to before this field existed and round-trips unchanged. Guarding on `!= default` (not
-    // `== Design`) means any future non-default level is emitted too, via the exhaustive
-    // `level_to_str` — no variant silently round-trips as the default.
-    if m.level != Level::default() {
-        ev.push(Event::BoardLeveled {
-            level: crate::model::level_to_str(m.level).into(),
-        });
-    }
+    ev.extend(header(m.format, |f| Event::BoardFormat {
+        format: crate::model::format_to_str(f).into(),
+    }));
+    ev.extend(header(m.level, |l| Event::BoardLeveled {
+        level: crate::model::level_to_str(l).into(),
+    }));
     for p in &m.phases {
         ev.push(Event::PhaseAdded {
             id: Some(p.id.clone()),
@@ -68,6 +55,13 @@ pub fn from_model(m: &Model) -> Vec<Event> {
         });
     }
     ev
+}
+
+/// A board header (`format`, `level`) reaches the log only when it differs from the default, so an
+/// ordinary board's genesis batch stays byte-identical to what it was before the field existed. The
+/// guard is `!= default`, never a named variant, so a future value is emitted too.
+fn header<T: Default + PartialEq>(value: T, event: impl FnOnce(T) -> Event) -> Option<Event> {
+    (value != T::default()).then(|| event(value))
 }
 
 /// Fold a log down to the shortest sequence that replays to the same board: a `LogCompacted`
@@ -172,9 +166,6 @@ mod tests {
 
     #[test]
     fn from_model_emits_no_board_format_for_the_default_format() {
-        // Every board is event-storming today, so the genesis batch of one stays byte-identical to
-        // what it was before the tag existed — the same guarantee the level guard below gives. The
-        // `!= default` guard, not a named variant, is what will emit a second format when one ships.
         let es = crate::model::from_json(
             &json::parse(r#"{"format":"event-storming","elements":[]}"#).unwrap(),
         );

@@ -3,15 +3,12 @@
 use super::diff::Tone;
 use crate::model::Lane;
 
-// The lane order the board draws top to bottom is the grammar's own order, so it lives with the
-// `Lane` type rather than beside the colours. The swatches below deepen `command` and `hotspot`
-// from their classic event-storming values so white label text clears WCAG 4.5:1.
+// Board order is the grammar's own order, so it lives with `Lane` rather than beside the colours.
 pub(crate) use crate::model::LANES;
 
-/// The id-mint prefix a lane stamps. `actor`/`aggregate` both start with 'a', so actor takes 'X'
-/// and external takes 'G'. The single source of truth for prefixes — `serve::ids` reads it rather
-/// than re-listing the grammar — and total, so minting can no longer fall back to a first letter
-/// that collides with a real lane's id space.
+/// The id-mint prefix a lane stamps — the one place they are listed, read by `serve::ids` rather
+/// than re-derived. Total, so minting can no longer fall back to a first letter that collides with
+/// another lane's id space, which is why `actor` takes 'X' and `system` 'G'.
 pub fn lane_prefix(lane: Lane) -> char {
     match lane {
         Lane::Actor => 'X',
@@ -35,6 +32,8 @@ pub(crate) fn lane_index(lane: Lane) -> usize {
         .expect("LANES is total")
 }
 
+/// `command` and `hotspot` sit deeper than their classic event-storming swatches so white label
+/// text clears WCAG 4.5:1 — restoring the lighter originals fails contrast.
 pub(crate) fn colour(lane: Lane) -> &'static str {
     match lane {
         Lane::Actor => "#FCEFA1",
@@ -122,10 +121,7 @@ mod tests {
         assert_eq!(lane_prefix(Lane::Actor), 'X'); // not 'A' — aggregate owns that
         assert_eq!(lane_prefix(Lane::Aggregate), 'A');
         assert_eq!(lane_prefix(Lane::Hotspot), 'H');
-        // ADR-1 renamed `external` to `system` but not its prefix: an id is identity, so every
-        // `G1…` already in a log stays the id of the sticky it names.
         assert_eq!(lane_prefix(Lane::System), 'G');
-        // Two lanes sharing a prefix would mint colliding ids into each other's space.
         let mut seen: Vec<char> = LANES.iter().map(|&l| lane_prefix(l)).collect();
         seen.sort_unstable();
         seen.dedup();
