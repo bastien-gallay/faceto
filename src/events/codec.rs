@@ -83,8 +83,10 @@ pub(crate) enum Rejected {
     Unnamed,
     /// A kind this build does not know: a future faceto's, or another tool's. Skipped.
     UnknownKind,
-    /// A known kind naming a lane outside the grammar. Skipped: values evolve additively too, so
-    /// a log naming a lane a later faceto adds still reads, minus the stickies it cannot place.
+    /// A record whose lane is *required* and outside the grammar — an `ElementAdded` with no
+    /// lane to put the sticky in. Skipped: values evolve additively too, so a log naming a lane a
+    /// later faceto adds still reads, minus the stickies it cannot place. Where the lane is
+    /// optional the record is not rejected; see [`names_an_unknown_lane`].
     UnknownLane,
     /// A known kind missing a required field or mis-typing one. The fact is in the append-only
     /// truth but would vanish from the projection, so the caller stops rather than shrink.
@@ -103,8 +105,12 @@ pub(crate) fn parse_event(raw: &Json) -> Result<Event, Rejected> {
         Some(_) => {}
     }
     // Checked before building so an unknown lane is told apart from a *missing* one: both make
-    // `build_event` return `None`, but only the second is a malformed line.
-    if names_an_unknown_lane(event) {
+    // `build_event` return `None`, but only the second is a malformed line. Only fatal where the
+    // lane is load-bearing — an `ElementAdded` has nowhere to put the sticky, while an
+    // `ElementMoved`'s `type` is optional and its col/y half is well-formed either way.
+    if names_an_unknown_lane(event)
+        && event.get("event").and_then(Json::as_str) == Some("ElementAdded")
+    {
         return Err(Rejected::UnknownLane);
     }
     build_event(event).ok_or(Rejected::Malformed)
@@ -112,7 +118,11 @@ pub(crate) fn parse_event(raw: &Json) -> Result<Event, Rejected> {
 
 /// Whether the record carries a `type` that is a string but no lane. An absent or non-string
 /// `type` is not this case — that is either a kind with no lane at all, or a malformed line.
-fn names_an_unknown_lane(event: &Json) -> bool {
+///
+/// Two callers, for the two things this means. [`parse_event`] rejects the record where the lane
+/// is required. `parse_log_full` counts it either way: a record read *minus* its lane was still
+/// not read in full, and `compact` folds from the projection, so it must refuse that log too.
+pub(crate) fn names_an_unknown_lane(event: &Json) -> bool {
     event
         .get("type")
         .and_then(Json::as_str)
@@ -126,8 +136,9 @@ fn build_event(event: &Json) -> Option<Event> {
     let str_field = |key: &str| event.get(key).and_then(Json::as_str).map(String::from);
     let int_field = |key: &str| event.get(key).and_then(Json::as_f64).map(|n| n as i64);
     let num_field = |key: &str| event.get(key).and_then(Json::as_f64);
-    // Reached only after `names_an_unknown_lane` has cleared the record, so a `None` here means
-    // the field is absent or not a string — never an off-grammar lane.
+    // A `None` here is an absent, non-string *or* off-grammar lane. The last is possible only
+    // where the lane is optional — `parse_event` has already rejected the records that need it —
+    // and there it means the same thing: no lane change to apply.
     let lane_field = |key: &str| {
         event
             .get(key)

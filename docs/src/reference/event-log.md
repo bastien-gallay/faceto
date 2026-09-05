@@ -33,7 +33,8 @@ difference between a typo and a schema you have not met yet:
 | an unknown `event` kind | **skipped**, silently |
 | a line with no `event` key, or a non-string one | **skipped**, silently — a typo'd key loses the fact |
 | a `BoardFormat` naming a format this build cannot project | **hard error** |
-| a sticky whose `type` names no lane this build knows | **skipped**, silently |
+| an `ElementAdded` whose `type` names no lane this build knows | **skipped**, silently — there is no lane to put it in |
+| any other record naming an unknown lane (an `ElementMoved`'s optional `type`) | the lane is **dropped**, the rest of the record applies |
 | records present, but **not one** of a recognised kind | **hard error** |
 | records present, but **every one** naming an unknown lane | **hard error** |
 
@@ -53,7 +54,10 @@ own error saying so.
 ### Skipping is safe to render, and not safe to fold
 
 A skipped record is missing from the projection but still present in the log, so rendering or
-serving a log with skips simply draws less than the file holds. [`faceto compact`](./cli/compact.md)
+serving a log with skips simply draws less than the file holds. A record read *minus* its lane
+counts the same way: an `ElementMoved` carrying both a `col` and a `type` this build cannot name
+still moves the sticky — the column is unambiguous and throwing it away lost a fact for nothing —
+but the lane change it also carried did not survive the read. [`faceto compact`](./cli/compact.md)
 is the exception: it rewrites the log *from* the projection, so a skipped record would be deleted
 from the append-only truth. It therefore **refuses to fold a log it could not fully read** and exits
 1, leaving the file untouched — compact with a build that reads the whole log.

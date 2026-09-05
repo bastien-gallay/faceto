@@ -72,6 +72,12 @@ pub fn parse_log_full(text: &str) -> Result<LogRead, String> {
         let j = json::parse(line).map_err(|e| format!("event-log line {}: {}", n, e))?;
         match parse_event(&j) {
             Ok(ev) => {
+                // Read, but not read in full: an optional lane this build cannot name was
+                // dropped while the rest of the record projected. `compact` must refuse the log
+                // for the same reason it refuses a skipped one.
+                if super::codec::names_an_unknown_lane(&j) {
+                    unknown_lane += 1;
+                }
                 if let Event::BoardFormat { format } = &ev {
                     crate::model::format_declared(Some(format))
                         .map_err(|e| format!("event-log line {}: {}", n, e))?;
@@ -118,6 +124,41 @@ pub fn parse_log_full(text: &str) -> Result<LogRead, String> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn an_optional_lane_it_cannot_read_still_leaves_the_rest_of_the_move() {
+        // The lane cannot be applied, but `col` is well-formed and unambiguous. Rejecting the
+        // whole record threw the move away with it.
+        let read = parse_log_full(
+            r#"{"event":"ElementAdded","id":"E1","type":"event","label":"P","col":0}
+{"event":"ElementMoved","id":"E1","col":5,"type":"timer"}"#,
+        )
+        .unwrap();
+        assert_eq!(read.events.len(), 2);
+        assert!(matches!(
+            &read.events[1],
+            Event::ElementMoved {
+                col: Some(5),
+                kind: None,
+                ..
+            }
+        ));
+        // Still not read in full, so `compact` must refuse it: the lane change is real data and
+        // folding from the projection would delete it.
+        assert_eq!(read.skipped, 1);
+    }
+
+    #[test]
+    fn a_required_lane_it_cannot_read_still_drops_the_whole_record() {
+        // An `ElementAdded` has nowhere to put the sticky, so there is no half to keep.
+        let read = parse_log_full(
+            r#"{"event":"ElementAdded","id":"T1","type":"timer","label":"P"}
+{"event":"BoardTitled","title":"T"}"#,
+        )
+        .unwrap();
+        assert_eq!(read.events.len(), 1);
+        assert_eq!(read.skipped, 1);
+    }
 
     #[test]
     fn parse_log_errors_on_a_malformed_known_event() {
