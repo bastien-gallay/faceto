@@ -197,6 +197,13 @@ differs — compared through `model::y_key`, so "no y" and the neutral `0.5` are
 `unchanged`. Layout follows the new side. The overlay is a *render* argument, passed beside the
 board exactly like the `View` lens — never a field on it, never in the log.
 
+It has a **precondition the signature does not carry**: both sides must be one `format`. The join
+key is `id`, which names a different thing in each grammar, so a cross-format overlay would judge
+unrelated stickies `moved` and tag the union board with whichever side happened to be newer.
+`render::comparable(base, new)` is that check, and it lives at the CLI boundary — `render --base`
+before rendering, `serve --base` at startup — because `--base` accepts a `model.json` *or* a log on
+either side, so the two files only meet there. `diff_boards` itself stays infallible.
+
 ### Event-sourced spine (do not break these)
 
 The append-only-truth / pure-`replay` / server-side-id-minting invariants live in
