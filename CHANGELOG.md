@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A posted command the server does not recognise is refused, not filed as a comment**
+  (F-typed-command, #120). `POST /comment` reads its `kind` against a **closed** set now — the
+  sixteen documented actions, plus an absent `kind`, which still means `comment`. Anything else
+  answers `400` and names itself in the server's console. It used to fall through to the
+  catch-all: a typo (`renmae`), or an op from a client newer than the server, came back `200` and
+  arrived on the board as an advisory note nobody wrote. Every action the board itself posts is in
+  the set, so nothing you can do in the UI changes; an agent or a script posting a misspelled kind
+  now finds out. This is the opposite bargain from the one the *log read* makes — an unknown event
+  kind in a log is still skipped, because a log may come from a faceto that knows more and there
+  is nobody to tell. A posted command has a client waiting.
+
 - **The `external` lane is now `system`** (ADR-1, #117). The pink sticky never meant "outside the
   company" — it means *a software system this board does not open up*, which is as often one of
   your own services as a third party's, and it lines up with C4's software system. Boards written

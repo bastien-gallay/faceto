@@ -135,9 +135,9 @@ compatibility now have a defined rule and a test.
 *sibling* `comments.jsonl` into the founding log (one-shot, then renamed to `.migrated`), so a
 legacy inbox migrated onto the board instead of being stranded. That fold was **removed** in
 F-model-export: `faceto` no longer carries any `comments.jsonl` code path — any stray inbox is
-handled outside the tool. What survives is `events::comment_to_events` (one JSON comment → its
-event(s)), the single source of truth for the comment→event mapping, still used by the live
-`POST /comment`: `comment`/`question`/`split` → `ElementAnnotated`, `resolve` → `HotspotResolved`,
+handled outside the tool. What survives is the command→event mapping the live `POST /comment`
+still uses — `events::parse_command` reads the body into a `Command`, `events::fold_to_events`
+maps it: `comment`/`question`/`split` → `ElementAnnotated`, `resolve` → `HotspotResolved`,
 `rename` → `ElementRenamed`, `move` (+ optional `swapId`/`swapCol`) → one or two `ElementMoved`,
 `drop` → `ElementRemoved`.
 

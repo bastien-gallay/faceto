@@ -164,7 +164,9 @@ the job.
 ## Write contract — `POST http://127.0.0.1:<port>/comment`
 
 JSON body, **one action per request**. Response is `{"ok":true}` (200) or `{"ok":false}` with
-status `400` (nothing to persist / a guard refused it) or `500` (the append itself failed).
+status `400` (a guard refused it, or the `kind` is not one of the sixteen below) or `500` (the
+append itself failed). The `kind` set is **closed**: a word this table does not list is a 400, not
+a note stored on the element, so a misspelling fails loudly instead of arriving as a comment.
 `type` on an `add` must be one of the 8 lanes — `actor`, `command`, `aggregate`, `event`,
 `policy`, `readmodel`, `system`, `hotspot` — an off-grammar type is a 400 (`external` is
 accepted as the pre-ADR-1 spelling of `system`). Labels must be
@@ -177,7 +179,7 @@ non-blank.
 | `rename` | `elemId`, `text` | — | `ElementRenamed` |
 | `resolve` | `elemId` | `text` (resolution note) | `HotspotResolved` |
 | `drop` | `elemId` | — | `ElementRemoved` |
-| *(anything else with an `elemId`)* | `elemId`, `text` | — | `ElementAnnotated` (advisory note) |
+| `comment` \| `question` \| `split` | `elemId` | `text` | `ElementAnnotated` (advisory note; an absent `kind` means `comment`) |
 | `connect` | `src`, `dst` (distinct, non-blank) | — | `EdgeAdded` — the directed arrow `src → dst` |
 | `disconnect` | `src`, `dst` | — | `EdgeRemoved` |
 | `region-add` | `text`, `fromCol`, `toCol` (`fromCol < toCol`) | — | `PhaseAdded` — **server mints the id** |
@@ -197,9 +199,9 @@ non-blank.
   `prepend:true` for the left edge.
 - The same contract is published for humans in `docs/src/reference/event-log.md`, so a change
   here has a second home to update.
-- Source of truth is the code, not this table: `events::comment_to_events`,
-  `serve::add_from_comment` / `add_region_from_comment` / `split_region_from_comment`
-  (`src/events/comments.rs`, `src/serve/comment.rs`). **If they diverge, the code wins** —
+- Source of truth is the code, not this table: `events::parse_command` (which accepts or refuses
+  every `kind` and field above) and `events::fold_to_events` in `src/events/command.rs`, plus
+  `serve::mint::append_mint` for the three server-minted ids. **If they diverge, the code wins** —
   re-read them after any event-schema change.
 
 ### Example requests
