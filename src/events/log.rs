@@ -51,7 +51,7 @@ pub(crate) fn jsonl_records(text: &str) -> impl Iterator<Item = (usize, &str)> {
 /// none of them has told us nothing we can project, so it is a diagnostic, not a blank canvas.
 pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
     let mut events = Vec::new();
-    let mut skipped = 0usize;
+    let mut foreign = 0usize;
     for (n, line) in jsonl_records(text) {
         let j = json::parse(line).map_err(|e| format!("event-log line {}: {}", n, e))?;
         match parse_event(&j) {
@@ -67,7 +67,8 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
             // a required field missing or mis-typed (a numeric `id`, an absent `fromCol`) — that
             // fact is in the append-only truth but would vanish from the projection, so it stops
             // the read, like a line that isn't valid JSON at all.
-            Err(Rejected::UnknownKind) | Err(Rejected::UnknownLane) => skipped += 1,
+            Err(Rejected::UnknownKind) | Err(Rejected::UnknownLane) => foreign += 1,
+            Err(Rejected::Unnamed) => {}
             Err(Rejected::Malformed) => {
                 let kind = j.get("event").and_then(Json::as_str).unwrap_or("?");
                 return Err(format!(
@@ -77,11 +78,11 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
             }
         }
     }
-    if events.is_empty() && skipped > 0 {
+    if events.is_empty() && foreign > 0 {
         return Err(format!(
             "event-log: {} record(s), none of a recognised event kind — this log is from another \
              board format, or from a newer faceto",
-            skipped
+            foreign
         ));
     }
     Ok(events)
@@ -134,6 +135,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn a_record_naming_no_kind_is_not_evidence_of_a_foreign_format() {
+        // A typo'd key is a broken line, not another notation — sending the reader after a format
+        // problem would be a worse diagnostic than the silence it replaced.
+        assert!(parse_log(r#"{"evnet":"BoardTitled","title":"x"}"#)
+            .unwrap()
+            .is_empty());
+        assert!(parse_log("[1,2]").unwrap().is_empty());
     }
 
     #[test]

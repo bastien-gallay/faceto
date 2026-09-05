@@ -42,6 +42,9 @@ event-storming board. Nothing in a line distinguishes the two. So the count deci
 some recognised events keeps the lenient reading, while a log carrying **none** has told the reader
 nothing it can project, and says so instead of drawing a blank board.
 
+Only *named* kinds count towards that last row. A line with no `event` key names no kind at all, so
+it stays a silent skip: a typo is a broken line, not evidence of another notation.
+
 The third row is the one worth dwelling on. A malformed *known* event is a fact that exists in the
 append-only truth but would vanish from the projection, so it stops the read rather than quietly
 shrinking your board. An unknown kind, by contrast, is how forward compatibility works: a log
