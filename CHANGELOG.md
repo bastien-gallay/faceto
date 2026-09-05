@@ -26,10 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A log faceto cannot project is now an error, not an empty board.** Skipping unrecognised event
   kinds is how an older faceto reads a newer log; pointed at a log from a *different* notation, the
-  same rule produced a valid, completely empty board and exit code 0. Two reads now stop instead: a
-  declared format this build does not speak, and a log with records but not one recognised event
-  kind. A log mixing known and unknown kinds keeps the forgiving read, so forward compatibility is
-  untouched.
+  same rule produced a valid, completely empty board and exit code 0. Three reads now stop instead:
+  a declared format this build does not speak, a `"format"` that is present but not a string (a
+  malformed tag is not an absent one), and a log with records but not one recognised event kind. A
+  log mixing known and unknown kinds keeps the forgiving read, so forward compatibility is
+  untouched, and a line naming *no* kind at all — a typo'd `event` key — is still a silent skip
+  rather than evidence of a foreign format. `render --base` and `serve --base` also refuse **two
+  boards of different formats**: a diff joins the two sides on `id`, which names a different thing
+  in each notation.
 
 - **An edge tuple's third slot is no longer read.** `["E1", "E2", "added"]` in a `model.json` used
   to set the internal diff status of that connection, painting it as an overlay wire on an ordinary
