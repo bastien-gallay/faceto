@@ -78,6 +78,10 @@ pub(crate) fn is_known_kind(kind: &str) -> bool {
 /// three are the ordinary way schemas evolve and one is a corrupt log.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum Rejected {
+    /// The record names no kind at all — not an object, or an absent/non-string `event`. Skipped
+    /// like an unknown kind, but told apart from one: a typo'd key is a broken line, not evidence
+    /// that the log belongs to another board format.
+    Unnamed,
     /// A kind this build does not know: a future faceto's, or another tool's. Skipped.
     UnknownKind,
     /// A known kind naming a lane outside the eight-lane grammar. Skipped like an unknown kind —
@@ -96,9 +100,9 @@ pub(crate) fn parse_event(raw: &Json) -> Result<Event, Rejected> {
     let event = upcast(raw);
     let event = event.as_ref();
     match event.get("event").and_then(Json::as_str) {
-        Some(kind) if is_known_kind(kind) => {}
-        // Covers a missing or non-string `event` key too: neither names a kind we can build.
-        _ => return Err(Rejected::UnknownKind),
+        None => return Err(Rejected::Unnamed),
+        Some(kind) if !is_known_kind(kind) => return Err(Rejected::UnknownKind),
+        Some(_) => {}
     }
     // Checked before building so an unknown lane is told apart from a *missing* one: both make
     // `build_event` return `None`, but only the second is a malformed line.
@@ -379,16 +383,15 @@ mod tests {
     use crate::events::*;
     use crate::json::{self, Json};
 
-    #[test]
-    fn is_known_kind_recognizes_every_current_event_variant() {
-        // Guards the hand-maintained `KNOWN_KINDS` list against drift with `parse_event`'s match:
-        // every kind `to_json` can emit must be recognized as *known*, so a malformed instance of
-        // it is a hard error (not silently skipped as a future/unknown kind — the exact data-loss
-        // bug the strict `parse_log` branch exists to prevent). One sample per variant; add one
-        // when you add a variant. (Full compile-time enforcement needs a variant-enumeration crate,
-        // which the zero-dep rule forbids — this guard plus the `KNOWN_KINDS` doc are the coupling.)
-        let samples = vec![
+    /// One instance of every `Event` variant. Add one when you add a variant: the two tests below
+    /// are the only coupling between `Event`, `to_json` and `KNOWN_KINDS` (compile-time
+    /// enumeration would need a crate, which pillar 0 forbids).
+    fn one_of_every_variant() -> Vec<Event> {
+        vec![
             Event::BoardTitled { title: "t".into() },
+            Event::BoardFormat {
+                format: "event-storming".into(),
+            },
             Event::BoardLeveled {
                 level: "design".into(),
             },
@@ -457,28 +460,40 @@ mod tests {
                 dst: "E2".into(),
             },
             Event::LogCompacted { folded: 3 },
-        ];
-        for ev in &samples {
-            let kind = to_json(ev)
-                .get("event")
-                .and_then(Json::as_str)
-                .expect("to_json emits an `event` kind")
-                .to_string();
-            assert!(
-                is_known_kind(&kind),
-                "`to_json` emits {kind:?} but `is_known_kind` rejects it — a malformed {kind} \
-                 would be silently skipped instead of erroring; add it to `KNOWN_KINDS`."
-            );
-            // And the round-trip must rebuild it (no phantom / mis-typed sample).
-            assert!(
-                parse_event(&to_json(ev)).is_ok(),
-                "{kind} does not round-trip"
+        ]
+    }
+
+    fn emitted_kind(ev: &Event) -> String {
+        to_json(ev)
+            .get("event")
+            .and_then(Json::as_str)
+            .expect("to_json emits an `event` kind")
+            .to_string()
+    }
+
+    #[test]
+    fn every_kind_to_json_emits_is_known() {
+        // A kind outside `KNOWN_KINDS` is skipped rather than erroring, so a malformed instance of
+        // it would be lost silently — the data-loss `parse_log`'s strict branch exists to prevent.
+        for ev in &one_of_every_variant() {
+            let kind = emitted_kind(ev);
+            assert!(is_known_kind(&kind), "add {kind:?} to `KNOWN_KINDS`");
+        }
+        for legacy in ["CommentAdded", "Comment"] {
+            assert!(is_known_kind(legacy));
+        }
+    }
+
+    #[test]
+    fn every_variant_is_a_serialize_parse_fixed_point() {
+        for ev in &one_of_every_variant() {
+            assert_eq!(
+                parse_event(&to_json(ev)).as_ref(),
+                Ok(ev),
+                "{} does not round-trip",
+                emitted_kind(ev)
             );
         }
-        // The legacy aliases `upcast` rewrites forward are known too (they are not `Event`
-        // variants, so they can't appear in `samples`).
-        assert!(is_known_kind("CommentAdded"));
-        assert!(is_known_kind("Comment"));
     }
 
     #[test]
@@ -566,15 +581,5 @@ mod tests {
             if id == "E1" && *y == 0.35)
         );
         assert_eq!(line(&e), r#"{"event":"ElementMoved","id":"E1","y":0.35}"#);
-    }
-
-    #[test]
-    fn board_leveled_is_a_serialize_parse_fixed_point() {
-        let e = ev(r#"{"event":"BoardLeveled","level":"design"}"#);
-        assert!(matches!(&e, Event::BoardLeveled { level } if level == "design"));
-        assert_eq!(
-            json::to_string(&to_json(&ev(&line(&e)))),
-            json::to_string(&to_json(&e))
-        );
     }
 }
