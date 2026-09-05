@@ -10,6 +10,13 @@
       "type": "string",
       "description": "Board title. Defaults to \"board\" when absent."
     },
+    "format": {
+      "type": "string",
+      "enum": ["event-storming"],
+      "default": "event-storming",
+      "description": "The board format, selecting which projector reads the file. Absent means `event-storming`, the same additive default rule `level` uses, so every file written before this field existed reads unchanged. Unlike `level`, an unrecognised value is REJECTED at load rather than folded into the default: a board this build cannot project would otherwise render as a silently empty event-storming one.",
+      "$comment": "One value today. A second format ships as an added enum entry here and an added Format variant in src/model.rs."
+    },
     "level": {
       "type": "string",
       "enum": ["big-picture", "design"],

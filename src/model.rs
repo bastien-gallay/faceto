@@ -41,6 +41,54 @@ pub fn level_to_str(level: Level) -> &'static str {
     }
 }
 
+/// The board format a log or model file declares — which projector replays it. Sealed on
+/// purpose (`docs/multi-format-architecture.md` §"The Format seam"): dispatch is one `match`, not
+/// a `dyn Format`. One variant today; the tag exists so a *foreign* log is rejected loudly instead
+/// of replaying as a silently empty event-storming board (F-format-tag, constraint 1 of the
+/// canvas spike).
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum Format {
+    #[default]
+    EventStorming,
+}
+
+/// Parse a board `format` string, or `None` if this build does not speak it. Unlike
+/// [`level_from_str`], an unrecognised value is **not** folded into the default: a board whose
+/// format we cannot project is the one case where a lenient read produces a confidently wrong
+/// empty board. The single parse point shared by `from_json` (model.json) and the log codec.
+pub fn format_from_str(s: &str) -> Option<Format> {
+    match s {
+        "event-storming" => Some(Format::EventStorming),
+        _ => None,
+    }
+}
+
+/// The wire string for a `Format` — the reverse of [`format_from_str`], exhaustive for the same
+/// reason [`level_to_str`] is: a future variant must declare its wire form or fail to compile.
+pub fn format_to_str(format: Format) -> &'static str {
+    match format {
+        Format::EventStorming => "event-storming",
+    }
+}
+
+/// Resolve a declared format tag at a read boundary. Absent → the default (`event-storming`), the
+/// same additive rule `level` uses, so every file written before the tag existed reads unchanged.
+/// Present but unrecognised → an error naming the format, because continuing would render a board
+/// this build cannot project as an empty one.
+pub fn format_declared(tag: Option<&str>) -> Result<Format, String> {
+    match tag {
+        None => Ok(Format::default()),
+        Some(s) => format_from_str(s).ok_or_else(|| {
+            format!(
+                "board format {:?} is not one this faceto speaks (it reads {}) — \
+                 the file is from another format, or from a newer faceto",
+                s,
+                format_to_str(Format::default())
+            )
+        }),
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct Phase {
     /// Stable identity (the diff join key and the target of resize/rename/remove). A region is a
@@ -83,6 +131,9 @@ pub struct Edge {
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct Model {
     pub title: String,
+    /// The board format this model is projected under. Selects which projector replays the log;
+    /// `EventStorming` (the default) is the only one this build ships. See [`Format`].
+    pub format: Format,
     /// Modeling granularity — `BigPicture` (default) or `Design`. Read by `crate::lint` to decide
     /// which rules apply; never affects rendering. See [`Level`].
     pub level: Level,
@@ -94,6 +145,7 @@ pub struct Model {
 pub fn load(path: &Path) -> Result<Model, String> {
     let raw = std::fs::read_to_string(path).map_err(|e| format!("{}: {}", path.display(), e))?;
     let j = json::parse(&raw)?;
+    format_declared(j.get("format").and_then(|v| v.as_str()))?;
     Ok(from_json(&j))
 }
 
@@ -103,6 +155,9 @@ pub fn from_json(j: &Json) -> Model {
         .and_then(|v| v.as_str())
         .unwrap_or("board")
         .to_string();
+    // Lenient here on purpose: `load` is the boundary that rejects a format this build cannot
+    // project, so an unrecognised tag reaching this far is a caller building a model in-process.
+    let format = format_declared(j.get("format").and_then(|v| v.as_str())).unwrap_or_default();
     let level = j
         .get("level")
         .and_then(|v| v.as_str())
@@ -133,6 +188,7 @@ pub fn from_json(j: &Json) -> Model {
         .unwrap_or_default();
     Model {
         title,
+        format,
         level,
         phases,
         elements,
@@ -376,6 +432,55 @@ mod tests {
     }
 
     // ---- F-es-lint: board level ------------------------------------------------------------
+
+    // ---- F-format-tag: board format ---------------------------------------------------------
+
+    #[test]
+    fn format_defaults_to_event_storming_when_absent() {
+        assert_eq!(format_declared(None), Ok(Format::EventStorming));
+        assert_eq!(model_of(r#"{"elements":[]}"#).format, Format::EventStorming);
+    }
+
+    #[test]
+    fn an_explicit_event_storming_format_is_parsed() {
+        let m = model_of(r#"{"format":"event-storming","elements":[]}"#);
+        assert_eq!(m.format, Format::EventStorming);
+    }
+
+    #[test]
+    fn an_unrecognised_format_is_an_error_not_the_default() {
+        let err = format_declared(Some("bounded-context-canvas")).unwrap_err();
+        assert!(err.contains("bounded-context-canvas"), "{}", err);
+        assert_eq!(format_from_str("bounded-context-canvas"), None);
+    }
+
+    #[test]
+    fn load_refuses_a_model_file_declaring_a_format_this_build_cannot_project() {
+        // The model.json half of the same guard `parse_log` gives the log: without it, a foreign
+        // board renders as an empty event-storming one and exits 0.
+        let dir = std::env::temp_dir().join(format!("faceto-fmt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("foreign.model.json");
+        std::fs::write(
+            &path,
+            r#"{"format":"bounded-context-canvas","elements":[]}"#,
+        )
+        .unwrap();
+        let err = load(&path).unwrap_err();
+        assert!(err.contains("bounded-context-canvas"), "{}", err);
+
+        std::fs::write(&path, r#"{"format":"event-storming","elements":[]}"#).unwrap();
+        assert_eq!(load(&path).unwrap().format, Format::EventStorming);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn format_to_str_is_the_inverse_of_format_from_str() {
+        // One variant today, so this reads as a single assertion rather than the loop its `level`
+        // sibling uses; `format_to_str` is exhaustive, so a second format cannot skip it.
+        let format = Format::EventStorming;
+        assert_eq!(format_from_str(format_to_str(format)), Some(format));
+    }
 
     #[test]
     fn level_defaults_to_big_picture_when_absent() {

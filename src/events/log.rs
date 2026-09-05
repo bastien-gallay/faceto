@@ -41,12 +41,27 @@ pub(crate) fn jsonl_records(text: &str) -> impl Iterator<Item = (usize, &str)> {
 /// Parse JSONL text into events. Blank lines are skipped; a line that does not parse as
 /// JSON is a hard error (the log is the source of truth); a well-formed object whose
 /// `"event"` is unknown is skipped (forward compatibility across schema versions).
+///
+/// Two things stop the read rather than shrinking the board silently (F-format-tag):
+/// a `BoardFormat` naming a format this build cannot project, and a log with records but **no**
+/// recognised event at all. The second is where forward compatibility and format discrimination
+/// are the same mechanism pointed in opposite directions: skipping unknown kinds is exactly how an
+/// older faceto reads a newer log, and it is also how a *foreign format's* log reads as an empty
+/// event-storming board. A log with some recognised events keeps the lenient reading; a log with
+/// none of them has told us nothing we can project, so it is a diagnostic, not a blank canvas.
 pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
     let mut events = Vec::new();
+    let mut skipped = 0usize;
     for (n, line) in jsonl_records(text) {
         let j = json::parse(line).map_err(|e| format!("event-log line {}: {}", n, e))?;
         match parse_event(&j) {
-            Some(ev) => events.push(ev),
+            Some(ev) => {
+                if let Event::BoardFormat { format } = &ev {
+                    crate::model::format_declared(Some(format))
+                        .map_err(|e| format!("event-log line {}: {}", n, e))?;
+                }
+                events.push(ev)
+            }
             // `parse_event` returns `None` for two very different cases; only one is skippable.
             // An *unknown* kind is a future/other-tool event → skip (forward compatibility). A
             // *known* kind that still didn't build means a required field is missing or mis-typed
@@ -62,8 +77,16 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
                         ));
                     }
                 }
+                skipped += 1;
             }
         }
+    }
+    if events.is_empty() && skipped > 0 {
+        return Err(format!(
+            "event-log: {} record(s), none of a recognised event kind — this log is from another \
+             board format, or from a newer faceto",
+            skipped
+        ));
     }
     Ok(events)
 }
@@ -74,14 +97,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn parse_log_errors_on_a_malformed_known_event_but_skips_an_unknown_kind() {
-        // An unknown/future kind is skipped for forward compatibility.
-        assert_eq!(
-            parse_log(r#"{"event":"FromTheFuture","x":1}"#)
-                .unwrap()
-                .len(),
-            0
-        );
+    fn parse_log_errors_on_a_malformed_known_event() {
         // A *known* kind missing a required field is a hard error: the fact is in the append-only
         // log but would otherwise vanish from the projection with no diagnostic.
         assert!(parse_log(r#"{"event":"ElementAdded","id":"E1"}"#).is_err()); // no type/label
@@ -97,6 +113,50 @@ mod tests {
         )
         .unwrap();
         assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn a_log_of_nothing_but_unknown_kinds_is_an_error_not_an_empty_board() {
+        // The defect F-format-tag exists to close (spike #114): a log from another board format is
+        // all-unknown-kinds, so the lenient read projected it as a silently empty ES board.
+        let err = parse_log(
+            "{\"event\":\"CanvasNamed\",\"name\":\"Billing\"}\n\
+             {\"event\":\"SlotFilled\",\"slot\":\"ubiquitous-language\"}\n",
+        )
+        .unwrap_err();
+        assert!(err.contains("2 record(s)"), "{}", err);
+        assert!(err.contains("none of a recognised event kind"), "{}", err);
+    }
+
+    #[test]
+    fn one_recognised_event_keeps_the_lenient_forward_compatible_read() {
+        // The distinction the error above must not blur: a log carrying *some* future events is an
+        // older faceto reading a newer log, which is the whole point of skipping unknown kinds.
+        let log = parse_log(
+            "{\"event\":\"ElementAdded\",\"id\":\"E1\",\"type\":\"event\",\"label\":\"A\"}\n\
+             {\"event\":\"FromTheFuture\",\"x\":1}\n",
+        )
+        .unwrap();
+        assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn a_board_format_this_build_cannot_project_is_a_hard_error() {
+        let err =
+            parse_log(r#"{"event":"BoardFormat","format":"bounded-context-canvas"}"#).unwrap_err();
+        assert!(err.contains("bounded-context-canvas"), "{}", err);
+        assert!(err.contains("line 1"), "{}", err);
+    }
+
+    #[test]
+    fn an_explicit_event_storming_format_tag_reads_as_one_event() {
+        let log = parse_log(r#"{"event":"BoardFormat","format":"event-storming"}"#).unwrap();
+        assert_eq!(
+            log,
+            vec![Event::BoardFormat {
+                format: "event-storming".into()
+            }]
+        );
     }
 
     #[test]

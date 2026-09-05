@@ -240,7 +240,9 @@ pub fn diff_boards(a: &Model, b: &Model, meta: (String, String)) -> (Model, Over
         } else {
             a.title.clone()
         },
-        // A diff is a render-only artifact (lint never runs on it); carry the newer board's level.
+        // A diff is a render-only artifact (lint never runs on it); carry the newer board's
+        // format and level.
+        format: b.format,
         level: b.level,
         phases,
         elements,

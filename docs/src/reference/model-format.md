@@ -13,6 +13,7 @@ so unknown fields are ignored rather than rejected, and an older faceto reads a 
 ```json
 {
   "title": "Checkout",
+  "format": "event-storming",
   "level": "big-picture",
   "phases": [
     { "id": "K1", "label": "Browse", "fromCol": 0, "toCol": 2 },
@@ -40,13 +41,16 @@ Every top-level field is optional. `{}` is a valid — empty — board.
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `title` | string | `"board"` | Board title. Drawn on the nameplate and used as the page title. |
+| `format` | string | `"event-storming"` | The [board format](./board-formats.md) — which projector reads the file. One value today. |
 | `level` | string | `"big-picture"` | Modeling granularity: `"big-picture"` or `"design"`. [Lint](./lint-rules.md) gates a rule on it, and the [context pack](./cli/export.md) states it; the drawn board ignores it. |
 | `phases` | array | `[]` | Labelled vertical bands over the column timeline. See [regions](../board/regions.md). |
 | `elements` | array | `[]` | The stickies. |
 | `edges` | array | `[]` | Directed connections between elements. |
 
 `level` is parsed leniently — anything that is not `"design"` reads as big-picture — but author only
-the two documented values.
+the two documented values. `format` is the exception to that leniency: a value faceto does not
+recognise is **refused at load**, because a board it cannot project would otherwise render as an
+empty event-storming one. See [board formats](./board-formats.md).
 
 ## `elements`
 

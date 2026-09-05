@@ -965,7 +965,7 @@ fn draw_legend(p: &mut Vec<Shape>, present: &[&str], height: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Edge, Level, Phase};
+    use crate::model::{Edge, Format, Level, Phase};
 
     /// Render with the identity lens (nothing collapsed) — the default for every test that isn't
     /// exercising F-region-collapse itself, so the `View` argument stays out of the assertions.
@@ -977,6 +977,7 @@ mod tests {
     // attributes ever stop being emitted, moves silently break. Pin them here.
     fn one_event_at_col(col: i64) -> Model {
         Model {
+            format: Format::default(),
             title: "t".into(),
             phases: vec![],
             elements: vec![Element {
@@ -996,6 +997,7 @@ mod tests {
 
     fn empty_board() -> Model {
         Model {
+            format: Format::default(),
             title: "t".into(),
             phases: vec![],
             elements: vec![],
@@ -1133,6 +1135,7 @@ mod tests {
 
     fn events_at_col(col: i64, n: usize) -> Model {
         Model {
+            format: Format::default(),
             title: "t".into(),
             phases: vec![],
             elements: (0..n)
@@ -1289,6 +1292,7 @@ mod tests {
     // in-band vs out-of-band stickies and neighbours to shift. R1=[0,1] R2=[2,3] R3=[4,5].
     fn three_region_board() -> Model {
         Model {
+            format: Format::default(),
             title: "t".into(),
             phases: vec![
                 phase("K1", "Alpha", 0, 1),
@@ -1498,6 +1502,7 @@ mod tests {
     #[test]
     fn region_renders_as_a_labelled_outline_with_frontier_handles_and_pivotal_node() {
         let m = Model {
+            format: Format::default(),
             title: "t".into(),
             phases: vec![phase("K1", "Context A", 0, 2)],
             elements: vec![el("E1", "event", 0), el("E2", "event", 1)],
@@ -1571,6 +1576,7 @@ mod tests {
     #[test]
     fn adjacent_regions_share_a_single_frontier() {
         let m = Model {
+            format: Format::default(),
             title: "t".into(),
             phases: vec![
                 phase("K1", "A", 0, 1),
@@ -1613,6 +1619,7 @@ mod tests {
     #[test]
     fn region_rail_covers_every_visible_column_even_with_no_regions() {
         let m = Model {
+            format: Format::default(),
             title: "t".into(),
             phases: vec![],
             elements: vec![el("E1", "event", 0), el("E2", "event", 2)],
@@ -1637,6 +1644,7 @@ mod tests {
     #[test]
     fn removed_region_is_ghosted_and_drops_its_grab_handle() {
         let base = Model {
+            format: Format::default(),
             title: "t".into(),
             phases: vec![phase("K9", "Gone", 0, 1)],
             elements: vec![el("E1", "event", 0)],
@@ -1756,6 +1764,7 @@ mod tests {
     #[test]
     fn crowded_cell_orders_members_by_neighbour_barycenter() {
         let m = Model {
+            format: Format::default(),
             title: "t".into(),
             phases: vec![],
             elements: vec![
@@ -1804,6 +1813,7 @@ mod tests {
     #[test]
     fn sibling_edges_fan_apart_at_a_shared_face() {
         let m = Model {
+            format: Format::default(),
             title: "t".into(),
             phases: vec![],
             elements: vec![
@@ -1851,6 +1861,7 @@ mod tests {
             });
         }
         let m = Model {
+            format: Format::default(),
             title: "t".into(),
             phases: vec![],
             elements,

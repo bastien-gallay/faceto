@@ -3,7 +3,7 @@
 
 use super::replay::replay;
 use super::Event;
-use crate::model::{Level, Model};
+use crate::model::{Format, Level, Model};
 
 /// Turn an existing model into the genesis batch of events that reconstructs it — the
 /// migration and bootstrap path (an old `model.json` becomes the start of a log). A
@@ -14,6 +14,15 @@ pub fn from_model(m: &Model) -> Vec<Event> {
     if !m.title.is_empty() {
         ev.push(Event::BoardTitled {
             title: m.title.clone(),
+        });
+    }
+    // Same non-default guard as the level below: a board in the default format writes no
+    // `BoardFormat`, so its genesis batch is byte-identical to before the tag existed. Guarding on
+    // `!= default` (not on a named variant) means a future format is emitted too, via the
+    // exhaustive `format_to_str`.
+    if m.format != Format::default() {
+        ev.push(Event::BoardFormat {
+            format: crate::model::format_to_str(m.format).into(),
         });
     }
     // Emit the level only when it differs from the default, mirroring the title guard: a
@@ -157,6 +166,34 @@ mod tests {
             Vec::<String>::new()
         );
         assert_eq!(rebuilt.edges[0].label.as_deref(), Some("causes"));
+    }
+
+    // ---- F-format-tag: the board format round-trips through the log ------------------------
+
+    #[test]
+    fn from_model_emits_no_board_format_for_the_default_format() {
+        // Every board is event-storming today, so the genesis batch of one stays byte-identical to
+        // what it was before the tag existed — the same guarantee the level guard below gives. The
+        // `!= default` guard, not a named variant, is what will emit a second format when one ships.
+        let es = crate::model::from_json(
+            &json::parse(r#"{"format":"event-storming","elements":[]}"#).unwrap(),
+        );
+        assert_eq!(es.format, crate::model::Format::EventStorming);
+        assert!(!from_model(&es)
+            .iter()
+            .any(|e| matches!(e, Event::BoardFormat { .. })));
+    }
+
+    #[test]
+    fn a_board_format_event_replays_and_survives_compaction() {
+        let log = vec![Event::BoardFormat {
+            format: "event-storming".into(),
+        }];
+        assert_eq!(replay(&log).format, crate::model::Format::EventStorming);
+        assert_eq!(
+            replay(&compact(&log)).format,
+            crate::model::Format::EventStorming
+        );
     }
 
     // ---- F-es-lint: the board level round-trips through the log ----------------------------
