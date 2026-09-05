@@ -76,6 +76,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An element with no lane no longer leaves the board in silence** (#149 review). A `type`
+  outside the eight lanes has nowhere to go, so the entry is dropped on read — correct, but
+  wordless, and `genesis` writes only the survivors into the log while keeping the edges that
+  pointed at what it dropped. Reading a `model.json` now warns with the count (an entry missing
+  its `id` or `label` counts too).
+
+- **An `ElementMoved` naming an unreadable lane keeps its move.** The record was rejected whole, so
+  a well-formed `col`/`y` was discarded along with a `type` this build could not name. The lane is
+  now fatal only where it is load-bearing — an `ElementAdded` has nowhere to put the sticky — and
+  elsewhere it is dropped while the rest of the record applies. `compact` still refuses such a log:
+  a record read *minus* its lane was not read in full either.
+
+- **`extract --type external` stops renaming the lane you typed.** It answered `error: system lane
+  matched no elements`, which reads as though the argument had been ignored. The pre-ADR-1 spelling
+  now announces itself with a `note:` where the substitution happens, so every later message makes
+  sense.
+
 - **The narrate skill can propose edges again** — its instructions claimed "you cannot propose
   edges […] never invent an edge kind (it will 400)", which stopped being true when
   `connect`/`disconnect` shipped with F-edge-connect. A missing arrow is the commonest gap the
