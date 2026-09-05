@@ -9,7 +9,8 @@ apply them — on top of one hard constraint that frames all of them:
 1. **Tidy First** — separate behaviour changes from clean-ups.
 2. **CUPID & YAGNI** — properties to aim for in design and refactoring.
 3. **TDD (Red → Green → Refactor → Reflect)** — the loop that keeps the above
-   honest.
+   honest, run inside a fixed order of work (tidy → red → green → review →
+   reflect outward).
 4. **Clean Code** — local taste rules that survive automation.
 
 Repo-specific rules take precedence when they collide. The authoritative
@@ -202,8 +203,10 @@ the second use case.
 ## 3. TDD with a fourth step — Reflect
 
 The standard Red → Green → Refactor loop, with a deliberate **Reflect** beat at
-the end of each cycle. Reflect is what keeps the loop from grinding out lots of
-small green tests that don't add up to a coherent design.
+the end of each cycle. It runs inside the order of work below, which says when
+the loop starts and what happens once it stops. Reflect is what keeps the loop
+from grinding out lots of small green tests that don't add up to a coherent
+design.
 
 ```text
    ┌──────────┐
@@ -243,6 +246,49 @@ small green tests that don't add up to a coherent design.
         ▼
        (next test)
 ```
+
+### The order of a piece of work
+
+The loop above is what happens inside one step. This is the order of the steps.
+Each is here because skipping it has already cost something.
+
+1. **Tidy first.** Before a line of the feature, make the change easy: rename,
+   extract, pull the shape the feature needs into place. Its own commit (§1). A
+   feature written into unprepared code produces a diff nobody can review, and
+   the tidy then hides inside it.
+2. **Red.** Write the failing test *before* the implementation, and watch it
+   fail for the right reason. Writing it afterwards is how a new `Event` variant
+   reached `to_json` with no test that ever serialized one: a test written
+   against code you have just written asserts what the code does, not what you
+   meant. The order is the whole safeguard — nothing about the test's content
+   recovers it.
+3. **Green.** The least code that passes. Ugly is fine; don't generalise.
+4. **Review, then refactor.** Re-read the whole diff as a reviewer would — not
+   the file you were editing, the diff — then clean it: names, duplication, and
+   the comment pass (§4). The prose you wrote while thinking is not the prose
+   that ships.
+5. **Reflect outward** (below).
+
+### Reflect outward
+
+The `REFLECT` beat asks what the cycle changed about the *next test*. At the end
+of a piece of work, ask what the finished thing changed about everything
+downstream of it. Three targets:
+
+- **The work in flight.** Does what you learned change the next item on the
+  list, reorder it, or make one unnecessary?
+- **The architecture.** Did a seam move? Did a rule you assumed turn out to be
+  false, or a constraint turn out softer than documented? `AGENTS.md` and
+  `docs/architecture/` describe the shape the code has *now*.
+- **The roadmap.** Did this make a `ROADMAP.md` feature cheaper, harder, or
+  pointless? A spike that answered its question has earned the right to rewrite
+  the row that spawned it.
+
+Feed it three inputs, not one: what you built, **the problems you hit building
+it**, and what you found on the way. The awkward test, the seam that resisted,
+the third place you had to change — those are evidence about the design, not
+noise you got past. Surface each finding to the user with a recommendation, per
+the rules below.
 
 Reflect rules:
 
@@ -311,6 +357,35 @@ by accident.
   constraint, a surprising invariant, a workaround (e.g. why the client mirrors
   `render/geometry.rs`'s `edge_path` instead of round-tripping to the server).
 - Public items get a doc comment: a one-line summary, then detail if needed.
+
+Four rules keep that default from eroding. They apply to `//` and `///` alike —
+a doc comment is not a licence for prose.
+
+- **Never paraphrase the code.** A comment restating the line below it is noise
+  that then rots on its own schedule. Delete it, don't update it. This is the
+  most common defect in this repo: F-format-tag shipped five comment lines
+  explaining an `if m.format != Format::default()`.
+- **Reach for a refactor before reaching for a comment.** If a block needs
+  explaining, the first move is to *name* it — extract the function, name the
+  intermediate, let the type carry the rule. A `header()` helper beats the
+  paragraph it replaces, because the compiler keeps a name honest and keeps
+  nothing about a comment honest. Only a *why* that survives the rename earns
+  a comment.
+- **Say it once, where the reader meets it.** The rule belongs on the type, not
+  on each of the five helpers that serve it; on the enum variant, not again at
+  every `match` arm that handles it; in the book, not re-derived in the module
+  doc. Every extra copy goes stale alone, and this repo has the history to prove
+  it — see the "~1 Hz poll" in `AGENTS.md` that six places described and no code
+  ever implemented.
+- **A test name is a comment.** If a test needs a sentence to say what it pins,
+  rename the test. Keep a comment there only for the defect the test exists to
+  prevent, and only when a reader could not guess it.
+
+What a comment is *not* for: design history, alternatives rejected, the feature
+codename it shipped under, or a retelling of the decision. Those belong in the
+commit message, an ADR, or `docs/`. Rule of thumb — when the comment lines in a
+diff pass roughly a fifth of its code lines, the code is under-named, not
+under-documented.
 
 ### Errors
 
@@ -443,5 +518,7 @@ When reviewing a change, ask:
 5. Is any error silently swallowed?
 6. Is the logic tested, and is the documentation up to date — and would a future
    maintainer understand *why*, not just *what*?
+7. Does any comment paraphrase the line below it, or restate a rule already
+   stated somewhere the reader passes first (§4)?
 
 Kindness over pedantry. The goal is a better codebase, not a perfect one.
