@@ -224,7 +224,29 @@ pub fn load(path: &Path) -> Result<Model, String> {
     let raw = std::fs::read_to_string(path).map_err(|e| format!("{}: {}", path.display(), e))?;
     let j = json::parse(&raw)?;
     format_tag(&j)?;
-    Ok(from_json(&j))
+    let model = from_json(&j);
+    let dropped = unreadable_elements(&j, &model);
+    if dropped > 0 {
+        // Dropping is right — there is no lane to put it in — but doing it in silence is not.
+        // `genesis` writes the survivors to the log and keeps the edges pointing at what it
+        // dropped, so an authored sticky leaves the durable record with nothing said and exit 0.
+        eprintln!(
+            "warning: {}: {} element(s) not readable as a sticky — a missing `id`/`label`, or a \
+             `type` outside the eight lanes; they are absent from the board",
+            path.display(),
+            dropped
+        );
+    }
+    Ok(model)
+}
+
+/// How many authored `elements` entries did not survive [`from_json`]. Counted by difference
+/// rather than re-deriving the rule, so it cannot drift from `element_from`.
+fn unreadable_elements(j: &Json, model: &Model) -> usize {
+    j.get("elements")
+        .and_then(|v| v.as_array())
+        .map_or(0usize, |a| a.len())
+        .saturating_sub(model.elements.len())
 }
 
 pub fn from_json(j: &Json) -> Model {
@@ -566,6 +588,25 @@ mod tests {
         let err = format_declared(Some("bounded-context-canvas")).unwrap_err();
         assert!(err.contains("bounded-context-canvas"), "{}", err);
         assert_eq!(format_from_str("bounded-context-canvas"), None);
+    }
+
+    #[test]
+    fn an_element_the_board_cannot_place_is_counted_so_the_read_can_say_so() {
+        // Dropping it is right; dropping it in silence cost an authored sticky at `genesis`.
+        let j = json::parse(
+            r#"{"elements":[
+                 {"id":"E1","type":"event","label":"Paid"},
+                 {"id":"W1","type":"widget","label":"Gizmo"},
+                 {"id":"E2","label":"no type"}]}"#,
+        )
+        .unwrap();
+        let m = from_json(&j);
+        assert_eq!(m.elements.len(), 1);
+        assert_eq!(unreadable_elements(&j, &m), 2);
+
+        let clean =
+            json::parse(r#"{"elements":[{"id":"E1","type":"event","label":"Paid"}]}"#).unwrap();
+        assert_eq!(unreadable_elements(&clean, &from_json(&clean)), 0);
     }
 
     #[test]

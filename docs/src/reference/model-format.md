@@ -74,7 +74,10 @@ Three rules govern these fields and nothing overrides them:
   per-lane index. Order within a lane is just sort-by-`col`.
 - **`type` selects the lane and the colour** from the fixed eight-lane grammar. A value outside it
   names no lane, so the element is **dropped on read** — the file still loads, and the rest of the
-  board is unaffected. The same rule applies to a log: an `ElementAdded` naming a lane this faceto
+  board is unaffected. Reading a model file **warns** on the count it dropped (an unreadable entry
+  is also one missing an `id` or a `label`), because the drop is otherwise invisible and
+  [`genesis`](./cli/genesis.md) writes only the survivors into the log while keeping the edges that
+  pointed at them. The same rule applies to a log: an `ElementAdded` naming a lane this faceto
   does not know is skipped, the way an unknown event kind is, so a board written by a faceto with
   more lanes still reads here minus the stickies there is nowhere to put.
 
