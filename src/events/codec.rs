@@ -45,6 +45,7 @@ fn upcast(j: &Json) -> Cow<'_, Json> {
 /// strings. Keep in sync with [`parse_event`] / [`to_json`] whenever a variant is added.
 pub(crate) const KNOWN_KINDS: &[&str] = &[
     "BoardTitled",
+    "BoardFormat",
     "BoardLeveled",
     "PhaseAdded",
     "PhaseResized",
@@ -86,6 +87,9 @@ pub fn parse_event(raw: &Json) -> Option<Event> {
     Some(match event.get("event")?.as_str()? {
         "BoardTitled" => Event::BoardTitled {
             title: str_field("title")?,
+        },
+        "BoardFormat" => Event::BoardFormat {
+            format: str_field("format")?,
         },
         "BoardLeveled" => Event::BoardLeveled {
             level: str_field("level")?,
@@ -174,6 +178,9 @@ pub fn to_json(ev: &Event) -> Json {
     let n = |x: i64| Json::Num(x as f64);
     match ev {
         Event::BoardTitled { title } => obj(vec![("event", s("BoardTitled")), ("title", s(title))]),
+        Event::BoardFormat { format } => {
+            obj(vec![("event", s("BoardFormat")), ("format", s(format))])
+        }
         Event::BoardLeveled { level } => {
             obj(vec![("event", s("BoardLeveled")), ("level", s(level))])
         }

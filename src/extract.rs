@@ -112,6 +112,8 @@ pub fn extract(m: &Model, sel: &Selector) -> Result<Model, String> {
     };
     Ok(Model {
         title,
+        // A cut is the same board, smaller — never a re-interpretation, so it keeps its format.
+        format: m.format,
         level: m.level,
         phases,
         elements,

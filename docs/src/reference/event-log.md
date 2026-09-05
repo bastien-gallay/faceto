@@ -32,6 +32,15 @@ difference between a typo and a schema you have not met yet:
 | a known `event` kind missing a required field, or with a mis-typed one | **hard error** |
 | an unknown `event` kind | **skipped**, silently |
 | a line with no `event` key, or a non-string one | **skipped**, silently — a typo'd key loses the fact |
+| a `BoardFormat` naming a format this build cannot project | **hard error** |
+| records present, but **not one** of a recognised kind | **hard error** |
+
+The last two rows arrived with the [format tag](./board-formats.md), and they are the one place the
+skipping rule is suspended. Skipping unknown kinds is how an older faceto reads a newer log — and it
+is also, pointed the other way, how a *different board format's* log reads as an empty
+event-storming board. Nothing in a line distinguishes the two. So the count decides: a log carrying
+some recognised events keeps the lenient reading, while a log carrying **none** has told the reader
+nothing it can project, and says so instead of drawing a blank board.
 
 The third row is the one worth dwelling on. A malformed *known* event is a fact that exists in the
 append-only truth but would vanish from the projection, so it stops the read rather than quietly
@@ -45,12 +54,13 @@ strictly, which is exactly the check the runtime cannot make.
 
 ## Event kinds
 
-Seventeen kinds. Every one carries its `event` discriminator plus the fields below; anything else on
+Eighteen kinds. Every one carries its `event` discriminator plus the fields below; anything else on
 the line is ignored.
 
 | `event` | Fields | Effect on the board |
 | --- | --- | --- |
 | `BoardTitled` | `title` | Sets the title. Last one wins. |
+| `BoardFormat` | `format` (`event-storming`) | Declares the [board format](./board-formats.md). Absent from a log ⇒ `event-storming`. A value this build cannot project stops the read. |
 | `BoardLeveled` | `level` (`big-picture` \| `design`) | Sets the lint granularity. Absent from a log ⇒ `big-picture`. |
 | `PhaseAdded` | `label`, `fromCol`, `toCol`, optional `id` | Adds a region. A legacy band with no `id` gets a deterministic `K<n>` minted on replay. |
 | `PhaseResized` | `id`, `fromCol`, `toCol` | Sets both borders. The legacy span model — prefer `FrontierMoved`. |

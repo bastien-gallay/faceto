@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A log faceto cannot project is now an error, not an empty board.** Skipping unrecognised event
+  kinds is how an older faceto reads a newer log; pointed at a log from a *different* notation, the
+  same rule produced a valid, completely empty board and exit code 0. Two reads now stop instead: a
+  declared format this build does not speak, and a log with records but not one recognised event
+  kind. A log mixing known and unknown kinds keeps the forgiving read, so forward compatibility is
+  untouched.
+
 - **An edge tuple's third slot is no longer read.** `["E1", "E2", "added"]` in a `model.json` used
   to set the internal diff status of that connection, painting it as an overlay wire on an ordinary
   board. It was the diff channel leaking into the authored format — `docs/schema/` always said "not
@@ -52,6 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the claim did. Push (`F-collab-sse`) is still the un-shipped answer.
 
 ### Added
+
+- **Boards declare a format** (F-format-tag, #121): a top-level `"format"` in a `model.json`, or a
+  `BoardFormat` event in a log. One value ships — `event-storming` — and an absent tag still means
+  exactly that, so every existing board reads unchanged and neither `genesis` nor `compact` starts
+  writing a tag onto one. See [board formats](docs/src/reference/board-formats.md).
 
 - **`faceto extract` — semantic sub-board extraction** (F-extract, #90). Carve a smaller board out
   of a bigger one by *meaning* rather than by geometry: `--region K2` (a band), `--focus E4

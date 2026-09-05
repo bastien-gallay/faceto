@@ -28,6 +28,7 @@
   - [`extract`](./reference/cli/extract.md)
   - [`genesis`](./reference/cli/genesis.md)
   - [`compact`](./reference/cli/compact.md)
+- [Board formats](./reference/board-formats.md)
 - [The model format](./reference/model-format.md)
 - [The event log](./reference/event-log.md)
 - [Lint rules](./reference/lint-rules.md)

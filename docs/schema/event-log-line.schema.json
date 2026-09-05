@@ -22,6 +22,16 @@
       }
     },
     {
+      "title": "BoardFormat",
+      "description": "Declares the board format this log is written in, selecting which projector replays it. Additive kind — an old log without it replays as event-storming. The runtime is stricter here than for other kinds: a format it cannot project is a hard read error, not a skipped line.",
+      "additionalProperties": true,
+      "required": ["event", "format"],
+      "properties": {
+        "event": { "const": "BoardFormat" },
+        "format": { "type": "string", "enum": ["event-storming"] }
+      }
+    },
+    {
       "title": "BoardLeveled",
       "description": "Sets modeling granularity. Additive kind — an old log without it replays as the default big-picture.",
       "additionalProperties": true,

@@ -29,6 +29,13 @@ pub enum Event {
     BoardTitled {
         title: String,
     },
+    /// The board format this log is written in (`"event-storming"`). Stores the raw wire string
+    /// like `BoardTitled` stores the raw title; the log codec rejects a value this build cannot
+    /// project, so `replay` only ever parses a recognised one. Additive kind — an old log never
+    /// has it and replays as the default `EventStorming`.
+    BoardFormat {
+        format: String,
+    },
     /// The board's modeling granularity (`"big-picture"` / `"design"`). Stores the raw wire string
     /// like `BoardTitled` stores the raw title; `replay` parses it through `model::level_from_str`,
     /// so the `Level` enum stays internal to the model. Additive kind — an old log never has it and

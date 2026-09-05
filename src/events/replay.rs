@@ -39,6 +39,12 @@ pub fn replay(events: &[Event]) -> Model {
     for ev in events {
         match ev {
             Event::BoardTitled { title } => m.title = title.clone(),
+            // `parse_log` rejects a format this build cannot project, so anything reaching replay
+            // is recognised; an in-process event carrying a foreign string falls back to the
+            // default rather than making this pure fold fallible.
+            Event::BoardFormat { format } => {
+                m.format = crate::model::format_from_str(format).unwrap_or_default()
+            }
             Event::BoardLeveled { level } => m.level = crate::model::level_from_str(level),
             // Region/phase arms delegate to the partition helpers below; the `resolve_region_id`
             // calls stay here because they thread `max_region` — the fold's id-namespace state.
