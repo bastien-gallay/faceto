@@ -71,8 +71,11 @@ Three rules govern these fields and nothing overrides them:
   renumbering silently reassigns every comment and every diff verdict attached to that sticky.
 - **`col` is a global timeline coordinate**, shared across all lanes (left→right = time), *not* a
   per-lane index. Order within a lane is just sort-by-`col`.
-- **`type` selects the lane and the colour** from the fixed eight-lane grammar. An off-grammar value
-  does not crash the renderer, but it has no lane, so it is not drawn.
+- **`type` selects the lane and the colour** from the fixed eight-lane grammar. A value outside it
+  names no lane, so the element is **dropped on read** — the file still loads, and the rest of the
+  board is unaffected. The same rule applies to a log: an `ElementAdded` naming a lane this faceto
+  does not know is skipped, the way an unknown event kind is, so a board written by a faceto with
+  more lanes still reads here minus the stickies there is nowhere to put.
 
 `y` is an ordering key more than a coordinate: it is clamped into `[0, 1]` on read, and an absent
 `y` means exactly the same thing as the neutral `0.5`.

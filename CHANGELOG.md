@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A sticky's `type` is a closed set, enforced at the edges** (F-lane-enum, #117). It was a
+  string that every reader had to re-check, each with its own fallback for a lane that cannot
+  exist; it is now a type, so the fallbacks are gone. Two things a user can notice: an element
+  whose `type` is not one of the eight lanes is **dropped when the file or log is read** rather
+  than carried into the board and filtered out again at draw time (the drawn board is unchanged —
+  it was never drawn), and `faceto extract --type` now **refuses a misspelled lane by name**
+  instead of cutting an empty board. The rendered SVG, HTML and context pack are byte-identical.
+
 - **A log faceto cannot project is now an error, not an empty board.** Skipping unrecognised event
   kinds is how an older faceto reads a newer log; pointed at a log from a *different* notation, the
   same rule produced a valid, completely empty board and exit code 0. Two reads now stop instead: a

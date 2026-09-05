@@ -1,7 +1,7 @@
 //! Log-file IO and framing: recognise a log path and read/parse `event-log.jsonl` into
 //! [`Event`]s, distinguishing a malformed known event (hard error) from an unknown kind (skip).
 
-use super::codec::{is_known_kind, parse_event};
+use super::codec::{parse_event, Rejected};
 use super::replay::replay;
 use super::Event;
 use crate::json::{self, Json};
@@ -55,29 +55,25 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
     for (n, line) in jsonl_records(text) {
         let j = json::parse(line).map_err(|e| format!("event-log line {}: {}", n, e))?;
         match parse_event(&j) {
-            Some(ev) => {
+            Ok(ev) => {
                 if let Event::BoardFormat { format } = &ev {
                     crate::model::format_declared(Some(format))
                         .map_err(|e| format!("event-log line {}: {}", n, e))?;
                 }
                 events.push(ev)
             }
-            // `parse_event` returns `None` for two very different cases; only one is skippable.
-            // An *unknown* kind is a future/other-tool event → skip (forward compatibility). A
-            // *known* kind that still didn't build means a required field is missing or mis-typed
-            // (e.g. a numeric `id`, an absent `fromCol`): the fact is in the append-only truth but
-            // would silently vanish from the projection, so it is a hard error, like a line that
-            // isn't valid JSON at all.
-            None => {
-                if let Some(kind) = j.get("event").and_then(Json::as_str) {
-                    if is_known_kind(kind) {
-                        return Err(format!(
-                            "event-log line {}: {} event with a missing or mis-typed required field",
-                            n, kind
-                        ));
-                    }
-                }
-                skipped += 1;
+            // A future/other-tool kind, and a lane a later faceto adds, are both the schema
+            // growing: skip the line and keep reading. A *known* kind that still didn't build has
+            // a required field missing or mis-typed (a numeric `id`, an absent `fromCol`) — that
+            // fact is in the append-only truth but would vanish from the projection, so it stops
+            // the read, like a line that isn't valid JSON at all.
+            Err(Rejected::UnknownKind) | Err(Rejected::UnknownLane) => skipped += 1,
+            Err(Rejected::Malformed) => {
+                let kind = j.get("event").and_then(Json::as_str).unwrap_or("?");
+                return Err(format!(
+                    "event-log line {}: {} event with a missing or mis-typed required field",
+                    n, kind
+                ));
             }
         }
     }

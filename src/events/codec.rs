@@ -74,16 +74,64 @@ pub(crate) fn is_known_kind(kind: &str) -> bool {
     KNOWN_KINDS.contains(&kind)
 }
 
-/// One JSON object → an `Event`, or `None` for an unknown/ill-shaped event kind. The object is
-/// first run through [`upcast`], so a legacy on-disk shape is migrated to the current schema (H3)
-/// before any field is read.
-pub fn parse_event(raw: &Json) -> Option<Event> {
+/// Why a raw record did not become an `Event` — the caller needs the reason, because two of the
+/// three are the ordinary way schemas evolve and one is a corrupt log.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Rejected {
+    /// A kind this build does not know: a future faceto's, or another tool's. Skipped.
+    UnknownKind,
+    /// A known kind naming a lane outside the eight-lane grammar. Skipped like an unknown kind —
+    /// field *values* evolve additively too, so a log naming a lane a later faceto adds still
+    /// reads here, minus the stickies this build has nowhere to put.
+    UnknownLane,
+    /// A known kind missing a required field or mis-typing one. The fact is in the append-only
+    /// truth but would vanish from the projection, so the caller stops rather than shrinking.
+    Malformed,
+}
+
+/// One JSON object → an `Event`, or the reason it was rejected. The object is first run through
+/// [`upcast`], so a legacy on-disk shape is migrated to the current schema (H3) before any field
+/// is read.
+pub(crate) fn parse_event(raw: &Json) -> Result<Event, Rejected> {
     let event = upcast(raw);
     let event = event.as_ref();
+    match event.get("event").and_then(Json::as_str) {
+        Some(kind) if is_known_kind(kind) => {}
+        // Covers a missing or non-string `event` key too: neither names a kind we can build.
+        _ => return Err(Rejected::UnknownKind),
+    }
+    // Checked before building so an unknown lane is told apart from a *missing* one: both make
+    // `build_event` return `None`, but only the second is a malformed line.
+    if names_an_unknown_lane(event) {
+        return Err(Rejected::UnknownLane);
+    }
+    build_event(event).ok_or(Rejected::Malformed)
+}
+
+/// Whether the record carries a `type` that is a string but no lane. An absent or non-string
+/// `type` is not this case — that is either a kind with no lane at all, or a malformed line.
+fn names_an_unknown_lane(event: &Json) -> bool {
+    event
+        .get("type")
+        .and_then(Json::as_str)
+        .is_some_and(|t| crate::model::lane_from_str(t).is_none())
+}
+
+/// Build the event for an already-vetted current-schema record, or `None` if a required field is
+/// missing or mis-typed.
+fn build_event(event: &Json) -> Option<Event> {
     // Typed field accessors over the (upcast) event object: absent or mis-typed → `None`.
     let str_field = |key: &str| event.get(key).and_then(Json::as_str).map(String::from);
     let int_field = |key: &str| event.get(key).and_then(Json::as_f64).map(|n| n as i64);
     let num_field = |key: &str| event.get(key).and_then(Json::as_f64);
+    // Reached only after `names_an_unknown_lane` has cleared the record, so a `None` here means
+    // the field is absent or not a string — never an off-grammar lane.
+    let lane_field = |key: &str| {
+        event
+            .get(key)
+            .and_then(Json::as_str)
+            .and_then(crate::model::lane_from_str)
+    };
     Some(match event.get("event")?.as_str()? {
         "BoardTitled" => Event::BoardTitled {
             title: str_field("title")?,
@@ -125,7 +173,7 @@ pub fn parse_event(raw: &Json) -> Option<Event> {
         },
         "ElementAdded" => Event::ElementAdded {
             id: str_field("id")?,
-            kind: str_field("type")?,
+            kind: lane_field("type")?,
             label: str_field("label")?,
             col: int_field("col"),
             detail: str_field("detail"),
@@ -139,7 +187,7 @@ pub fn parse_event(raw: &Json) -> Option<Event> {
         "ElementMoved" => Event::ElementMoved {
             id: str_field("id")?,
             col: int_field("col"),
-            kind: str_field("type"),
+            kind: lane_field("type"),
             y: num_field("y"),
         },
         "ElementAnnotated" => Event::ElementAnnotated {
@@ -245,7 +293,7 @@ pub fn to_json(ev: &Event) -> Json {
             let mut p = vec![
                 ("event", s("ElementAdded")),
                 ("id", s(id)),
-                ("type", s(kind)),
+                ("type", s(crate::model::lane_to_str(*kind))),
                 ("label", s(label)),
             ];
             if let Some(c) = col {
@@ -273,7 +321,7 @@ pub fn to_json(ev: &Event) -> Json {
                 p.push(("col", n(*c)));
             }
             if let Some(k) = kind {
-                p.push(("type", s(k)));
+                p.push(("type", s(crate::model::lane_to_str(*k))));
             }
             if let Some(y) = y {
                 p.push(("y", Json::Num(*y)));
@@ -373,7 +421,7 @@ mod tests {
             },
             Event::ElementAdded {
                 id: "E1".into(),
-                kind: "event".into(),
+                kind: Lane::Event,
                 label: "a".into(),
                 col: None,
                 detail: None,
@@ -423,7 +471,7 @@ mod tests {
             );
             // And the round-trip must rebuild it (no phantom / mis-typed sample).
             assert!(
-                parse_event(&to_json(ev)).is_some(),
+                parse_event(&to_json(ev)).is_ok(),
                 "{kind} does not round-trip"
             );
         }

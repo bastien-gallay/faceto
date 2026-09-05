@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 use super::mermaid::render_mermaid;
 use super::style::LANES;
 use super::text::split_label;
+use crate::model::Lane;
 
 /// Human-facing plural headings, **index-aligned with `LANES`** so the count is tied to the grammar
 /// (mirrors `style::LANE_PREFIXES`): the `[_; LANES.len()]` size means adding a lane to `LANES`
@@ -37,12 +38,11 @@ const LANE_HEADINGS: [&str; LANES.len()] = [
 
 /// The plural heading for a lane `type`. `LANES` is the single source of truth for the order;
 /// `"Other"` is unreachable in practice (callers only pass on-grammar kinds) but keeps this total.
-fn lane_heading(kind: &str) -> &'static str {
-    LANES
+fn lane_heading(lane: Lane) -> &'static str {
+    LANE_HEADINGS[LANES
         .iter()
-        .position(|&l| l == kind)
-        .map(|i| LANE_HEADINGS[i])
-        .unwrap_or("Other")
+        .position(|&l| l == lane)
+        .expect("LANES is total")]
 }
 
 /// Escape the markdown-active characters that would otherwise break inline prose or bullet text.
@@ -111,12 +111,7 @@ fn backtick_fence(content: &str) -> String {
 /// Parity with `render_svg`/`render_mermaid`: elements whose `kind` is off the 8-lane grammar are
 /// dropped, and flows touching a dropped or undefined endpoint are skipped.
 pub fn render_context(model: &Model) -> String {
-    // Surviving elements = on-grammar types only (mirrors svg/mermaid's filter).
-    let live: Vec<&Element> = model
-        .elements
-        .iter()
-        .filter(|e| LANES.contains(&e.kind.as_str()))
-        .collect();
+    let live: Vec<&Element> = model.elements.iter().collect();
 
     // Index live elements by id once, so flows resolve endpoints in O(1) rather than scanning.
     let by_id: HashMap<&str, &Element> = live.iter().map(|&e| (e.id.as_str(), e)).collect();
@@ -254,7 +249,7 @@ fn open_questions(out: &mut String, model: &Model, live: &[&Element]) {
     // Feeder 1: unresolved hotspots.
     let hotspots: Vec<&&Element> = live
         .iter()
-        .filter(|e| e.kind == "hotspot" && !e.resolved)
+        .filter(|e| e.kind == Lane::Hotspot && !e.resolved)
         .collect();
 
     // Feeder 2: lint findings, suppressing any on a resolved element (mirrors serve's sidebar).

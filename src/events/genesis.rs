@@ -46,7 +46,7 @@ pub fn from_model(m: &Model) -> Vec<Event> {
     for e in &m.elements {
         ev.push(Event::ElementAdded {
             id: e.id.clone(),
-            kind: e.kind.clone(),
+            kind: e.kind,
             label: e.label.clone(),
             col: e.col,
             detail: if e.resolved { None } else { e.detail.clone() },

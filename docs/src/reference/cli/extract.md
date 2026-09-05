@@ -129,6 +129,14 @@ A selector's value may not begin with `-`, so a missing value cannot swallow the
 --focus needs a value, and --type looks like a flag (values cannot start with '-')
 ```
 
+`--type` takes one of the eight lanes and nothing else. A misspelled one is refused by name rather
+than cutting an empty board:
+
+```text
+--type hotspots is not one of the eight lanes: actor, command, aggregate, event, policy,
+readmodel, external, hotspot
+```
+
 ## When the selector matches nothing
 
 A typo must not produce a valid, empty, useless board, so an empty selection is an error (exit 1):

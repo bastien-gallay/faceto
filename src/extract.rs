@@ -19,6 +19,7 @@
 //! visible: `lint` will report the orphaned event or the input-less policy, which is exactly the
 //! signal that the cut ran through the middle of a flow.
 
+use crate::model::{lane_to_str, Lane};
 use crate::model::{Model, Phase};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -35,7 +36,7 @@ pub enum Selector {
     /// direction (a policy's trigger is as much its neighbourhood as its output).
     Focus { id: String, hops: usize },
     /// Every element in one lane (`event`, `hotspot`, …).
-    Kind(String),
+    Kind(Lane),
 }
 
 impl Selector {
@@ -46,7 +47,7 @@ impl Selector {
             Selector::Focus { id, hops } => {
                 format!("{id} + {hops} {}", if *hops == 1 { "hop" } else { "hops" })
             }
-            Selector::Kind(kind) => format!("{kind} lane"),
+            Selector::Kind(lane) => format!("{} lane", lane_to_str(*lane)),
         }
     }
 
@@ -57,7 +58,7 @@ impl Selector {
         let raw = match self {
             Selector::Region(id) => id.clone(),
             Selector::Focus { id, hops } => format!("{id}-h{hops}"),
-            Selector::Kind(kind) => kind.clone(),
+            Selector::Kind(lane) => lane_to_str(*lane).to_string(),
         };
         raw.chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
@@ -156,7 +157,7 @@ fn select<'a>(m: &'a Model, cols: &[i64], sel: &Selector) -> Result<HashSet<&'a 
         Selector::Kind(kind) => Ok(m
             .elements
             .iter()
-            .filter(|e| &e.kind == kind)
+            .filter(|e| e.kind == *kind)
             .map(|e| e.id.as_str())
             .collect()),
     }
@@ -316,7 +317,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let sub = extract(&m, &Selector::Kind("event".into())).unwrap();
+        let sub = extract(&m, &Selector::Kind(Lane::Event)).unwrap();
         assert_eq!(
             sub.elements
                 .iter()
@@ -408,7 +409,7 @@ mod tests {
 
     #[test]
     fn kind_takes_one_lane_across_the_whole_timeline() {
-        let sub = extract(&board(), &Selector::Kind("hotspot".into())).unwrap();
+        let sub = extract(&board(), &Selector::Kind(Lane::Hotspot)).unwrap();
         assert_eq!(ids(&sub), ["H1", "H2"]);
     }
 
@@ -416,7 +417,7 @@ mod tests {
     fn scattered_survivors_keep_every_band_they_touch_as_a_partition() {
         // H2 sits in K1 (col 0), H1 in K3 (col 6) — K2 spans between them and is kept too, since
         // the clipped span is 0..6. `normalize` guarantees the result is still a partition.
-        let sub = extract(&board(), &Selector::Kind("hotspot".into())).unwrap();
+        let sub = extract(&board(), &Selector::Kind(Lane::Hotspot)).unwrap();
         assert_eq!(
             sub.phases.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
             ["K1", "K2", "K3"]
@@ -432,7 +433,7 @@ mod tests {
 
     #[test]
     fn an_empty_lane_is_an_error() {
-        let err = extract(&board(), &Selector::Kind("readmodel".into())).unwrap_err();
+        let err = extract(&board(), &Selector::Kind(Lane::ReadModel)).unwrap_err();
         assert!(err.contains("matched no elements"), "{err}");
     }
 
@@ -479,7 +480,7 @@ mod tests {
         let m = from_json(
             &json::parse(r#"{"elements":[{"id":"E1","type":"event","label":"a"}]}"#).unwrap(),
         );
-        let sub = extract(&m, &Selector::Kind("event".into())).unwrap();
+        let sub = extract(&m, &Selector::Kind(Lane::Event)).unwrap();
         assert_eq!(ids(&sub), ["E1"]);
         assert!(sub.phases.is_empty(), "nothing to keep");
     }
@@ -497,7 +498,7 @@ mod tests {
             .slug(),
             "E4-h2"
         );
-        assert_eq!(Selector::Kind("read model".into()).slug(), "read-model");
+        assert_eq!(Selector::Kind(Lane::ReadModel).slug(), "readmodel");
         assert_eq!(
             Selector::Region("../etc".into()).slug(),
             "---etc",

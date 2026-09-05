@@ -10,6 +10,7 @@
 //! The join rules are unchanged — identity is the `id` (never text, never position), and layout
 //! follows the *new* side.
 
+use crate::model::Lane;
 use crate::model::{y_key, Edge, Model, Phase};
 use std::collections::{HashMap, HashSet};
 
@@ -43,7 +44,7 @@ impl Tone {
 pub struct Was {
     pub label: String,
     pub col: Option<i64>,
-    pub kind: String,
+    pub kind: Lane,
     pub y: Option<f64>,
 }
 
@@ -181,7 +182,7 @@ pub fn diff_boards(a: &Model, b: &Model, meta: (String, String)) -> (Model, Over
                 let was = Was {
                     label: o.label.clone(),
                     col: o.col,
-                    kind: o.kind.clone(),
+                    kind: o.kind,
                     y: o.y,
                 };
                 if o.label != e.label {
@@ -352,10 +353,10 @@ mod tests {
         };
         assert_eq!(changed, Some("Old"), "E1 was relabelled");
         let moved = match o.element("E2") {
-            ElementVerdict::Moved(w) => Some(w.kind.as_str()),
+            ElementVerdict::Moved(w) => Some(w.kind),
             _ => None,
         };
-        assert_eq!(moved, Some("command"), "E2 changed lane");
+        assert_eq!(moved, Some(Lane::Command), "E2 changed lane");
     }
 
     // `y` is an ordering key, not a position: "no y" and the neutral 0.5 are one state, so an
@@ -467,7 +468,7 @@ mod tests {
             ElementVerdict::Changed(Was {
                 label: "x".into(),
                 col: None,
-                kind: "event".into(),
+                kind: Lane::Event,
                 y: None,
             })
             .as_str(),

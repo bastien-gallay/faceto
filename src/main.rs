@@ -305,7 +305,7 @@ fn cmd_lint(model_path: &str) {
             .elements
             .iter()
             .find(|e| e.id == id)
-            .map(|e| format!("{} \"{}\"", e.kind, e.label))
+            .map(|e| format!("{} \"{}\"", model::lane_to_str(e.kind), e.label))
             .unwrap_or_else(|| id.to_string())
     };
     let n = findings.len();
@@ -473,7 +473,23 @@ fn parse_extract(args: &[String]) -> (String, extract::Selector) {
                 i += 2;
             }
             "--type" => {
-                set(Selector::Kind(value("--type")), &mut selector);
+                // A lane typed on the command line is worth refusing loudly, unlike one met in a
+                // log: there is a person here to correct it, and the alternative is an empty cut.
+                let v = value("--type");
+                match model::lane_from_str(&v) {
+                    Some(lane) => set(Selector::Kind(lane), &mut selector),
+                    None => {
+                        eprintln!(
+                            "--type {v} is not one of the eight lanes: {}",
+                            model::LANES
+                                .iter()
+                                .map(|&l| model::lane_to_str(l))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                        exit(2);
+                    }
+                }
                 i += 2;
             }
             "--hops" => {
@@ -838,6 +854,7 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Lane;
 
     const MODEL: &str =
         r#"{"title":"T","elements":[{"id":"E1","type":"event","label":"Hello","col":0}]}"#;
@@ -892,7 +909,7 @@ mod tests {
         // No positional → the same default every other verb uses.
         let (src, sel) = parse_extract(&args(&["--type", "hotspot"]));
         assert_eq!(src, "model.json");
-        assert_eq!(sel, Selector::Kind("hotspot".into()));
+        assert_eq!(sel, Selector::Kind(Lane::Hotspot));
 
         // `--hops` defaults to 1 and applies whichever side of `--focus` it is written on.
         let (_, sel) = parse_extract(&args(&["--focus", "E4"]));

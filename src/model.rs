@@ -89,6 +89,78 @@ pub fn format_declared(tag: Option<&str>) -> Result<Format, String> {
     }
 }
 
+/// The eight-lane event-storming grammar — a sticky's `type`, which selects **both** its lane and
+/// its colour. Closed on purpose: an off-grammar element has no lane to occupy, and every reader
+/// that placed one had to carry a fallback for a state the board could not draw. As a type, the
+/// state is gone: `colour`, `lane_index` and `lane_prefix` are total, and the three "drop the
+/// lane-less stickies" filters `render` used to run before drawing are unreachable code.
+///
+/// Ordering here is declaration order, not board order — the visual top-to-bottom sequence is
+/// `render::style::LANES`, which is a render concern.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Lane {
+    Actor,
+    Command,
+    Aggregate,
+    Event,
+    Policy,
+    ReadModel,
+    External,
+    Hotspot,
+}
+
+/// Every lane, in the canonical event-storming order (`actor` first, `hotspot` last) — the board
+/// draws them top to bottom in exactly this sequence. One array, so the grammar's *set* and its
+/// *order* can never drift apart the way a separate render-side list used to allow.
+pub const LANES: [Lane; 8] = [
+    Lane::Actor,
+    Lane::Command,
+    Lane::Aggregate,
+    Lane::Event,
+    Lane::Policy,
+    Lane::ReadModel,
+    Lane::External,
+    Lane::Hotspot,
+];
+
+/// Parse a sticky's `type`, or `None` if it names no lane this build knows. The single parse point
+/// shared by `from_json` (model.json), the log codec, `extract`'s `--type` selector and `serve`'s
+/// `add` guard, so none of them can disagree about what the grammar is.
+///
+/// A `None` is **skipped, never fatal**: field *values* evolve additively exactly as fields do, so
+/// a log naming a lane a future faceto adds must still read here (F-es-vocabulary is the one that
+/// will add `timer` / `process`). The element is dropped — the same thing that visibly happened
+/// before, one seam earlier.
+pub fn lane_from_str(s: &str) -> Option<Lane> {
+    Some(match s {
+        "actor" => Lane::Actor,
+        "command" => Lane::Command,
+        "aggregate" => Lane::Aggregate,
+        "event" => Lane::Event,
+        "policy" => Lane::Policy,
+        "readmodel" => Lane::ReadModel,
+        "external" => Lane::External,
+        "hotspot" => Lane::Hotspot,
+        _ => return None,
+    })
+}
+
+/// The wire string for a `Lane` — the reverse of [`lane_from_str`], and the only place a lane
+/// becomes text again (JSON, SVG `data-*`, the context pack). Exhaustive, so a new variant must
+/// declare its wire form or fail to compile.
+pub fn lane_to_str(lane: Lane) -> &'static str {
+    match lane {
+        Lane::Actor => "actor",
+        Lane::Command => "command",
+        Lane::Aggregate => "aggregate",
+        Lane::Event => "event",
+        Lane::Policy => "policy",
+        Lane::ReadModel => "readmodel",
+        Lane::External => "external",
+        Lane::Hotspot => "hotspot",
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct Phase {
     /// Stable identity (the diff join key and the target of resize/rename/remove). A region is a
@@ -103,7 +175,8 @@ pub struct Phase {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Element {
     pub id: String,
-    pub kind: String,
+    /// The sticky's lane, from the closed eight-lane grammar — the `"type"` key on the wire.
+    pub kind: Lane,
     pub label: String,
     pub col: Option<i64>,
     pub detail: Option<String>,
@@ -241,7 +314,9 @@ pub fn links_from(j: Option<&Json>) -> Vec<String> {
 fn element_from(j: &Json) -> Option<Element> {
     Some(Element {
         id: j.get("id")?.as_str()?.to_string(),
-        kind: j.get("type")?.as_str()?.to_string(),
+        // An off-grammar `type` drops the element here rather than downstream: it names no lane,
+        // so there is nothing for the board to draw and nothing for lint to judge.
+        kind: lane_from_str(j.get("type")?.as_str()?)?,
         label: j.get("label")?.as_str()?.to_string(),
         col: j.get("col").and_then(|v| v.as_f64()).map(|n| n as i64),
         detail: j.get("detail").and_then(|v| v.as_str()).map(String::from),
@@ -302,7 +377,7 @@ pub fn resolved_cols(elements: &[Element]) -> Vec<i64> {
 /// this is the board's current first column, so the new element aligns to the left edge *without*
 /// shoving the other lanes right; when the lane already holds elements it is one column further
 /// left (a true prepend, repeat-safe). Falls back to 0 on an empty board.
-pub fn lane_left_col(m: &Model, kind: &str) -> i64 {
+pub fn lane_left_col(m: &Model, kind: Lane) -> i64 {
     match m.elements.iter().filter_map(|e| e.col).min() {
         None => 0,
         Some(first) if m.elements.iter().any(|e| e.kind == kind) => first - 1,
@@ -369,7 +444,7 @@ pub fn y_key(y: Option<f64>) -> f64 {
 /// `col` sits on a region edge (`from_col` or `to_col` of any band). A pivotal event is the hinge
 /// between two contexts; a command / read-model / actor on a border is not pivotal.
 pub fn is_pivotal(m: &Model, e: &Element) -> bool {
-    e.kind == "event"
+    e.kind == Lane::Event
         && e.col
             .is_some_and(|c| m.phases.iter().any(|p| c == p.from_col || c == p.to_col))
 }
@@ -434,6 +509,21 @@ mod tests {
     // ---- F-es-lint: board level ------------------------------------------------------------
 
     // ---- F-format-tag: board format ---------------------------------------------------------
+
+    #[test]
+    fn an_off_grammar_type_drops_the_element_at_the_parse_boundary() {
+        // `type` picks the lane, and there is no ninth lane to put a sticky in. Such an element
+        // used to enter the model and be filtered out again by each renderer; now it never becomes
+        // an `Element`, which is what makes `colour` / `lane_index` / `lane_prefix` total.
+        let m = model_of(
+            r#"{"elements":[
+                {"id":"E1","type":"event","label":"A"},
+                {"id":"W1","type":"widget","label":"B"}]}"#,
+        );
+        assert_eq!(m.elements.len(), 1);
+        assert_eq!(m.elements[0].id, "E1");
+        assert_eq!(lane_from_str("widget"), None);
+    }
 
     #[test]
     fn format_defaults_to_event_storming_when_absent() {
@@ -631,7 +721,11 @@ mod tests {
     // left (repeat-safe). Empty board falls back to 0.
     #[test]
     fn lane_left_col_aligns_a_first_element_but_prepends_within_a_lane() {
-        assert_eq!(lane_left_col(&Model::default(), "event"), 0, "empty board");
+        assert_eq!(
+            lane_left_col(&Model::default(), Lane::Event),
+            0,
+            "empty board"
+        );
         let m = model_of(
             r#"{"elements":[
                 {"id":"E1","type":"event","label":"A","col":3},
@@ -639,19 +733,19 @@ mod tests {
         );
         // first element of an *empty* lane lands in the board's first column — no shift.
         assert_eq!(
-            lane_left_col(&m, "actor"),
+            lane_left_col(&m, Lane::Actor),
             3,
             "empty lane aligns to first col"
         );
         // a *non-empty* lane prepends one column further left.
-        assert_eq!(lane_left_col(&m, "event"), 2, "non-empty lane prepends");
+        assert_eq!(lane_left_col(&m, Lane::Event), 2, "non-empty lane prepends");
         // after one prepend the lowest col is 2; the next must march to 1, not back to 3.
         let m2 = model_of(
             r#"{"elements":[
                 {"id":"E1","type":"event","label":"A","col":2},
                 {"id":"E2","type":"event","label":"B","col":3}]}"#,
         );
-        assert_eq!(lane_left_col(&m2, "event"), 1, "repeat marches left");
+        assert_eq!(lane_left_col(&m2, Lane::Event), 1, "repeat marches left");
     }
 
     // The tuple's third slot was the internal diff channel, reachable from an authored file: a

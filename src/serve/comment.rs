@@ -2,7 +2,7 @@
 //! an `add`, a `region-add`, or a `phase-split`, each validated and minted under the lock.
 
 use super::Ctx;
-use crate::{events, json, render};
+use crate::{events, json};
 
 /// The non-blank `text` label a creation command requires, or `400` — the one place the
 /// "a minted element/region must carry a label" rule turns into an HTTP status, shared by every
@@ -18,14 +18,13 @@ fn required_label(v: &json::Json) -> Result<String, u16> {
 /// `col`/`detail`. The server mints the id (H6). Returns the HTTP status to fail with: `400` for
 /// a missing/empty type or label, `500` if the append itself fails.
 pub(crate) fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Event, u16> {
-    // `type` must be one of the 8 lanes. An off-grammar type would fall back to a first-letter
-    // prefix in `id_prefix` and could mint into a real lane's id space (e.g. "epic"→'E'),
-    // colliding the diff/comment join key — so reject it here rather than letting it through.
+    // `type` must name one of the eight lanes. Refused at the boundary rather than dropped the
+    // way a log line is: this is a live command with a client to answer, and a 400 is a better
+    // answer than a 200 whose sticky never appears.
     let kind = v
         .get_str("type")
-        .filter(|s| render::lane_prefix(s).is_some())
-        .ok_or(400u16)?
-        .to_string();
+        .and_then(crate::model::lane_from_str)
+        .ok_or(400u16)?;
     let label = required_label(v)?;
     let col = v.get_i64("col");
     // The lane-title `+` posts `prepend:true` (no col); the server derives the left-edge col so the
@@ -38,7 +37,7 @@ pub(crate) fn add_from_comment(ctx: &Ctx, v: &json::Json) -> Result<events::Even
         .get_str("detail")
         .filter(|s| !s.is_empty())
         .map(String::from);
-    ctx.append_add(&kind, label, col, detail, prepend)
+    ctx.append_add(kind, label, col, detail, prepend)
         .map_err(|_| 500u16)
 }
 
@@ -75,6 +74,7 @@ pub(crate) fn split_region_from_comment(ctx: &Ctx, v: &json::Json) -> Result<eve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Lane;
     use crate::serve::testutil::*;
     use crate::{events, json};
 
@@ -216,7 +216,7 @@ mod tests {
         // replays into the new label.
         let path = std::env::temp_dir().join(format!("faceto-rn-{}.jsonl", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        std::fs::write(&path, events::line(&added("E1", "event")) + "\n").unwrap();
+        std::fs::write(&path, events::line(&added("E1", Lane::Event)) + "\n").unwrap();
         let ctx = Ctx::new(path.clone());
         let before = std::fs::read_to_string(&path).unwrap();
 

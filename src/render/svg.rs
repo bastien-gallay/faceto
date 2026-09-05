@@ -3,7 +3,7 @@ use super::diff::{region_removed, EdgeVerdict, ElementVerdict, Overlay, RegionVe
 use super::geometry::*;
 use super::style::*;
 use super::text::*;
-use crate::model::{is_pivotal, resolved_cols, Element, Model};
+use crate::model::{is_pivotal, lane_to_str, resolved_cols, Element, Lane, Model};
 use crate::scene::{render_scene, Scene, Shape};
 use std::collections::{HashMap, HashSet};
 
@@ -19,7 +19,11 @@ pub(crate) fn diff_tooltip(
         ElementVerdict::Moved(w) => {
             let mut bits = Vec::new();
             if w.kind != e.kind {
-                bits.push(format!("lane {} \u{2192} {}", w.kind, e.kind));
+                bits.push(format!(
+                    "lane {} \u{2192} {}",
+                    lane_to_str(w.kind),
+                    lane_to_str(e.kind)
+                ));
             }
             if w.col != e.col {
                 bits.push(format!(
@@ -69,17 +73,11 @@ pub fn render_svg(model: &Model, view: &View, overlay: Option<&Overlay>) -> Stri
 /// is pure geometry the kernel serializes without knowing what a board is.
 pub(crate) fn board_scene(model: &Model, view: &View, overlay: Option<&Overlay>) -> Scene {
     let mut elements = model.elements.clone();
-    // `type` selects the lane; an element whose type isn't one of the 8 lanes has no lane to
-    // occupy. Drop it from this projection (its edges are then skipped by the `idx_of` guard
-    // below) rather than panicking on the per-lane `lane_rows`/`lane_top` lookups — `colour` and
-    // `lane_index` already tolerate unknown kinds, so this keeps render consistently defensive on
-    // off-grammar input (the log stays the truth; the view just can't place a lane-less sticky).
-    elements.retain(|e| LANES.contains(&e.kind.as_str()));
 
     // R: the 8-lane scaffold is the board's structure, not a function of its contents. Every lane
     // always renders, so an empty board shows the full grammar (onboarding) and every lane title is
     // a hoverable add-target. (Previously this filtered to lanes that held an element.)
-    let present: Vec<&str> = LANES.to_vec();
+    let present: Vec<Lane> = LANES.to_vec();
 
     // Auto-assign a column to any element missing `col`, preserving file order. The rule lives in
     // `model` because `extract` selects regions by the same columns — when the two disagreed, a
@@ -182,21 +180,21 @@ pub(crate) fn board_scene(model: &Model, view: &View, overlay: Option<&Overlay>)
 
     // Every timeline column is one COL_W slot — one col, one x (no sub-columns; the interstice
     // work of F-region-frontiers leans on this). A lane is as tall as its deepest cell's stack.
-    let mut lane_rows: HashMap<&str, i64> = present.iter().map(|t| (*t, 1)).collect();
-    for ((kind, _), total) in &cell_total {
-        let r = lane_rows.get_mut(kind.as_str()).unwrap();
+    let mut lane_rows: HashMap<Lane, i64> = present.iter().map(|t| (*t, 1)).collect();
+    for ((lane, _), total) in &cell_total {
+        let r = lane_rows.get_mut(lane).unwrap();
         *r = (*r).max(*total);
     }
 
     let board_right = col_left(ncols);
 
-    let mut lane_top: HashMap<String, f64> = HashMap::new();
-    let mut lane_h: HashMap<String, f64> = HashMap::new();
+    let mut lane_top: HashMap<Lane, f64> = HashMap::new();
+    let mut lane_h: HashMap<Lane, f64> = HashMap::new();
     let mut y = MARGIN_T;
-    for t in present.iter() {
-        let h = lane_rows[*t] as f64 * ROW_PITCH + LANE_VPAD;
-        lane_top.insert((*t).to_string(), y);
-        lane_h.insert((*t).to_string(), h);
+    for &t in present.iter() {
+        let h = lane_rows[&t] as f64 * ROW_PITCH + LANE_VPAD;
+        lane_top.insert(t, y);
+        lane_h.insert(t, h);
         y += h;
     }
     let lanes_bottom = y;
@@ -213,8 +211,8 @@ pub(crate) fn board_scene(model: &Model, view: &View, overlay: Option<&Overlay>)
             let col = e.col.unwrap();
             let cx = col_left((col - min_col) as usize) + COL_W / 2.0;
             let band_top = lane_top[&e.kind] + LANE_VPAD / 2.0;
-            let rows = lane_rows[e.kind.as_str()];
-            let total = cell_total[&(e.kind.clone(), col)];
+            let rows = lane_rows[&e.kind];
+            let total = cell_total[&(e.kind, col)];
             let lead_r = (rows - total) as f64 / 2.0;
             let cy = band_top + (lead_r + sub_ord[i] as f64 + 0.5) * ROW_PITCH;
             (cx, cy)
@@ -241,7 +239,9 @@ pub(crate) fn board_scene(model: &Model, view: &View, overlay: Option<&Overlay>)
     let band_bot = lanes_bottom - 6.0;
     // Pivotal events sit *on the border line*, in the event lane (derived via `is_pivotal`; scope
     // D3 — no stored flag). `present` always carries the full 8-lane grammar, so "event" is here.
-    let event_cy = lane_top.get("event").map(|t| t + lane_h["event"] / 2.0);
+    let event_cy = lane_top
+        .get(&Lane::Event)
+        .map(|t| t + lane_h[&Lane::Event] / 2.0);
     // A pivotal node belongs to the *boundary*, not a region: two regions sharing a gutter
     // (`A.to_col` == `B.from_col`) collapse to one node. So gather the cols that carry a pivotal
     // event once (O(elements·phases), via `is_pivotal`), accumulate each boundary's x while drawing
@@ -600,16 +600,16 @@ fn draw_header(
 /// Faint lane rules and the centred lane labels (which expose the band interior geometry).
 fn draw_lanes(
     p: &mut Vec<Shape>,
-    present: &[&str],
-    lane_top: &HashMap<String, f64>,
-    lane_h: &HashMap<String, f64>,
+    present: &[Lane],
+    lane_top: &HashMap<Lane, f64>,
+    lane_h: &HashMap<Lane, f64>,
     width: f64,
 ) {
     // Faint horizontal lane rules — graph-paper bench lines that delimit lanes now that a busy
     // lane can span several rows.
     for t in present.iter().skip(1) {
         p.push(
-            Shape::line(12.0, lane_top[*t], width - 20.0, lane_top[*t])
+            Shape::line(12.0, lane_top[t], width - 20.0, lane_top[t])
                 .with("stroke", "#e0e0e6")
                 .with("opacity", 0.55),
         );
@@ -619,16 +619,17 @@ fn draw_lanes(
     // `data-band-h` expose the band *interior* (the `y` fraction's frame of reference) so the
     // client's vertical drag converts a pixel drop into a stored fraction without re-deriving
     // the lane geometry — render.rs stays the single source of truth for it (Composable).
-    for t in present.iter() {
-        let y = lane_top[*t] + lane_h[*t] / 2.0;
+    for &t in present.iter() {
+        let name = lane_to_str(t);
+        let y = lane_top[&t] + lane_h[&t] / 2.0;
         // `class`/`data-lane` let the client hang the lane-title `+` (inline-add prepend) on each
         // label; the rendered text content is unchanged.
         p.push(
-            Shape::text(16.0, y + 4.0, *t)
+            Shape::text(16.0, y + 4.0, name)
                 .with("class", "lane-label")
-                .with("data-lane", *t)
-                .with("data-band-top", lane_top[*t] + LANE_VPAD / 2.0)
-                .with("data-band-h", lane_h[*t] - LANE_VPAD)
+                .with("data-lane", name)
+                .with("data-band-top", lane_top[&t] + LANE_VPAD / 2.0)
+                .with("data-band-h", lane_h[&t] - LANE_VPAD)
                 .with("font-size", 12.0)
                 .with("font-weight", 600i64)
                 .with("fill", AXIS_LABEL),
@@ -673,7 +674,7 @@ fn draw_edges(
             continue;
         }
         let d = edge_path(centers[si], centers[di], off_src[ei], off_dst[ei]);
-        let is_hot = elements[si].kind == "hotspot" || elements[di].kind == "hotspot";
+        let is_hot = elements[si].kind == Lane::Hotspot || elements[di].kind == Lane::Hotspot;
         let cls = if is_hot { "edge hot" } else { "edge" };
         let wire = Shape::path(d)
             .with("class", cls)
@@ -750,14 +751,14 @@ fn draw_stickies(
         let x = cx - STICKY_W / 2.0;
         let y = cy - STICKY_H / 2.0;
         let (hero, detail) = split_label(&e.label, e.detail.as_deref());
-        let is_hotspot = e.kind == "hotspot";
+        let is_hotspot = e.kind == Lane::Hotspot;
         let resolved = is_hotspot && e.resolved;
         let fill = if resolved {
             RESOLVED_FILL
         } else {
-            colour(&e.kind)
+            colour(e.kind)
         };
-        let txt = if resolved || text_dark(&e.kind) {
+        let txt = if resolved || text_dark(e.kind) {
             "#1a1a1a"
         } else {
             "#ffffff"
@@ -768,7 +769,7 @@ fn draw_stickies(
         let verdict = overlay.map(|o| o.element(&e.id));
         let tone = verdict.and_then(ElementVerdict::tone);
 
-        let mut cls = format!("sticky {}", e.kind);
+        let mut cls = format!("sticky {}", lane_to_str(e.kind));
         if resolved {
             cls.push_str(" resolved");
         }
@@ -783,7 +784,7 @@ fn draw_stickies(
         if !detail.is_empty() {
             aria.push_str(&format!(", {}", detail));
         }
-        aria.push_str(&format!(", {}", e.kind));
+        aria.push_str(&format!(", {}", lane_to_str(e.kind)));
         if resolved {
             aria.push_str(", resolved");
         }
@@ -898,7 +899,7 @@ fn draw_stickies(
             .with("aria-label", aria)
             .with("data-hero", hero)
             .with("data-detail", detail)
-            .with("data-kind", e.kind.as_str())
+            .with("data-kind", lane_to_str(e.kind))
             .with("data-col", e.col.unwrap())
             .with("data-cx", cx)
             .with("data-cy", cy)
@@ -916,11 +917,12 @@ fn draw_stickies(
 }
 
 /// Legend: the lane colour swatches and the connector key.
-fn draw_legend(p: &mut Vec<Shape>, present: &[&str], height: f64) {
+fn draw_legend(p: &mut Vec<Shape>, present: &[Lane], height: f64) {
     // Legend: type swatches, then a connector key (flow vs hotspot-concern).
     let ly = height - 28.0;
     let mut lx = 20.0;
-    for t in present.iter() {
+    for &t in present.iter() {
+        let name = lane_to_str(t);
         p.push(
             Shape::rect(lx, ly, 14.0, 14.0)
                 .with("rx", 3.0)
@@ -928,11 +930,11 @@ fn draw_legend(p: &mut Vec<Shape>, present: &[&str], height: f64) {
                 .with("stroke", "#0003"),
         );
         p.push(
-            Shape::text(lx + 19.0, ly + 11.0, *t)
+            Shape::text(lx + 19.0, ly + 11.0, name)
                 .with("font-size", 11.0)
                 .with("fill", "#555"),
         );
-        lx += 26.0 + 7.0 * (t.len() as f64) + 14.0;
+        lx += 26.0 + 7.0 * (name.len() as f64) + 14.0;
     }
     let midy = ly + 7.0;
     lx += 12.0;
@@ -982,7 +984,7 @@ mod tests {
             phases: vec![],
             elements: vec![Element {
                 id: "E1".into(),
-                kind: "event".into(),
+                kind: Lane::Event,
                 label: "L".into(),
                 col: Some(col),
                 detail: None,
@@ -1013,9 +1015,10 @@ mod tests {
     fn every_lane_renders_even_on_an_empty_board() {
         let svg = rsvg(&empty_board());
         for lane in LANES {
+            let name = lane_to_str(lane);
             assert!(
-                svg.contains(&format!(">{lane}</text>")),
-                "empty board is missing the `{lane}` lane label"
+                svg.contains(&format!(">{name}</text>")),
+                "empty board is missing the `{name}` lane label"
             );
         }
     }
@@ -1141,7 +1144,7 @@ mod tests {
             elements: (0..n)
                 .map(|k| Element {
                     id: format!("E{k}"),
-                    kind: "event".into(),
+                    kind: Lane::Event,
                     label: format!("L{k}"),
                     col: Some(col),
                     detail: None,
@@ -1241,7 +1244,7 @@ mod tests {
         let mut m = events_at_col(-3, 1);
         m.elements.push(Element {
             id: "E9".into(),
-            kind: "event".into(),
+            kind: Lane::Event,
             label: "far".into(),
             col: Some(2),
             detail: None,
@@ -1299,7 +1302,9 @@ mod tests {
                 phase("K2", "Beta", 2, 3),
                 phase("K3", "Gamma", 4, 5),
             ],
-            elements: (0..6).map(|c| el(&format!("E{c}"), "event", c)).collect(),
+            elements: (0..6)
+                .map(|c| el(&format!("E{c}"), Lane::Event, c))
+                .collect(),
             edges: vec![],
             level: Level::default(),
         }
@@ -1505,7 +1510,7 @@ mod tests {
             format: Format::default(),
             title: "t".into(),
             phases: vec![phase("K1", "Context A", 0, 2)],
-            elements: vec![el("E1", "event", 0), el("E2", "event", 1)],
+            elements: vec![el("E1", Lane::Event, 0), el("E2", Lane::Event, 1)],
             edges: vec![],
             level: Level::default(),
         };
@@ -1583,7 +1588,7 @@ mod tests {
                 phase("K2", "B", 2, 3),
                 phase("K3", "C", 4, 5),
             ],
-            elements: vec![el("E1", "event", 0), el("E2", "event", 5)],
+            elements: vec![el("E1", Lane::Event, 0), el("E2", Lane::Event, 5)],
             edges: vec![],
             level: Level::default(),
         };
@@ -1622,7 +1627,7 @@ mod tests {
             format: Format::default(),
             title: "t".into(),
             phases: vec![],
-            elements: vec![el("E1", "event", 0), el("E2", "event", 2)],
+            elements: vec![el("E1", Lane::Event, 0), el("E2", Lane::Event, 2)],
             edges: vec![],
             level: Level::default(),
         };
@@ -1647,7 +1652,7 @@ mod tests {
             format: Format::default(),
             title: "t".into(),
             phases: vec![phase("K9", "Gone", 0, 1)],
-            elements: vec![el("E1", "event", 0)],
+            elements: vec![el("E1", Lane::Event, 0)],
             edges: vec![],
             level: Level::default(),
         };
@@ -1687,26 +1692,10 @@ mod tests {
         rest[j..][..rest[j..].find('"').unwrap()].parse().unwrap()
     }
 
-    #[test]
-    fn render_drops_an_off_grammar_type_instead_of_panicking() {
-        // `type` picks the lane; an element whose type isn't one of the 8 lanes has no lane. It is
-        // dropped from the view (before any geometry is computed), so the board is identical to the
-        // valid-only one — and, crucially, rendering it does not panic on the lane lookups.
-        let valid = Model {
-            elements: vec![el("E1", "event", 0)],
-            ..Default::default()
-        };
-        let mixed = Model {
-            elements: vec![el("E1", "event", 0), el("X1", "not-a-lane", 1)],
-            ..Default::default()
-        };
-        assert_eq!(rsvg(&mixed), rsvg(&valid));
-    }
-
-    fn el(id: &str, kind: &str, col: i64) -> Element {
+    fn el(id: &str, kind: Lane, col: i64) -> Element {
         Element {
             id: id.into(),
-            kind: kind.into(),
+            kind,
             label: "L".into(),
             col: Some(col),
             detail: None,
@@ -1720,10 +1709,10 @@ mod tests {
     // ride the sticky as `data-links` (surfaced in the modal), never painted on the board.
     #[test]
     fn edge_label_and_element_links_reach_the_svg() {
-        let mut src = el("C1", "command", 0);
+        let mut src = el("C1", Lane::Command, 0);
         src.links = vec!["https://tix/9".into(), "adr://2".into()];
         let m = Model {
-            elements: vec![src, el("E1", "event", 1)],
+            elements: vec![src, el("E1", Lane::Event, 1)],
             edges: vec![Edge {
                 src: "C1".into(),
                 dst: "E1".into(),
@@ -1745,7 +1734,7 @@ mod tests {
     #[test]
     fn an_unlabelled_edge_draws_no_label_text() {
         let m = Model {
-            elements: vec![el("C1", "command", 0), el("E1", "event", 1)],
+            elements: vec![el("C1", Lane::Command, 0), el("E1", Lane::Event, 1)],
             edges: vec![Edge {
                 src: "C1".into(),
                 dst: "E1".into(),
@@ -1768,10 +1757,10 @@ mod tests {
             title: "t".into(),
             phases: vec![],
             elements: vec![
-                el("X1", "actor", 0),
-                el("R1", "readmodel", 2),
-                el("E_hi", "event", 1),
-                el("E_lo", "event", 1),
+                el("X1", Lane::Actor, 0),
+                el("R1", Lane::ReadModel, 2),
+                el("E_hi", Lane::Event, 1),
+                el("E_lo", Lane::Event, 1),
             ],
             edges: vec![
                 Edge {
@@ -1817,9 +1806,9 @@ mod tests {
             title: "t".into(),
             phases: vec![],
             elements: vec![
-                el("X1", "actor", 0),
-                el("C1", "command", 1),
-                el("C2", "command", 1),
+                el("X1", Lane::Actor, 0),
+                el("C1", Lane::Command, 1),
+                el("C2", Lane::Command, 1),
             ],
             edges: vec![
                 Edge {
@@ -1850,10 +1839,10 @@ mod tests {
     // clamp must tighten the step so every anchor stays on the actor.
     #[test]
     fn fan_clamp_keeps_anchors_on_the_box_for_a_high_degree_face() {
-        let mut elements = vec![el("X1", "actor", 0)];
+        let mut elements = vec![el("X1", Lane::Actor, 0)];
         let mut edges = vec![];
         for k in 0..9 {
-            elements.push(el(&format!("C{k}"), "command", 1));
+            elements.push(el(&format!("C{k}"), Lane::Command, 1));
             edges.push(Edge {
                 src: "X1".into(),
                 dst: format!("C{k}"),

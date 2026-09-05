@@ -22,6 +22,8 @@
 //! - *A kind's meaning is never silently repurposed.* If semantics must change, introduce a new
 //!   kind (additive) and upcast the old one; never redefine an existing kind in place.
 
+use crate::model::Lane;
+
 /// One fact in the log. Variants mirror the board operations a session performs; the
 /// `Element*` variants all carry the stable `id` (identity is never text or position).
 #[derive(Clone, Debug, PartialEq)]
@@ -88,7 +90,9 @@ pub enum Event {
     },
     ElementAdded {
         id: String,
-        kind: String,
+        /// The sticky's lane. A `type` outside the eight-lane grammar never reaches here — the
+        /// codec skips the line, the way it skips an unknown event kind.
+        kind: Lane,
         label: String,
         col: Option<i64>,
         detail: Option<String>,
@@ -107,7 +111,7 @@ pub enum Event {
     ElementMoved {
         id: String,
         col: Option<i64>,
-        kind: Option<String>,
+        kind: Option<Lane>,
         /// New vertical sub-position (fraction of the lane-band interior, `[0, 1]`). `None`
         /// leaves the stored sub-position untouched — a col-only nudge never resets the Y.
         y: Option<f64>,

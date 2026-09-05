@@ -183,9 +183,11 @@ come from violating them:
   rule lived inside `board_scene` until F-extract, so `extract --region` judged membership on the
   raw field and silently cut away stickies the board was visibly drawing inside that band (#142).
   The same shape will recur for any future pass that reasons about placement.
-- **`type` selects the lane and colour** from the fixed 8-lane grammar: `actor`, `command`,
-  `aggregate`, `event`, `policy`, `readmodel`, `external`, `hotspot`. Keep `LANES` (`src/render/`) and
-  this set in sync.
+- **`type` is a `model::Lane`**, not a string — the closed 8-lane grammar, whose set *and*
+  top-to-bottom order are the single `model::LANES` array (`render::style` re-exports it, so the
+  two can no longer drift). `colour` / `lane_index` / `lane_prefix` are total; an off-grammar value
+  is dropped at every read boundary rather than carried into the model. The lanes, in order:
+  `actor`, `command`, `aggregate`, `event`, `policy`, `readmodel`, `external`, `hotspot`.
 
 `render::diff_boards` joins old vs new on `id` and returns **two** values: the union board (a
 plain `Model` — the new side's layout plus the old side's ghosts) and an `Overlay` judging each

@@ -86,7 +86,7 @@ pub fn replay(events: &[Event]) -> Model {
                 if !m.elements.iter().any(|e| &e.id == id) {
                     m.elements.push(Element {
                         id: id.clone(),
-                        kind: kind.clone(),
+                        kind: *kind,
                         label: label.clone(),
                         col: *col,
                         detail: detail.clone(),
@@ -107,7 +107,7 @@ pub fn replay(events: &[Event]) -> Model {
                         e.col = *col;
                     }
                     if let Some(k) = kind {
-                        e.kind = k.clone();
+                        e.kind = *k;
                     }
                     if y.is_some() {
                         e.y = *y;
