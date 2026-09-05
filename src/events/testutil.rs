@@ -13,6 +13,15 @@ pub(crate) fn ev(line: &str) -> Event {
     parse_event(&json::parse(line).unwrap()).unwrap()
 }
 
+/// Parse a generated comment and fold it — the two steps `serve` takes per post. A body that
+/// names no command persists nothing, which is what the server's `400` means for the log.
+pub(crate) fn posted(v: &Json) -> Vec<Event> {
+    match parse_command(v) {
+        Ok(Command::Fold(cmd)) => fold_to_events(&cmd),
+        _ => Vec::new(),
+    }
+}
+
 /// A small fixed board of non-blank elements, one per lane id-prefix used here — the base state
 /// the comment property tests fold their generated comment sequences onto.
 pub(crate) fn genesis() -> (Vec<Event>, Vec<&'static str>) {

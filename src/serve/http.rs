@@ -1,7 +1,7 @@
 //! The HTTP wire layer: read a capped request line/headers, route the request ([`handle`]),
 //! and write the response ([`send`]). The only module that speaks the protocol.
 
-use super::comment::{add_from_comment, add_region_from_comment, split_region_from_comment};
+use super::mint::append_mint;
 use super::sidebar::comments_body;
 use super::{Ctx, MAX_BODY, MAX_HEADERS, MAX_HEADER_LINE};
 use crate::{events, json, model, render};
@@ -226,10 +226,12 @@ fn route_comments(out: &mut TcpStream, ctx: &Ctx) -> std::io::Result<()> {
     send(out, 200, "application/json", body.as_bytes(), &[])
 }
 
-/// `POST /comment` — append the event(s) a posted comment implies. `add` / `region-add` /
-/// `phase-split` each need a server-minted id (H6 / review #3 / F-region-frontiers) and take the
-/// mint-and-respond path; every other kind folds through `comment_to_events` and is appended as one
-/// atomic block (a multi-event action lands as consecutive lines under a single append).
+/// `POST /comment` — append the event(s) a posted command implies. The body is read into a typed
+/// `Command` **once** (`events::parse_command`), and the two arms of that type are the two paths
+/// this route has always had: a `Mint` needs a server-assigned id and goes to `append_mint`; a
+/// `Fold` maps to its events and is appended as one atomic block (a multi-event action lands as
+/// consecutive lines under a single append). A body that names no command is answered `400` and
+/// the reason is printed, rather than being stored as a comment nobody asked for.
 fn route_post_comment(
     out: &mut TcpStream,
     reader: &mut BufReader<TcpStream>,
@@ -246,33 +248,19 @@ fn route_post_comment(
         return send(out, 400, "application/json", b"{\"ok\":false}", &[]);
     }
     let text = String::from_utf8_lossy(&buf);
-    match json::parse(&text) {
-        Ok(v @ json::Json::Obj(_))
-            if matches!(
-                v.get_str("kind"),
-                Some("add") | Some("region-add") | Some("phase-split")
-            ) =>
-        {
-            // The three server-minted kinds share the mint-and-respond path — only which append fn
-            // mints differs.
-            let result = match v.get_str("kind") {
-                Some("add") => add_from_comment(ctx, &v),
-                Some("region-add") => add_region_from_comment(ctx, &v),
-                _ => split_region_from_comment(ctx, &v),
-            };
-            match result {
-                Ok(ev) => {
-                    println!("  \u{2795} event: {}", events::line(&ev));
-                    send(out, 200, "application/json", b"{\"ok\":true}", &[])
-                }
-                Err(code) => send(out, code, "application/json", b"{\"ok\":false}", &[]),
+    let Ok(v @ json::Json::Obj(_)) = json::parse(&text) else {
+        return send(out, 400, "application/json", b"{\"ok\":false}", &[]);
+    };
+    match events::parse_command(&v) {
+        Ok(events::Command::Mint(cmd)) => match append_mint(ctx, &cmd) {
+            Ok(ev) => {
+                println!("  \u{2795} event: {}", events::line(&ev));
+                send(out, 200, "application/json", b"{\"ok\":true}", &[])
             }
-        }
-        Ok(v @ json::Json::Obj(_)) => {
-            let evs = events::comment_to_events(&v);
-            if evs.is_empty() {
-                return send(out, 400, "application/json", b"{\"ok\":false}", &[]);
-            }
+            Err(code) => send(out, code, "application/json", b"{\"ok\":false}", &[]),
+        },
+        Ok(events::Command::Fold(cmd)) => {
+            let evs = events::fold_to_events(&cmd);
             let block = evs.iter().map(events::line).collect::<Vec<_>>().join("\n");
             if ctx.append_line(&ctx.model_path, &block).is_err() {
                 return send(out, 500, "application/json", b"{\"ok\":false}", &[]);
@@ -280,7 +268,10 @@ fn route_post_comment(
             println!("  \u{1F4AC} event: {}", block);
             send(out, 200, "application/json", b"{\"ok\":true}", &[])
         }
-        _ => send(out, 400, "application/json", b"{\"ok\":false}", &[]),
+        Err(why) => {
+            println!("  \u{26A0} refused: {why}");
+            send(out, 400, "application/json", b"{\"ok\":false}", &[])
+        }
     }
 }
 

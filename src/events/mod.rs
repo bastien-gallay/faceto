@@ -145,13 +145,13 @@ pub enum Event {
 }
 
 mod codec;
-mod comments;
+mod command;
 mod genesis;
 mod log;
 mod replay;
 
 pub use codec::{line, to_jsonl};
-pub use comments::{comment_to_events, nonblank, valid_span};
+pub use command::{fold_to_events, parse_command, Command, Mint};
 pub use genesis::{compact, from_model};
 pub use log::{is_log_path, load, parse_log, read_log, read_log_full};
 pub use replay::{region_watermark, replay};
