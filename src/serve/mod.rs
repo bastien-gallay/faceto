@@ -258,6 +258,9 @@ pub fn serve(
 
     // Validate the log up front so a typo fails loudly, not per-request.
     let (_v, model) = ctx.current()?;
+    if let Some((base, _)) = &ctx.baseline {
+        crate::render::comparable(base, &model)?;
+    }
     let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| e.to_string())?;
     println!(
         "faceto board live → http://127.0.0.1:{}  (Ctrl-C to stop)",

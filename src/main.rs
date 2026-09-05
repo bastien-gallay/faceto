@@ -221,6 +221,10 @@ fn cmd_render(args: &RenderArgs) {
                 }
             };
             warn_if_empty(&base_model, base_path);
+            if let Err(e) = render::comparable(&base_model, &model) {
+                eprintln!("error: {e}");
+                exit(1);
+            }
             let meta = (output_stem(base_path), stem.clone());
             let (svg, html, tally) = render_diff(&base_model, &model, meta);
             let (svg_path, html_path) = write_board_files(&dir, &stem, &svg, &html);
