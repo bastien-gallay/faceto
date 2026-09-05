@@ -12,7 +12,7 @@ faceto extract [SOURCE] (--region ID | --focus ID [--hops N] | --type KIND)
 | `--region ID` | — | every element whose column falls inside that region's band |
 | `--focus ID` | — | that element, plus its neighbourhood |
 | `--hops N` | `1` | how many edges out from `--focus` to walk |
-| `--type KIND` | — | every element in one lane (`event`, `hotspot`, `policy`, …) |
+| `--type KIND` | — | every element in one lane (`event`, `hotspot`, `policy`, …). `external` works, and prints a note that it is read as `system` — every later message names the lane, not the word you typed |
 
 ```bash
 faceto extract orders.event-log.jsonl --region K2

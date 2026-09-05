@@ -481,7 +481,18 @@ fn parse_extract(args: &[String]) -> (String, extract::Selector) {
                 // correct it — and the alternative is a silently empty cut.
                 let v = value("--type");
                 match model::lane_from_str(&v) {
-                    Some(lane) => set(Selector::Kind(lane), &mut selector),
+                    Some(lane) => {
+                        // Say so when the word read is not the word typed, or every message from
+                        // here on names a lane the user never asked for ("system lane matched no
+                        // elements" after `--type external`).
+                        let canonical = model::lane_to_str(lane);
+                        if v != canonical {
+                            eprintln!(
+                                "note: --type {v} is the pre-ADR-1 spelling of `{canonical}`"
+                            );
+                        }
+                        set(Selector::Kind(lane), &mut selector)
+                    }
                     None => {
                         eprintln!(
                             "--type {v} is not one of the eight lanes: {}",
