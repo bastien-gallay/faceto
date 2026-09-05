@@ -89,6 +89,17 @@ pub fn format_declared(tag: Option<&str>) -> Result<Format, String> {
     }
 }
 
+/// The `format` tag of a JSON board file. A tag that is present but not a string is rejected
+/// rather than read as absent: `{"format": null}` from a generator would otherwise reach the
+/// default and produce exactly the confidently-empty board [`format_declared`] exists to refuse.
+fn format_tag(j: &Json) -> Result<Format, String> {
+    match j.get("format") {
+        None => Ok(Format::default()),
+        Some(Json::Str(s)) => format_declared(Some(s)),
+        Some(_) => Err("board format must be a string".to_string()),
+    }
+}
+
 /// The eight-lane event-storming grammar — a sticky's `type`, which selects **both** its lane and
 /// its colour. Closed on purpose: an off-grammar element has no lane to occupy, and every reader
 /// that placed one had to carry a fallback for a state the board could not draw. As a type, the
@@ -227,7 +238,7 @@ pub struct Model {
 pub fn load(path: &Path) -> Result<Model, String> {
     let raw = std::fs::read_to_string(path).map_err(|e| format!("{}: {}", path.display(), e))?;
     let j = json::parse(&raw)?;
-    format_declared(j.get("format").and_then(|v| v.as_str()))?;
+    format_tag(&j)?;
     Ok(from_json(&j))
 }
 
@@ -237,9 +248,9 @@ pub fn from_json(j: &Json) -> Model {
         .and_then(|v| v.as_str())
         .unwrap_or("board")
         .to_string();
-    // Lenient here on purpose: `load` is the boundary that rejects a format this build cannot
-    // project, so an unrecognised tag reaching this far is a caller building a model in-process.
-    let format = format_declared(j.get("format").and_then(|v| v.as_str())).unwrap_or_default();
+    // Lenient here: `load` is the boundary that rejects an unreadable format, so a bad tag this
+    // far in is an in-process caller, not a file.
+    let format = format_tag(j).unwrap_or_default();
     let level = j
         .get("level")
         .and_then(|v| v.as_str())
@@ -576,6 +587,16 @@ mod tests {
         let err = format_declared(Some("bounded-context-canvas")).unwrap_err();
         assert!(err.contains("bounded-context-canvas"), "{}", err);
         assert_eq!(format_from_str("bounded-context-canvas"), None);
+    }
+
+    #[test]
+    fn a_format_tag_that_is_not_a_string_is_an_error_not_an_absent_tag() {
+        for tag in [r#"null"#, r#"42"#, r#"["bounded-context-canvas"]"#] {
+            let j = json::parse(&format!(r#"{{"format":{tag},"elements":[]}}"#)).unwrap();
+            assert!(format_tag(&j).is_err(), "{tag} read as an absent tag");
+        }
+        let absent = json::parse(r#"{"elements":[]}"#).unwrap();
+        assert_eq!(format_tag(&absent), Ok(Format::EventStorming));
     }
 
     #[test]

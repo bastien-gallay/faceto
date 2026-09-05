@@ -50,7 +50,8 @@ Every top-level field is optional. `{}` is a valid — empty — board.
 `level` is parsed leniently — anything that is not `"design"` reads as big-picture — but author only
 the two documented values. `format` is the exception to that leniency: a value faceto does not
 recognise is **refused at load**, because a board it cannot project would otherwise render as an
-empty event-storming one. See [board formats](./board-formats.md).
+empty event-storming one. A `format` that is present but not a string (`null`, a number, an array)
+is refused for the same reason, rather than read as an absent tag. See [board formats](./board-formats.md).
 
 ## `elements`
 
