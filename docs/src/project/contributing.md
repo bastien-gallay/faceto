@@ -8,7 +8,7 @@ standards — Tidy First, CUPID, YAGNI, TDD, commit style — are in
 The local gate mirrors CI:
 
 ```bash
-just ci      # fmt → clippy → test → js tests → markdown → dep firewall → size → workflows
+just ci      # fmt → clippy → test → js → markdown → book → keyboard → deps → size → workflows → justfile
 just docs    # build this book into docs/book
 ```
 

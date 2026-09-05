@@ -36,6 +36,10 @@ comments.jsonl
 # typst briefs are tracked as .typ source; the rendered PDF is derived
 docs/*.pdf
 
+# Python bytecode from scripts/ (sync_roadmap.py, check_keyboard_sheet.py)
+__pycache__/
+*.pyc
+
 # the mdBook output, and the live sample board the tour embeds (both rendered at build time
 # from tracked sources — docs/src/ and examples/sample.model.json)
 /docs/book/

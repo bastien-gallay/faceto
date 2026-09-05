@@ -186,9 +186,11 @@ in-repo config. Its rules:
 
 - **Required status checks** (must be green or skipped to merge):
   `clippy (ubuntu-latest)`, `test (ubuntu-latest)`, `rustfmt`, `zero dependencies`,
-  `binary size budget`, `actionlint`, `justfile`, `client-logic (node)`. *(`client-logic (node)` is
-  the newest job — add it to the ruleset in GitHub → Settings → Rules so it actually gates; the
-  in-repo workflow only defines the job, it can't make the check required.)*
+  `binary size budget`, `actionlint`, `justfile`, `client-logic (node)`. *(`keyboard sheet` is the
+  newest job and is **not** in the ruleset yet — add it in GitHub → Settings → Rules so it actually
+  gates; the in-repo workflow only defines a job, it can't make the check required. `markdownlint`,
+  `docs book` and `roadmap-check` are absent from the ruleset too, and that is not deliberate — the
+  same edit covers all four.)*
 - **Pull request required** — no direct pushes to `main`.
 - **Required signatures** — every commit must be signed (GPG/SSH). Unsigned commits are rejected.
 - **Block force-pushes** (`non_fast_forward`) and **block deletion** of `main`.
@@ -238,10 +240,11 @@ the most likely trigger.
 ## Reproducing CI locally
 
 Every gate has a local equivalent, wired up as [`just`](https://github.com/casey/just) recipes in
-the repo's [`justfile`](../justfile). Run the whole set before pushing:
+the repo's [`justfile`](../justfile). `just ci` chains all of them **except `roadmap-check`**,
+which needs network and is run on its own. Before pushing:
 
 ```bash
-just ci      # format → lint → test → markdown → book → keyboard → zero-deps → size → actionlint → justfile
+just ci      # format → lint → test → js → markdown → book → keyboard → zero-deps → size → actionlint → justfile
 ```
 
 Or run one gate at a time:
@@ -251,6 +254,7 @@ Or run one gate at a time:
 | `just fmt`         | `rustfmt`            | `cargo fmt --all --check`                   |
 | `just clippy`      | `clippy (…)`         | `cargo clippy --all-targets -- -D warnings` |
 | `just test`        | `test (…)`           | `cargo test --all-targets`                  |
+| `just test-js`     | `client-logic (node)` | `node tests/js/board-logic.test.mjs`       |
 | `just md`          | `markdownlint`       | `markdownlint-cli2 "**/*.md"`               |
 | `just docs`        | `docs book`          | render the sample board, then `mdbook build docs` |
 | `just keyboard-check` | `keyboard sheet`  | assert both keyboard sheets list the same keys |
@@ -258,6 +262,7 @@ Or run one gate at a time:
 | `just binary-size` | `binary size budget` | assert the release binary is under 2 MiB    |
 | `just actionlint`  | `actionlint`         | `actionlint`                                |
 | `just lint-justfile` | `justfile`         | `just --fmt --check --unstable` + `--summary` |
+| `just roadmap-check` | `roadmap-check`    | `sync_roadmap.py --selftest` + `--check` (needs network) |
 
 The justfile exports `RUSTFLAGS=-D warnings`, matching CI so rustc warnings fail locally too.
 `just` (`brew install just`), `markdownlint-cli2`, `actionlint` and `mdbook` (`brew install mdbook`)

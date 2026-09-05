@@ -409,8 +409,13 @@ cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 markdownlint-cli2                      # prose ≤100 cols; see .markdownlint-cli2.jsonc
-# plus, in CI: actionlint, and the `zero dependencies` firewall job
+just ci                                # the whole set, in CI's order
 ```
+
+The four commands above `just ci` are the ones worth running piecemeal mid-change. What `just ci`
+adds beyond them is **deliberately not listed here** — that enumeration exists in too many places
+already, and every copy of it has gone stale at least once. [`docs/ci.md`](docs/ci.md) is the one
+that is kept true.
 
 These are the local mirrors of the CI checks. For the full pipeline — triggers,
 path-based job gating, the per-OS coverage trade-off (ubuntu-only on PRs, macOS

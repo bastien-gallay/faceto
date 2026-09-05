@@ -15,9 +15,10 @@ or the offline install — but ask before adding one.
 
 ## Local checks (mirror of CI)
 
-Run `just ci` before pushing — it runs every CI gate in order (see
-[`docs/ci.md`](docs/ci.md)). CI runs these gates on Linux for every PR, and adds macOS on
-`main`. The individual commands, if you'd rather run them piecemeal:
+Run `just ci` before pushing — it runs the gate set in CI's order (see
+[`docs/ci.md`](docs/ci.md)). The one CI job it leaves out is `roadmap-check`, which needs network;
+run `just roadmap-check` separately when you touch `ROADMAP.md`. CI runs these gates on Linux for
+every PR, and adds macOS on `main`. The individual commands, if you'd rather run them piecemeal:
 
 ```bash
 cargo fmt --all --check
@@ -25,6 +26,8 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 npx markdownlint-cli2 "**/*.md"   # prose; matches the CI markdown job
 just docs                         # builds the manual; matches the CI `docs book` job
+just keyboard-check               # the two keyboard sheets agree; matches CI's `keyboard sheet`
+just test-js                      # the client's pure helpers; matches `client-logic (node)`
 ```
 
 The manual lives in [`docs/src/`](docs/src/) and is published to
