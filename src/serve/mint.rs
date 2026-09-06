@@ -4,13 +4,14 @@
 //! the dispatch and nothing else. What it cannot check at the parse it checks under the lock:
 //! whether a split column falls inside its phase depends on the replayed board.
 
-use super::Ctx;
+use super::{Ctx, Refusal};
 use crate::events::{Event, Mint};
 
-/// Append the event `cmd` mints. Returns the HTTP status to fail with: `500` when the append
-/// itself fails, which now includes a `phase-split` the board refuses (an out-of-range or stale
-/// `atCol` — judged against the log under the lock, never here).
-pub(crate) fn append_mint(ctx: &Ctx, cmd: &Mint) -> Result<Event, u16> {
+/// Append the event `cmd` mints. Every field arrived guarded, so the only failure left is the one
+/// no parse could reach: a `phase-split` whose `atCol` the replayed board refuses. That is a
+/// [`Refusal::Board`] — a client error — and telling it apart from a failed write is the wire
+/// layer's business, not this file's.
+pub(crate) fn append_mint(ctx: &Ctx, cmd: &Mint) -> Result<Event, Refusal> {
     match cmd {
         Mint::Add {
             lane,
@@ -28,7 +29,6 @@ pub(crate) fn append_mint(ctx: &Ctx, cmd: &Mint) -> Result<Event, u16> {
             ctx.append_phase_split(id.clone(), *at_col, label.clone())
         }
     }
-    .map_err(|_| 500u16)
 }
 
 #[cfg(test)]
@@ -86,7 +86,8 @@ mod tests {
             at_col: 2,
             label: "Right".into(),
         };
-        assert_eq!(append_mint(&ctx, &cmd), Err(500));
+        // …and the board saying no is the *client* being wrong, not the append breaking.
+        assert!(matches!(append_mint(&ctx, &cmd), Err(Refusal::Board(_))));
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert!(
