@@ -154,7 +154,8 @@ and wrong:
 - an **inverted or zero-width span** on `region-add` / `region-resize` is refused;
 - a `move` carrying neither `col` nor `y` is refused — it would replay as a no-op;
 - a **`kind` not in the table** is refused. The set is closed: the sixteen above, plus an absent
-  `kind`, which means `comment`.
+  `kind`, which means `comment`. A `kind` that is *present but not a string* is refused too — it is
+  not an absent one, the same rule a `"format"` tag follows on the read side;
 
 Endpoint **existence** is *not* among them: `connect` sees only the posted comment, never the
 board, so a typo'd id is accepted and appends a dangling edge. Replay tolerates it — nothing is

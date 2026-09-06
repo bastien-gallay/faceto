@@ -170,9 +170,15 @@ fn clamp_y(y: f64) -> f64 {
 }
 
 /// Read one posted body into the command it names, or say why it is none. An absent `kind` means
-/// `comment` — what a bare `{elemId, text}` has always meant.
+/// `comment` — what a bare `{elemId, text}` has always meant. A `kind` that is *present* and not a
+/// string is neither: it is refused, the same way the read path refuses a non-string format tag.
 pub fn parse_command(v: &Json) -> Result<Command, Rejection> {
-    let kind = v.get_str("kind").unwrap_or("comment");
+    let kind = match v.get("kind") {
+        None => "comment",
+        Some(k) => k.as_str().ok_or(Rejection::Malformed(
+            "`kind` must be a string naming a command",
+        ))?,
+    };
     match kind {
         "add" | "region-add" | "phase-split" => parse_mint(v, kind).map(Command::Mint),
         _ => parse_fold(v, kind).map(Command::Fold),
@@ -215,7 +221,7 @@ fn parse_mint(v: &Json, kind: &str) -> Result<Mint, Rejection> {
 fn parse_fold(v: &Json, kind: &str) -> Result<Fold, Rejection> {
     match kind {
         "connect" | "disconnect" => {
-            let (src, dst) = endpoints(v)?;
+            let (src, dst) = endpoints(v, kind)?;
             Ok(if kind == "connect" {
                 Fold::Connect { src, dst }
             } else {
@@ -258,7 +264,14 @@ fn parse_fold(v: &Json, kind: &str) -> Result<Fold, Rejection> {
             id: elem_id(v, "drop: no elemId to remove")?,
         }),
         "comment" | "question" | "split" => Ok(Fold::Annotate {
-            id: elem_id(v, "comment: no elemId to annotate")?,
+            id: elem_id(
+                v,
+                match kind {
+                    "question" => "question: no elemId to annotate",
+                    "split" => "split: no elemId to annotate",
+                    _ => "comment: no elemId to annotate",
+                },
+            )?,
             text: text(v),
         }),
         other => Err(Rejection::UnknownKind(other.to_string())),
@@ -330,18 +343,26 @@ fn span(v: &Json, kind: &'static str) -> Result<(i64, i64), Rejection> {
 
 /// Both endpoints present, non-blank and distinct. A self-loop has no rendered path and no place
 /// in the grammar, and `replay` has no guard against one.
-fn endpoints(v: &Json) -> Result<(String, String), Rejection> {
-    let blank = Rejection::Malformed("connect: both `src` and `dst` must name an element");
+fn endpoints(v: &Json, kind: &str) -> Result<(String, String), Rejection> {
+    let (blank, self_loop) = if kind == "connect" {
+        (
+            "connect: both `src` and `dst` must name an element",
+            "connect: an element cannot link to itself",
+        )
+    } else {
+        (
+            "disconnect: both `src` and `dst` must name an element",
+            "disconnect: an element cannot unlink from itself",
+        )
+    };
     let (Some(src), Some(dst)) = (
         v.get_str("src").and_then(nonblank),
         v.get_str("dst").and_then(nonblank),
     ) else {
-        return Err(blank);
+        return Err(Rejection::Malformed(blank));
     };
     if src == dst {
-        return Err(Rejection::Malformed(
-            "connect: an element cannot link to itself",
-        ));
+        return Err(Rejection::Malformed(self_loop));
     }
     Ok((src, dst))
 }
@@ -694,6 +715,32 @@ mod tests {
             why(r#"{"elemId":"E1","kind":"nope"}"#),
             r#"no command named "nope""#
         );
+    }
+
+    #[test]
+    fn a_rejection_names_the_command_that_was_sent_not_the_arm_that_caught_it() {
+        // Several kinds share one guard. Naming the guard's first kind sends the operator looking
+        // for a `connect` in a log that only ever held a `disconnect`.
+        assert!(why(r#"{"kind":"disconnect","src":"E1"}"#).starts_with("disconnect:"));
+        assert!(why(r#"{"kind":"disconnect","src":"E1","dst":"E1"}"#).starts_with("disconnect:"));
+        assert!(why(r#"{"kind":"question","text":"why?"}"#).starts_with("question:"));
+        assert!(why(r#"{"kind":"split","text":"two things"}"#).starts_with("split:"));
+    }
+
+    #[test]
+    fn a_kind_that_is_not_a_string_is_not_an_absent_kind() {
+        // The mirror of the read path's format-tag rule. Falling back to `comment` here would file
+        // a type error on the board as a note nobody wrote — the defect this boundary exists to
+        // close, reached by a mis-typed field instead of a misspelled one.
+        for body in [
+            r#"{"kind":123,"elemId":"E1","text":"x"}"#,
+            r#"{"kind":null,"elemId":"E1","text":"x"}"#,
+            r#"{"kind":["add"],"elemId":"E1","text":"x"}"#,
+        ] {
+            assert!(why(body).contains("`kind` must be a string"), "{body}");
+        }
+        // Absent still means `comment` — a bare {elemId, text} is the oldest shape the board posts.
+        assert!(parse_command(&json::parse(r#"{"elemId":"E1","text":"x"}"#).unwrap()).is_ok());
     }
 
     proptest! {
