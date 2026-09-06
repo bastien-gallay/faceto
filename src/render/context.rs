@@ -22,9 +22,9 @@ use super::style::LANES;
 use super::text::split_label;
 use crate::model::Lane;
 
-/// Human-facing plural headings, **index-aligned with `LANES`** so the count is tied to the grammar
-/// (mirrors `style::LANE_PREFIXES`): the `[_; LANES.len()]` size means adding a lane to `LANES`
-/// forces this array to grow too or the crate fails to compile — no silent heading drift.
+/// Human-facing plural headings, **index-aligned with `LANES`**: the `[_; LANES.len()]` size means
+/// adding a lane to `LANES` forces this array to grow too or the crate fails to compile — no silent
+/// heading drift.
 const LANE_HEADINGS: [&str; LANES.len()] = [
     "Actors",
     "Commands",
