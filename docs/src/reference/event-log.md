@@ -156,6 +156,10 @@ and wrong:
 - a **`kind` not in the table** is refused. The set is closed: the sixteen above, plus an absent
   `kind`, which means `comment`. A `kind` that is *present but not a string* is refused too — it is
   not an absent one, the same rule a `"format"` tag follows on the read side;
+- a **stale or out-of-range `atCol`** on `phase-split` is refused. This is the one guard that
+  cannot be made from the posted body alone — whether the column still falls inside its phase
+  depends on the replayed board — so it is judged under the append lock. It is still a **`400`**:
+  the client asked for something the board cannot do, and retrying will not change that.
 
 Endpoint **existence** is *not* among them: `connect` sees only the posted comment, never the
 board, so a typo'd id is accepted and appends a dangling edge. Replay tolerates it — nothing is

@@ -237,8 +237,10 @@ curl -s -X POST http://127.0.0.1:8753/comment \
   `faceto compact` intends. Pre-compaction history is not missing; do not treat it as a gap.
 - **Unknown `event` kinds** (forward compatibility from a newer schema) → skip them silently,
   exactly as `replay` does. Never propose "fixing" a line you don't recognise.
-- **A `400`/`500` from a POST** → report it and stop; do not retry blindly. A 400 usually means
-  a blank label, an off-grammar `type`, or an inverted span; a 500 means the append failed.
+- **A `400`/`500` from a POST** → report it and stop; do not retry blindly. A 400 means the request
+  was wrong — a blank label, an off-grammar `type`, an inverted span, a `kind` outside the closed
+  set or not a string, or a `phase-split` whose `atCol` no longer falls inside its phase. A 500
+  means the append itself failed; that one, and only that one, can be worth retrying.
 - **A refused / dropped connection mid-session** (not an HTTP status — `serve` crashed or was
   restarted) → fall back to **read-only**. Do not retry against the port; a restarted server may
   be a *different* board.

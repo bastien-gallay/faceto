@@ -231,7 +231,9 @@ fn route_comments(out: &mut TcpStream, ctx: &Ctx) -> std::io::Result<()> {
 /// this route has always had: a `Mint` needs a server-assigned id and goes to `append_mint`; a
 /// `Fold` maps to its events and is appended as one atomic block (a multi-event action lands as
 /// consecutive lines under a single append). A body that names no command is answered `400` and
-/// the reason is printed, rather than being stored as a comment nobody asked for.
+/// the reason is printed, rather than being stored as a comment nobody asked for. The one guard a
+/// parse cannot make — whether a split column still falls inside its phase — is judged under the
+/// lock, and it is a client error too: `400`, not `500`, so an agent does not retry it.
 fn route_post_comment(
     out: &mut TcpStream,
     reader: &mut BufReader<TcpStream>,
@@ -257,7 +259,15 @@ fn route_post_comment(
                 println!("  \u{2795} event: {}", events::line(&ev));
                 send(out, 200, "application/json", b"{\"ok\":true}", &[])
             }
-            Err(code) => send(out, code, "application/json", b"{\"ok\":false}", &[]),
+            Err(why) => {
+                let code = match &why {
+                    super::Refusal::Board(_) => 400,
+                    super::Refusal::Server(_) => 500,
+                };
+                let (super::Refusal::Board(msg) | super::Refusal::Server(msg)) = &why;
+                println!("  \u{26A0} refused: {msg}");
+                send(out, code, "application/json", b"{\"ok\":false}", &[])
+            }
         },
         Ok(events::Command::Fold(cmd)) => {
             let evs = events::fold_to_events(&cmd);

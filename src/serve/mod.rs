@@ -55,6 +55,16 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Why an append made under the append lock failed, split by **whose** error it is. The board's own
+/// refusal is a client error — a stale or out-of-range `atCol`, judged against the replayed log —
+/// so answering it `500` would tell an agent the append broke and invite it to retry a request that
+/// can never succeed. `Server` is the other half: an unreadable log, a write that did not land.
+#[derive(Debug)]
+pub(crate) enum Refusal {
+    Board(String),
+    Server(String),
+}
+
 pub(crate) struct Ctx {
     /// The event log — the single source of truth this server reads and appends to.
     pub(crate) model_path: PathBuf,
@@ -150,15 +160,16 @@ impl Ctx {
     fn append_minted(
         &self,
         build: impl FnOnce(&[events::Event]) -> Result<events::Event, String>,
-    ) -> Result<events::Event, String> {
+    ) -> Result<events::Event, Refusal> {
         let _guard = lock(&self.appends);
         // Mint/validate from the *real* log. A corrupt/unreadable log must fail the append, not
         // silently fold to empty (which would re-mint E1/C1… and collide).
-        let raw = std::fs::read(&self.model_path).map_err(|e| e.to_string())?;
+        let raw = std::fs::read(&self.model_path).map_err(|e| Refusal::Server(e.to_string()))?;
         let text = String::from_utf8_lossy(&raw);
-        let log = events::parse_log(&text)?;
-        let ev = build(&log)?;
-        Self::write_line(&self.model_path, &events::line(&ev)).map_err(|e| e.to_string())?;
+        let log = events::parse_log(&text).map_err(Refusal::Server)?;
+        let ev = build(&log).map_err(Refusal::Board)?;
+        Self::write_line(&self.model_path, &events::line(&ev))
+            .map_err(|e| Refusal::Server(e.to_string()))?;
         Ok(ev)
     }
 
@@ -174,7 +185,7 @@ impl Ctx {
         col: Option<i64>,
         detail: Option<String>,
         prepend: bool,
-    ) -> Result<events::Event, String> {
+    ) -> Result<events::Event, Refusal> {
         self.append_minted(|log| {
             let col = if prepend {
                 Some(model::lane_left_col(&events::replay(log), kind))
@@ -199,7 +210,7 @@ impl Ctx {
         label: String,
         from_col: i64,
         to_col: i64,
-    ) -> Result<events::Event, String> {
+    ) -> Result<events::Event, Refusal> {
         self.append_minted(|log| {
             Ok(events::Event::PhaseAdded {
                 id: Some(mint_region_id(log)),
@@ -222,7 +233,7 @@ impl Ctx {
         id: String,
         at_col: i64,
         new_label: String,
-    ) -> Result<events::Event, String> {
+    ) -> Result<events::Event, Refusal> {
         self.append_minted(|log| {
             let covers = events::replay(log)
                 .phases
