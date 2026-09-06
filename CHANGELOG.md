@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the set, so nothing you can do in the UI changes; an agent or a script posting a misspelled kind
   now finds out. This is the opposite bargain from the one the *log read* makes — an unknown event
   kind in a log is still skipped, because a log may come from a faceto that knows more and there
-  is nobody to tell. A posted command has a client waiting.
+  is nobody to tell. A posted command has a client waiting. A `kind` that is present but **not a
+  string** is refused too — `{"kind":123}` is not an absent `kind`, which is the same rule the read
+  path applies to a `"format"` tag.
 
 - **The `external` lane is now `system`** (ADR-1, #117). The pink sticky never meant "outside the
   company" — it means *a software system this board does not open up*, which is as often one of
