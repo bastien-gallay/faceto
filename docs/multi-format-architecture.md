@@ -150,7 +150,7 @@ they are purely ES is exactly what makes the boundary real.
 | Current code | Generic kernel | ES-specific format |
 | --- | --- | --- |
 | `json.rs` | all of it | — |
-| `events.rs` | log machinery: `parse_log` / `read_log` / `jsonl_records`, compact *scaffold*, `upcast` seam, unknown-kind skip, `to_jsonl` | the `Event` enum, `replay`, `from_model`, `comment_to_events`, `region_watermark`, compact bodies |
+| `events.rs` | log machinery: `parse_log` / `read_log` / `jsonl_records`, compact *scaffold*, `upcast` seam, unknown-kind skip, `to_jsonl` | the `Event` enum, `replay`, `from_model`, the `Command` grammar, `region_watermark`, compact bodies |
 | `model.rs` | the stable-id **diff pattern** (`join_by_id`) | `Model` / `Element` / `Edge` / `Phase`, `normalize`, `is_pivotal`, `y_key`, `resolve_region_id`, `lane_left_col`, `diff_models` |
 | `render/` | `svg` **primitives** + the Scene serializer | `style` (8 lanes/colours), `geometry` (col = x timeline), `svg` `draw_*` (sticky/region/frontier) |
 | *as built* | the primitives and the serializer went **further out** than this row: they are `src/scene.rs`, a sibling of `render/`, not a kernel half of it | `render/` kept every ES word — lane, col, sticky, region, frontier — and gained `board_scene`, the `(Model, View) -> Scene` builder |
@@ -235,7 +235,7 @@ Fits the zero-dep / legible / sealed ethos; one `match`, compiler-checked exhaus
 
 - **`events.rs` →** `kernel/log.rs` (generic journal; simplest tolerant form: the log is
   `Vec<Json>` lines and each format supplies `replay(&[Json]) -> its Model`) +
-  `formats/event_storming/events.rs` (the `Event` enum, `replay`, `comment_to_events`, ES
+  `formats/event_storming/events.rs` (the `Event` enum, `replay`, the `Command` grammar, ES
   `compact`).
 
 - **`model.rs` →** a small `kernel` `join_by_id` helper **only** +
@@ -302,9 +302,13 @@ separate refactor:
   the board.
   The argument still holds for the next format — the diff is a render concern, not a domain
   fact — which is why the bullet stays.
-- **Parse, don't validate, at the command boundary.** `serve`'s `v.get_str("kind")` matched
+- ~~**Parse, don't validate, at the command boundary.** `serve`'s `v.get_str("kind")` matched
   against string literals (the double-dispatch + silent-drop review findings) → parse the
-  request into a typed `Command` enum once, then match exhaustively.
+  request into a typed `Command` enum once, then match exhaustively.~~ **Done 2026-09-05 (#120):**
+  `events::parse_command` reads one body into a `Command` — `Mint` for the three the server
+  assigns an id to, `Fold` for the rest — and every guard runs there, so `fold_to_events` is
+  total. The silent drop is closed: the `kind` set is closed and an unrecognised one is a `400`.
+  The mapping is the per-format half of this seam, exactly as the `serve.rs` row above says.
 
 **Honest tensions.** Zero-dep hand-written JSON means every newtype/enum needs explicit
 `from_json`/ `to_json` (no serde derive) — so apply MISI *selectively* (the four above), not to
