@@ -9,12 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The `external` lane is now `system`** (ADR-1, #117). The pink sticky never meant "outside the
+  company" — it means *a software system this board does not open up*, which is as often one of
+  your own services as a third party's, and it lines up with C4's software system. Boards written
+  with `external` keep working: the old spelling is **read** as `system` and never written back,
+  and the lane still mints `G1`, `G2`, … so no id — and therefore no comment and no diff verdict —
+  moves.
+
+- **A sticky's `type` is a closed set, enforced at the edges** (F-lane-enum, #117). It was a
+  string that every reader had to re-check, each with its own fallback for a lane that cannot
+  exist; it is now a type, so the fallbacks are gone. Two things a user can notice: an element
+  whose `type` is not one of the eight lanes is **dropped when the file or log is read** rather
+  than carried into the board and filtered out again at draw time (the drawn board is unchanged —
+  it was never drawn), and `faceto extract --type` now **refuses a misspelled lane by name**
+  instead of cutting an empty board. The rendered SVG, HTML and context pack are byte-identical.
+
+- **`faceto compact` refuses a log it cannot fully read**, instead of deleting the parts it could
+  not project. Compaction rewrites the log from the replayed board, so a sticky whose `type` names
+  a lane this build does not know — skipped on read, which is harmless everywhere else — was folded
+  straight out of the append-only truth, silently and with exit 0. It now reports how many records
+  it could not project, exits 1, and leaves the log untouched (no `.bak`, no rewrite): the log is
+  not broken, this build is simply not the one that should be folding it. Relatedly, a log whose
+  records all name an **unknown lane** no longer reports itself as coming from another board
+  format — the event kinds were recognised, only the lane was not, so it gets its own message. A
+  line naming no event kind at all blocks the fold too, under a second message: a typo'd key is a
+  broken line, and no future faceto will read it, so "compact with a build that does" would be
+  advice that never comes true. Repair or remove the line instead.
+
 - **A log faceto cannot project is now an error, not an empty board.** Skipping unrecognised event
   kinds is how an older faceto reads a newer log; pointed at a log from a *different* notation, the
-  same rule produced a valid, completely empty board and exit code 0. Two reads now stop instead: a
-  declared format this build does not speak, and a log with records but not one recognised event
-  kind. A log mixing known and unknown kinds keeps the forgiving read, so forward compatibility is
-  untouched.
+  same rule produced a valid, completely empty board and exit code 0. Three reads now stop instead:
+  a declared format this build does not speak, a `"format"` that is present but not a string (a
+  malformed tag is not an absent one), and a log with records but not one recognised event kind. A
+  log mixing known and unknown kinds keeps the forgiving read, so forward compatibility is
+  untouched, and a line naming *no* kind at all — a typo'd `event` key — is still a silent skip
+  rather than evidence of a foreign format. `render --base` and `serve --base` also refuse **two
+  boards of different formats**: a diff joins the two sides on `id`, which names a different thing
+  in each notation.
 
 - **An edge tuple's third slot is no longer read.** `["E1", "E2", "added"]` in a `model.json` used
   to set the internal diff status of that connection, painting it as an overlay wire on an ordinary
@@ -47,6 +78,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new warn-only nudge fires when a source replays to an empty board (0 elements).
 
 ### Fixed
+
+- **An element with no lane no longer leaves the board in silence** (#149 review). A `type`
+  outside the eight lanes has nowhere to go, so the entry is dropped on read — correct, but
+  wordless, and `genesis` writes only the survivors into the log while keeping the edges that
+  pointed at what it dropped. Reading a `model.json` now warns with the count (an entry missing
+  its `id` or `label` counts too).
+
+- **An `ElementMoved` naming an unreadable lane keeps its move.** The record was rejected whole, so
+  a well-formed `col`/`y` was discarded along with a `type` this build could not name. The lane is
+  now fatal only where it is load-bearing — an `ElementAdded` has nowhere to put the sticky — and
+  elsewhere it is dropped while the rest of the record applies. `compact` still refuses such a log:
+  a record read *minus* its lane was not read in full either.
+
+- **`extract --type external` stops renaming the lane you typed.** It answered `error: system lane
+  matched no elements`, which reads as though the argument had been ignored. The pre-ADR-1 spelling
+  now announces itself with a `note:` where the substitution happens, so every later message makes
+  sense.
 
 - **The narrate skill can propose edges again** — its instructions claimed "you cannot propose
   edges […] never invent an edge kind (it will 400)", which stopped being true when

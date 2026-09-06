@@ -221,6 +221,10 @@ fn cmd_render(args: &RenderArgs) {
                 }
             };
             warn_if_empty(&base_model, base_path);
+            if let Err(e) = render::comparable(&base_model, &model) {
+                eprintln!("error: {e}");
+                exit(1);
+            }
             let meta = (output_stem(base_path), stem.clone());
             let (svg, html, tally) = render_diff(&base_model, &model, meta);
             let (svg_path, html_path) = write_board_files(&dir, &stem, &svg, &html);
@@ -305,7 +309,7 @@ fn cmd_lint(model_path: &str) {
             .elements
             .iter()
             .find(|e| e.id == id)
-            .map(|e| format!("{} \"{}\"", e.kind, e.label))
+            .map(|e| format!("{} \"{}\"", model::lane_to_str(e.kind), e.label))
             .unwrap_or_else(|| id.to_string())
     };
     let n = findings.len();
@@ -473,7 +477,34 @@ fn parse_extract(args: &[String]) -> (String, extract::Selector) {
                 i += 2;
             }
             "--type" => {
-                set(Selector::Kind(value("--type")), &mut selector);
+                // Unlike a lane met in a log, one typed on the command line has a person here to
+                // correct it — and the alternative is a silently empty cut.
+                let v = value("--type");
+                match model::lane_from_str(&v) {
+                    Some(lane) => {
+                        // Say so when the word read is not the word typed, or every message from
+                        // here on names a lane the user never asked for ("system lane matched no
+                        // elements" after `--type external`).
+                        let canonical = model::lane_to_str(lane);
+                        if v != canonical {
+                            eprintln!(
+                                "note: --type {v} is the pre-ADR-1 spelling of `{canonical}`"
+                            );
+                        }
+                        set(Selector::Kind(lane), &mut selector)
+                    }
+                    None => {
+                        eprintln!(
+                            "--type {v} is not one of the eight lanes: {}",
+                            model::LANES
+                                .iter()
+                                .map(|&l| model::lane_to_str(l))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                        exit(2);
+                    }
+                }
                 i += 2;
             }
             "--hops" => {
@@ -653,13 +684,35 @@ fn cmd_compact(log_path: &str) {
         );
         exit(1);
     }
-    let original = match events::read_log(path) {
-        Ok(e) => e,
+    let read = match events::read_log_full(path) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("error: {e}");
             exit(1);
         }
     };
+    // Folding rewrites the log from the projection, so anything the read could not project would
+    // be **deleted from append-only truth**, silently, exit 0. Refuse instead — and name the
+    // remedy that actually applies, since no future faceto will ever read a mistyped line.
+    if read.unread > 0 {
+        eprintln!(
+            "error: {} refuses to compact — {} record(s) could not be projected by this build, \
+             and folding would delete them from the log. Compact with a faceto that reads them.",
+            path.display(),
+            read.unread
+        );
+        exit(1);
+    }
+    if read.corrupt > 0 {
+        eprintln!(
+            "error: {} refuses to compact — {} line(s) name no event kind, and folding would \
+             delete them from the log. Repair or remove those lines first.",
+            path.display(),
+            read.corrupt
+        );
+        exit(1);
+    }
+    let original = read.events;
     let folded = events::compact(&original);
 
     // Preserve the prior log alongside before overwriting the truth file.
@@ -838,6 +891,7 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Lane;
 
     const MODEL: &str =
         r#"{"title":"T","elements":[{"id":"E1","type":"event","label":"Hello","col":0}]}"#;
@@ -892,7 +946,7 @@ mod tests {
         // No positional → the same default every other verb uses.
         let (src, sel) = parse_extract(&args(&["--type", "hotspot"]));
         assert_eq!(src, "model.json");
-        assert_eq!(sel, Selector::Kind("hotspot".into()));
+        assert_eq!(sel, Selector::Kind(Lane::Hotspot));
 
         // `--hops` defaults to 1 and applies whichever side of `--focus` it is written on.
         let (_, sel) = parse_extract(&args(&["--focus", "E4"]));

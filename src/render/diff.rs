@@ -10,6 +10,7 @@
 //! The join rules are unchanged — identity is the `id` (never text, never position), and layout
 //! follows the *new* side.
 
+use crate::model::Lane;
 use crate::model::{y_key, Edge, Model, Phase};
 use std::collections::{HashMap, HashSet};
 
@@ -43,7 +44,7 @@ impl Tone {
 pub struct Was {
     pub label: String,
     pub col: Option<i64>,
-    pub kind: String,
+    pub kind: Lane,
     pub y: Option<f64>,
 }
 
@@ -163,6 +164,21 @@ pub(crate) fn region_removed(overlay: Option<&Overlay>, id: &str) -> bool {
     overlay.is_some_and(|o| o.region(id) == RegionVerdict::Removed)
 }
 
+/// Whether two boards may be diffed: only under one format. The join key is `id`, which names a
+/// different thing in each grammar, so a cross-format overlay would judge unrelated stickies
+/// `moved`. Checked at the CLI boundary — `--base` takes any file, either side.
+pub fn comparable(base: &Model, new: &Model) -> Result<(), String> {
+    if base.format == new.format {
+        return Ok(());
+    }
+    Err(format!(
+        "cannot diff a {} board against a {} one — a diff joins the two sides on `id`, \
+         which names a different thing in each format",
+        crate::model::format_to_str(base.format),
+        crate::model::format_to_str(new.format)
+    ))
+}
+
 /// Merge two boards into the union board plus its overlay: every element / region / edge judged
 /// added / removed / changed / moved / unchanged, keyed on stable `id` (never text, never
 /// position). Layout follows the *new* side (`b`); removed elements and regions keep their old slot
@@ -181,7 +197,7 @@ pub fn diff_boards(a: &Model, b: &Model, meta: (String, String)) -> (Model, Over
                 let was = Was {
                     label: o.label.clone(),
                     col: o.col,
-                    kind: o.kind.clone(),
+                    kind: o.kind,
                     y: o.y,
                 };
                 if o.label != e.label {
@@ -240,8 +256,8 @@ pub fn diff_boards(a: &Model, b: &Model, meta: (String, String)) -> (Model, Over
         } else {
             a.title.clone()
         },
-        // A diff is a render-only artifact (lint never runs on it); carry the newer board's
-        // format and level.
+        // Layout follows the new side, so the tags do too. Both sides share a format —
+        // see `comparable`.
         format: b.format,
         level: b.level,
         phases,
@@ -298,6 +314,12 @@ mod tests {
         ("old".into(), "new".into())
     }
 
+    #[test]
+    fn two_boards_of_one_format_are_comparable() {
+        let m = model_of(r#"{"elements":[]}"#);
+        assert_eq!(comparable(&m, &m), Ok(()));
+    }
+
     // The whole comment/diff contract hinges on `id` being identity, never text or position.
     // This pins each verdict to the right join.
     #[test]
@@ -352,10 +374,10 @@ mod tests {
         };
         assert_eq!(changed, Some("Old"), "E1 was relabelled");
         let moved = match o.element("E2") {
-            ElementVerdict::Moved(w) => Some(w.kind.as_str()),
+            ElementVerdict::Moved(w) => Some(w.kind),
             _ => None,
         };
-        assert_eq!(moved, Some("command"), "E2 changed lane");
+        assert_eq!(moved, Some(Lane::Command), "E2 changed lane");
     }
 
     // `y` is an ordering key, not a position: "no y" and the neutral 0.5 are one state, so an
@@ -467,7 +489,7 @@ mod tests {
             ElementVerdict::Changed(Was {
                 label: "x".into(),
                 col: None,
-                kind: "event".into(),
+                kind: Lane::Event,
                 y: None,
             })
             .as_str(),

@@ -50,6 +50,10 @@ stem: the variant is the subject of the review.
 A `--base` file that yields an empty board warns rather than failing — otherwise a wrong path
 would silently report every current element as "added".
 
+Two boards of **different formats** are refused outright, naming both: the join key `id` means a
+different thing in each notation, so the overlay would be phantom changes end to end. See
+[board formats](../board-formats.md#two-formats-never-diff).
+
 The rendered page is marked **read-only**: a diff is a review artifact, so editing affordances are
 disabled on it. See [variants](../../agents/variants.md) and
 [reading the diff overlay](../../board/diff.md).

@@ -98,13 +98,14 @@ fn lint_items(model: &Model) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::events;
+    use crate::model::Lane;
     use crate::serve::testutil::*;
 
     #[test]
     fn comments_from_log_skips_a_removed_elements_feedback() {
         // Annotate E2, then drop it — its comment must not surface for a box off the board.
         let log = [
-            added("E2", "event"),
+            added("E2", Lane::Event),
             events::Event::ElementAnnotated {
                 id: "E2".into(),
                 text: "is this right?".into(),
@@ -194,7 +195,7 @@ mod tests {
     fn comments_body_merges_lint_findings_when_the_board_parses() {
         // A valid log with an orphan event: no stored comments, two lint nudges, framed as an array.
         let path = std::env::temp_dir().join(format!("faceto-cb-ok-{}.jsonl", std::process::id()));
-        std::fs::write(&path, events::line(&added("E1", "event")) + "\n").unwrap();
+        std::fs::write(&path, events::line(&added("E1", Lane::Event)) + "\n").unwrap();
         let ctx = Ctx::new(path.clone());
         let body = comments_body(&ctx);
         let _ = std::fs::remove_file(&path);

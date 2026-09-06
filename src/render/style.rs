@@ -1,58 +1,56 @@
 //! Colour grammar, lane order, and layout constants — the visual vocabulary.
 
 use super::diff::Tone;
+use crate::model::Lane;
 
-// Canonical lane order (top → bottom). `command` and `hotspot` are deepened from their classic
-// event-storming swatches so white label text clears WCAG 4.5:1.
-pub(crate) const LANES: [&str; 8] = [
-    "actor",
-    "command",
-    "aggregate",
-    "event",
-    "policy",
-    "readmodel",
-    "external",
-    "hotspot",
-];
+// Board order is the grammar's own order, so it lives with `Lane` rather than beside the colours.
+pub(crate) use crate::model::LANES;
 
-/// Each lane's id-mint prefix, index-aligned with `LANES`. `actor`/`aggregate` both start with
-/// 'a', so actor takes 'X' and external takes 'G'. This is the single source of truth for
-/// prefixes — `serve::id_prefix` reads it rather than re-listing the grammar.
-pub(crate) const LANE_PREFIXES: [char; 8] = ['X', 'C', 'A', 'E', 'P', 'R', 'G', 'H'];
-
-/// The id prefix for a lane `type`, or `None` if it is not one of the 8 lanes.
-pub fn lane_prefix(kind: &str) -> Option<char> {
-    LANES
-        .iter()
-        .position(|&l| l == kind)
-        .map(|i| LANE_PREFIXES[i])
+/// The id-mint prefix a lane stamps — the one place they are listed, read by `serve::ids` rather
+/// than re-derived. Total, so minting can no longer fall back to a first letter that collides with
+/// another lane's id space, which is why `actor` takes 'X' and `system` 'G'.
+pub fn lane_prefix(lane: Lane) -> char {
+    match lane {
+        Lane::Actor => 'X',
+        Lane::Command => 'C',
+        Lane::Aggregate => 'A',
+        Lane::Event => 'E',
+        Lane::Policy => 'P',
+        Lane::ReadModel => 'R',
+        // ADR-1 renamed the lane, not the prefix: `G1…` ids stay valid, and an id is identity.
+        Lane::System => 'G',
+        Lane::Hotspot => 'H',
+    }
 }
 
 /// A lane's vertical rank in the fixed 8-lane grammar (`actor` = 0 … `hotspot` = 7). Used as the
 /// y-band when ordering a crowded cell's members by their edge neighbours (F-edge-routing Lever A).
-/// An unknown kind is never one of the 8 lanes, so it sorts to the top — harmless, never panics.
-pub(crate) fn lane_index(kind: &str) -> usize {
-    LANES.iter().position(|&l| l == kind).unwrap_or(0)
+pub(crate) fn lane_index(lane: Lane) -> usize {
+    LANES
+        .iter()
+        .position(|&l| l == lane)
+        .expect("LANES is total")
 }
 
-pub(crate) fn colour(kind: &str) -> &'static str {
-    match kind {
-        "actor" => "#FCEFA1",
-        "command" => "#1A6FAE",
-        "aggregate" => "#FFD23F",
-        "event" => "#FF9F1C",
-        "policy" => "#C39BD3",
-        "readmodel" => "#6FCF97",
-        "external" => "#F2A0C9",
-        "hotspot" => "#C0392B",
-        _ => "#cccccc",
+/// `command` and `hotspot` sit deeper than their classic event-storming swatches so white label
+/// text clears WCAG 4.5:1 — restoring the lighter originals fails contrast.
+pub(crate) fn colour(lane: Lane) -> &'static str {
+    match lane {
+        Lane::Actor => "#FCEFA1",
+        Lane::Command => "#1A6FAE",
+        Lane::Aggregate => "#FFD23F",
+        Lane::Event => "#FF9F1C",
+        Lane::Policy => "#C39BD3",
+        Lane::ReadModel => "#6FCF97",
+        Lane::System => "#F2A0C9",
+        Lane::Hotspot => "#C0392B",
     }
 }
 
-pub(crate) fn text_dark(kind: &str) -> bool {
+pub(crate) fn text_dark(lane: Lane) -> bool {
     matches!(
-        kind,
-        "actor" | "aggregate" | "event" | "policy" | "readmodel" | "external"
+        lane,
+        Lane::Actor | Lane::Aggregate | Lane::Event | Lane::Policy | Lane::ReadModel | Lane::System
     )
 }
 
@@ -119,12 +117,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lane_prefix_is_aligned_with_lanes_and_total() {
-        assert_eq!(LANES.len(), LANE_PREFIXES.len());
-        assert!(LANES.iter().all(|l| lane_prefix(l).is_some()));
-        assert_eq!(lane_prefix("actor"), Some('X')); // not 'A' — aggregate owns that
-        assert_eq!(lane_prefix("aggregate"), Some('A'));
-        assert_eq!(lane_prefix("hotspot"), Some('H'));
-        assert_eq!(lane_prefix("not-a-lane"), None);
+    fn lane_prefix_is_total_and_collision_free() {
+        assert_eq!(lane_prefix(Lane::Actor), 'X'); // not 'A' — aggregate owns that
+        assert_eq!(lane_prefix(Lane::Aggregate), 'A');
+        assert_eq!(lane_prefix(Lane::Hotspot), 'H');
+        assert_eq!(lane_prefix(Lane::System), 'G');
+        let mut seen: Vec<char> = LANES.iter().map(|&l| lane_prefix(l)).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), LANES.len());
     }
 }

@@ -2,23 +2,16 @@
 //! next region id ([`mint_region_id`]), both derived from the log so it stays the only record.
 
 use crate::events;
+use crate::model::Lane;
 use crate::render;
-
-/// The single letter each lane stamps onto a freshly minted id. The 8-lane prefixes come from
-/// `render::lane_prefix` (one source of truth, in sync with `LANES`); an off-grammar type falls
-/// back to its first letter, upper-cased.
-fn id_prefix(kind: &str) -> char {
-    render::lane_prefix(kind)
-        .unwrap_or_else(|| kind.chars().next().unwrap_or('Z').to_ascii_uppercase())
-}
 
 /// Next free id for `kind`: `<PREFIX>` one past the highest suffix **ever added** under that
 /// prefix in the log — scanning every `ElementAdded`, including ids since removed but not yet
 /// compacted away. Deriving from the live projection instead would re-mint a removed element's
 /// id while leftover events still reference it (e.g. its annotations in `/comments`). `compact`
 /// folds removed elements out entirely, so reuse after compaction is safe.
-pub(crate) fn mint_id(kind: &str, log: &[events::Event]) -> String {
-    let prefix = id_prefix(kind);
+pub(crate) fn mint_id(kind: Lane, log: &[events::Event]) -> String {
+    let prefix = render::lane_prefix(kind);
     let max = log
         .iter()
         .filter_map(|ev| match ev {
@@ -58,15 +51,15 @@ mod tests {
         // H6: ids are type-prefixed and never renumbered — minting takes one past the
         // highest suffix already used under that prefix, independently per lane.
         let log = [
-            added("E1", "event"),
-            added("E3", "event"),
-            added("C1", "command"),
+            added("E1", Lane::Event),
+            added("E3", Lane::Event),
+            added("C1", Lane::Command),
         ];
-        assert_eq!(mint_id("event", &log), "E4"); // past the highest E, not filling the E2 gap
-        assert_eq!(mint_id("command", &log), "C2");
-        assert_eq!(mint_id("hotspot", &log), "H1"); // empty lane starts at 1
-        assert_eq!(mint_id("actor", &log), "X1"); // actor stamps X, not A
-        assert_eq!(mint_id("aggregate", &log), "A1");
+        assert_eq!(mint_id(Lane::Event, &log), "E4"); // past the highest E, not filling the E2 gap
+        assert_eq!(mint_id(Lane::Command, &log), "C2");
+        assert_eq!(mint_id(Lane::Hotspot, &log), "H1"); // empty lane starts at 1
+        assert_eq!(mint_id(Lane::Actor, &log), "X1"); // actor stamps X, not A
+        assert_eq!(mint_id(Lane::Aggregate, &log), "A1");
     }
 
     #[test]
@@ -74,11 +67,11 @@ mod tests {
         // A dropped element's ElementAdded stays in the log (until compaction), so its id must
         // stay reserved — re-minting it would alias leftover events (e.g. its annotations).
         let log = [
-            added("E1", "event"),
-            added("E2", "event"),
+            added("E1", Lane::Event),
+            added("E2", Lane::Event),
             events::Event::ElementRemoved { id: "E2".into() },
         ];
-        assert_eq!(mint_id("event", &log), "E3");
+        assert_eq!(mint_id(Lane::Event, &log), "E3");
     }
 
     #[test]
@@ -132,7 +125,7 @@ mod tests {
     #[test]
     fn mint_id_saturates_instead_of_overflowing() {
         // A hand-edited log with a suffix at u32::MAX must not panic/wrap.
-        let log = [added("E4294967295", "event")];
-        assert_eq!(mint_id("event", &log), "E4294967295");
+        let log = [added("E4294967295", Lane::Event)];
+        assert_eq!(mint_id(Lane::Event, &log), "E4294967295");
     }
 }

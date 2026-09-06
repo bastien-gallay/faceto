@@ -1,13 +1,13 @@
 //! Shared `#[cfg(test)]` harness for the serve suite: `added` / `region_added` event
 //! builders and `model_of` (parse a model.json string to a `Model`).
 
-use crate::model::Model;
+use crate::model::{Lane, Model};
 use crate::{events, json, model};
 
-pub(crate) fn added(id: &str, kind: &str) -> events::Event {
+pub(crate) fn added(id: &str, kind: Lane) -> events::Event {
     events::Event::ElementAdded {
         id: id.into(),
-        kind: kind.into(),
+        kind,
         label: id.into(),
         col: None,
         detail: None,

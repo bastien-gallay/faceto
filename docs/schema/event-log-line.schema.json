@@ -221,6 +221,7 @@
         "event",
         "policy",
         "readmodel",
+        "system",
         "external",
         "hotspot"
       ]

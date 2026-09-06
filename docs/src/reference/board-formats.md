@@ -39,19 +39,27 @@ exactly as it always did, and neither `genesis` nor `compact` starts writing a t
 
 ## What faceto refuses
 
-Two reads stop rather than hand you a board that is quietly wrong:
+Three reads stop rather than hand you a board that is quietly wrong:
 
 | The source says | faceto |
 | --- | --- |
 | `"format"` (or a `BoardFormat`) naming something it cannot project | **errors**, naming the format |
+| `"format"` present but not a string (`null`, a number, an array) | **errors** — a malformed tag is not an absent one |
 | nothing it recognises at all — records present, not one known event kind | **errors**, naming the count |
 
-Both are failures, not warnings: the alternative is an empty board and a zero exit status, which is
+These are failures, not warnings: the alternative is an empty board and a zero exit status, which is
 the shape of bug that survives a whole session before anyone notices.
 
-The second rule is narrower than it looks. It only fires when **no** line is recognised. A log
+The last rule is narrower than it looks. It only fires when **no** line is recognised. A log
 holding a mix — some events this build knows, some from a newer faceto — keeps the forgiving read,
 because it has told the reader something it can actually project.
+
+## Two formats never diff
+
+`render --base` and `serve --base` compare two boards by joining them on `id`. An id names a
+different thing in each notation, so a cross-format overlay would judge unrelated stickies `moved`
+and report a board's worth of phantom changes. Both commands refuse the pair up front, naming the
+two formats, rather than drawing that.
 
 ## Adding a format
 

@@ -30,6 +30,36 @@ The result is a `LogCompacted` marker followed by the genesis batch of the **cur
 That is the whole trade: replay length for memory. Compaction is lossy about the *past*, never
 about the *present*.
 
+## It refuses a log it cannot fully read
+
+Compaction rewrites the log from the projection, so anything the read could not project would not
+survive the fold. A sticky whose `type` names a lane this build does not know is
+[skipped on read](../event-log.md) — harmless when rendering, fatal here: folding would delete it
+from the append-only truth, silently and with exit 0.
+
+So `compact` checks first. If any record was skipped it writes the count to stderr, **exits 1, and
+leaves the log untouched** — no `.bak`, no rewrite:
+
+```console
+$ faceto compact board.event-log.jsonl
+error: board.event-log.jsonl refuses to compact — 1 record(s) could not be projected by this
+build, and folding would delete them from the log. Compact with a faceto that reads them.
+```
+
+The log is not broken; this build is the one that cannot read all of it. A newer faceto that knows
+the lane will fold it losslessly. This is the one place the log's forgiving read rules are not
+enough on their own — everywhere else, skipping a record costs you a sticky on screen and nothing
+in the file.
+
+A line that names **no** `event` kind at all is refused too, and separately — no future faceto will
+ever read `{"evnet":…}`, so waiting for one is not the remedy:
+
+```console
+$ faceto compact board.event-log.jsonl
+error: board.event-log.jsonl refuses to compact — 1 line(s) name no event kind, and folding
+would delete them from the log. Repair or remove those lines first.
+```
+
 ## The backup is not optional
 
 Before the truth file is overwritten in place, the previous log is copied to `<log>.bak`. If you

@@ -41,21 +41,18 @@ pub fn level_to_str(level: Level) -> &'static str {
     }
 }
 
-/// The board format a log or model file declares — which projector replays it. Sealed on
-/// purpose (`docs/multi-format-architecture.md` §"The Format seam"): dispatch is one `match`, not
-/// a `dyn Format`. One variant today; the tag exists so a *foreign* log is rejected loudly instead
-/// of replaying as a silently empty event-storming board (F-format-tag, constraint 1 of the
-/// canvas spike).
+/// The board format a log or model file declares — which projector replays it. A board this build
+/// cannot project is refused, never replayed as a silently empty event-storming one: that refusal
+/// is the whole reason the tag exists, and the rule every `format_*` helper below serves.
+/// Sealed — dispatch is one `match` (`docs/multi-format-architecture.md` §"The Format seam").
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum Format {
     #[default]
     EventStorming,
 }
 
-/// Parse a board `format` string, or `None` if this build does not speak it. Unlike
-/// [`level_from_str`], an unrecognised value is **not** folded into the default: a board whose
-/// format we cannot project is the one case where a lenient read produces a confidently wrong
-/// empty board. The single parse point shared by `from_json` (model.json) and the log codec.
+/// Parse a board `format` string — the one parse point `from_json` and the log codec share.
+/// Unlike [`level_from_str`], a `None` is never folded into the default; see [`Format`].
 pub fn format_from_str(s: &str) -> Option<Format> {
     match s {
         "event-storming" => Some(Format::EventStorming),
@@ -63,18 +60,15 @@ pub fn format_from_str(s: &str) -> Option<Format> {
     }
 }
 
-/// The wire string for a `Format` — the reverse of [`format_from_str`], exhaustive for the same
-/// reason [`level_to_str`] is: a future variant must declare its wire form or fail to compile.
+/// The wire string for a `Format`, exhaustive so a new variant declares one or fails to compile.
 pub fn format_to_str(format: Format) -> &'static str {
     match format {
         Format::EventStorming => "event-storming",
     }
 }
 
-/// Resolve a declared format tag at a read boundary. Absent → the default (`event-storming`), the
-/// same additive rule `level` uses, so every file written before the tag existed reads unchanged.
-/// Present but unrecognised → an error naming the format, because continuing would render a board
-/// this build cannot project as an empty one.
+/// Resolve a declared format tag. Absent is lenient — files written before the tag still load —
+/// and unrecognised is not; see [`Format`].
 pub fn format_declared(tag: Option<&str>) -> Result<Format, String> {
     match tag {
         None => Ok(Format::default()),
@@ -86,6 +80,89 @@ pub fn format_declared(tag: Option<&str>) -> Result<Format, String> {
                 format_to_str(Format::default())
             )
         }),
+    }
+}
+
+/// The `format` tag of a JSON board file. A present-but-non-string tag (`null`, a number) is
+/// rejected rather than read as absent — that path reaches the default and the board [`Format`]
+/// refuses.
+fn format_tag(j: &Json) -> Result<Format, String> {
+    match j.get("format") {
+        None => Ok(Format::default()),
+        Some(Json::Str(s)) => format_declared(Some(s)),
+        Some(_) => Err("board format must be a string".to_string()),
+    }
+}
+
+/// The eight-lane event-storming grammar — a sticky's `type`, which selects **both** its lane and
+/// its colour. Closed as a type, not a validated string: an off-grammar element has no lane to
+/// occupy, so every reader that admitted one carried a fallback for a state the board could not
+/// draw. That state is now unrepresentable, which is what makes `colour`, `lane_index` and
+/// `lane_prefix` total. Variants are declared in board order — see [`LANES`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Lane {
+    Actor,
+    Command,
+    Aggregate,
+    Event,
+    Policy,
+    ReadModel,
+    /// Any software system the board treats as a unit — a third-party API, but equally a service
+    /// of your own this board is not decomposing. Spelt `external` until ADR-1, which found that
+    /// half the boards reaching for it were drawing systems of their own.
+    System,
+    Hotspot,
+}
+
+/// Every lane, top to bottom as the board draws them. One array for both the grammar's *set* and
+/// its *order*, so the two cannot drift the way a separate render-side list allowed.
+pub const LANES: [Lane; 8] = [
+    Lane::Actor,
+    Lane::Command,
+    Lane::Aggregate,
+    Lane::Event,
+    Lane::Policy,
+    Lane::ReadModel,
+    Lane::System,
+    Lane::Hotspot,
+];
+
+/// Parse a sticky's `type`. The one parse point `from_json`, the log codec, `extract --type` and
+/// `serve`'s `add` guard share, so none can disagree about what the grammar is.
+///
+/// A `None` is **skipped, never fatal**: values evolve additively as fields do, so a log naming a
+/// lane a future faceto adds (F-es-vocabulary will add `timer` / `process`) still reads here,
+/// minus the stickies this build has nowhere to put.
+pub fn lane_from_str(s: &str) -> Option<Lane> {
+    Some(match s {
+        "actor" => Lane::Actor,
+        "command" => Lane::Command,
+        "aggregate" => Lane::Aggregate,
+        "event" => Lane::Event,
+        "policy" => Lane::Policy,
+        "readmodel" => Lane::ReadModel,
+        "system" => Lane::System,
+        // ADR-1's legacy spelling. `events::upcast` repairs a renamed event *kind*, but a renamed
+        // *value* has to be read from `model.json` too, and this is the seam both paths cross.
+        // Read here, never written back: no log on disk is ever rewritten.
+        "external" => Lane::System,
+        "hotspot" => Lane::Hotspot,
+        _ => return None,
+    })
+}
+
+/// The wire string for a `Lane` — the only place a lane becomes text again (JSON, SVG `data-*`,
+/// the context pack). Exhaustive, so a new variant declares one or fails to compile.
+pub fn lane_to_str(lane: Lane) -> &'static str {
+    match lane {
+        Lane::Actor => "actor",
+        Lane::Command => "command",
+        Lane::Aggregate => "aggregate",
+        Lane::Event => "event",
+        Lane::Policy => "policy",
+        Lane::ReadModel => "readmodel",
+        Lane::System => "system",
+        Lane::Hotspot => "hotspot",
     }
 }
 
@@ -103,7 +180,8 @@ pub struct Phase {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Element {
     pub id: String,
-    pub kind: String,
+    /// The sticky's lane, from the closed eight-lane grammar — the `"type"` key on the wire.
+    pub kind: Lane,
     pub label: String,
     pub col: Option<i64>,
     pub detail: Option<String>,
@@ -145,8 +223,30 @@ pub struct Model {
 pub fn load(path: &Path) -> Result<Model, String> {
     let raw = std::fs::read_to_string(path).map_err(|e| format!("{}: {}", path.display(), e))?;
     let j = json::parse(&raw)?;
-    format_declared(j.get("format").and_then(|v| v.as_str()))?;
-    Ok(from_json(&j))
+    format_tag(&j)?;
+    let model = from_json(&j);
+    let dropped = unreadable_elements(&j, &model);
+    if dropped > 0 {
+        // Dropping is right — there is no lane to put it in — but doing it in silence is not.
+        // `genesis` writes the survivors to the log and keeps the edges pointing at what it
+        // dropped, so an authored sticky leaves the durable record with nothing said and exit 0.
+        eprintln!(
+            "warning: {}: {} element(s) not readable as a sticky — a missing `id`/`label`, or a \
+             `type` outside the eight lanes; they are absent from the board",
+            path.display(),
+            dropped
+        );
+    }
+    Ok(model)
+}
+
+/// How many authored `elements` entries did not survive [`from_json`]. Counted by difference
+/// rather than re-deriving the rule, so it cannot drift from `element_from`.
+fn unreadable_elements(j: &Json, model: &Model) -> usize {
+    j.get("elements")
+        .and_then(|v| v.as_array())
+        .map_or(0usize, |a| a.len())
+        .saturating_sub(model.elements.len())
 }
 
 pub fn from_json(j: &Json) -> Model {
@@ -155,9 +255,9 @@ pub fn from_json(j: &Json) -> Model {
         .and_then(|v| v.as_str())
         .unwrap_or("board")
         .to_string();
-    // Lenient here on purpose: `load` is the boundary that rejects a format this build cannot
-    // project, so an unrecognised tag reaching this far is a caller building a model in-process.
-    let format = format_declared(j.get("format").and_then(|v| v.as_str())).unwrap_or_default();
+    // Lenient here: `load` is the boundary that rejects an unreadable format, so a bad tag this
+    // far in is an in-process caller, not a file.
+    let format = format_tag(j).unwrap_or_default();
     let level = j
         .get("level")
         .and_then(|v| v.as_str())
@@ -241,7 +341,7 @@ pub fn links_from(j: Option<&Json>) -> Vec<String> {
 fn element_from(j: &Json) -> Option<Element> {
     Some(Element {
         id: j.get("id")?.as_str()?.to_string(),
-        kind: j.get("type")?.as_str()?.to_string(),
+        kind: lane_from_str(j.get("type")?.as_str()?)?,
         label: j.get("label")?.as_str()?.to_string(),
         col: j.get("col").and_then(|v| v.as_f64()).map(|n| n as i64),
         detail: j.get("detail").and_then(|v| v.as_str()).map(String::from),
@@ -302,7 +402,7 @@ pub fn resolved_cols(elements: &[Element]) -> Vec<i64> {
 /// this is the board's current first column, so the new element aligns to the left edge *without*
 /// shoving the other lanes right; when the lane already holds elements it is one column further
 /// left (a true prepend, repeat-safe). Falls back to 0 on an empty board.
-pub fn lane_left_col(m: &Model, kind: &str) -> i64 {
+pub fn lane_left_col(m: &Model, kind: Lane) -> i64 {
     match m.elements.iter().filter_map(|e| e.col).min() {
         None => 0,
         Some(first) if m.elements.iter().any(|e| e.kind == kind) => first - 1,
@@ -369,7 +469,7 @@ pub fn y_key(y: Option<f64>) -> f64 {
 /// `col` sits on a region edge (`from_col` or `to_col` of any band). A pivotal event is the hinge
 /// between two contexts; a command / read-model / actor on a border is not pivotal.
 pub fn is_pivotal(m: &Model, e: &Element) -> bool {
-    e.kind == "event"
+    e.kind == Lane::Event
         && e.col
             .is_some_and(|c| m.phases.iter().any(|p| c == p.from_col || c == p.to_col))
 }
@@ -435,6 +535,42 @@ mod tests {
 
     // ---- F-format-tag: board format ---------------------------------------------------------
 
+    // ---- ADR-1: `external` became `system` -------------------------------------------------
+
+    #[test]
+    fn the_renamed_lane_reads_from_both_names_and_writes_only_the_new_one() {
+        assert_eq!(lane_from_str("system"), Some(Lane::System));
+        assert_eq!(
+            lane_from_str("external"),
+            Some(Lane::System),
+            "ADR-1 legacy value"
+        );
+        assert_eq!(
+            lane_to_str(Lane::System),
+            "system",
+            "only the new name is written"
+        );
+        let m = model_of(
+            r#"{"elements":[
+                {"id":"G1","type":"external","label":"legacy"},
+                {"id":"G2","type":"system","label":"current"}]}"#,
+        );
+        assert_eq!(m.elements.len(), 2);
+        assert!(m.elements.iter().all(|e| e.kind == Lane::System));
+    }
+
+    #[test]
+    fn an_off_grammar_type_drops_the_element_at_the_parse_boundary() {
+        let m = model_of(
+            r#"{"elements":[
+                {"id":"E1","type":"event","label":"A"},
+                {"id":"W1","type":"widget","label":"B"}]}"#,
+        );
+        assert_eq!(m.elements.len(), 1);
+        assert_eq!(m.elements[0].id, "E1");
+        assert_eq!(lane_from_str("widget"), None);
+    }
+
     #[test]
     fn format_defaults_to_event_storming_when_absent() {
         assert_eq!(format_declared(None), Ok(Format::EventStorming));
@@ -455,9 +591,36 @@ mod tests {
     }
 
     #[test]
+    fn an_element_the_board_cannot_place_is_counted_so_the_read_can_say_so() {
+        // Dropping it is right; dropping it in silence cost an authored sticky at `genesis`.
+        let j = json::parse(
+            r#"{"elements":[
+                 {"id":"E1","type":"event","label":"Paid"},
+                 {"id":"W1","type":"widget","label":"Gizmo"},
+                 {"id":"E2","label":"no type"}]}"#,
+        )
+        .unwrap();
+        let m = from_json(&j);
+        assert_eq!(m.elements.len(), 1);
+        assert_eq!(unreadable_elements(&j, &m), 2);
+
+        let clean =
+            json::parse(r#"{"elements":[{"id":"E1","type":"event","label":"Paid"}]}"#).unwrap();
+        assert_eq!(unreadable_elements(&clean, &from_json(&clean)), 0);
+    }
+
+    #[test]
+    fn a_format_tag_that_is_not_a_string_is_an_error_not_an_absent_tag() {
+        for tag in [r#"null"#, r#"42"#, r#"["bounded-context-canvas"]"#] {
+            let j = json::parse(&format!(r#"{{"format":{tag},"elements":[]}}"#)).unwrap();
+            assert!(format_tag(&j).is_err(), "{tag} read as an absent tag");
+        }
+        let absent = json::parse(r#"{"elements":[]}"#).unwrap();
+        assert_eq!(format_tag(&absent), Ok(Format::EventStorming));
+    }
+
+    #[test]
     fn load_refuses_a_model_file_declaring_a_format_this_build_cannot_project() {
-        // The model.json half of the same guard `parse_log` gives the log: without it, a foreign
-        // board renders as an empty event-storming one and exits 0.
         let dir = std::env::temp_dir().join(format!("faceto-fmt-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("foreign.model.json");
@@ -476,8 +639,6 @@ mod tests {
 
     #[test]
     fn format_to_str_is_the_inverse_of_format_from_str() {
-        // One variant today, so this reads as a single assertion rather than the loop its `level`
-        // sibling uses; `format_to_str` is exhaustive, so a second format cannot skip it.
         let format = Format::EventStorming;
         assert_eq!(format_from_str(format_to_str(format)), Some(format));
     }
@@ -631,7 +792,11 @@ mod tests {
     // left (repeat-safe). Empty board falls back to 0.
     #[test]
     fn lane_left_col_aligns_a_first_element_but_prepends_within_a_lane() {
-        assert_eq!(lane_left_col(&Model::default(), "event"), 0, "empty board");
+        assert_eq!(
+            lane_left_col(&Model::default(), Lane::Event),
+            0,
+            "empty board"
+        );
         let m = model_of(
             r#"{"elements":[
                 {"id":"E1","type":"event","label":"A","col":3},
@@ -639,19 +804,19 @@ mod tests {
         );
         // first element of an *empty* lane lands in the board's first column — no shift.
         assert_eq!(
-            lane_left_col(&m, "actor"),
+            lane_left_col(&m, Lane::Actor),
             3,
             "empty lane aligns to first col"
         );
         // a *non-empty* lane prepends one column further left.
-        assert_eq!(lane_left_col(&m, "event"), 2, "non-empty lane prepends");
+        assert_eq!(lane_left_col(&m, Lane::Event), 2, "non-empty lane prepends");
         // after one prepend the lowest col is 2; the next must march to 1, not back to 3.
         let m2 = model_of(
             r#"{"elements":[
                 {"id":"E1","type":"event","label":"A","col":2},
                 {"id":"E2","type":"event","label":"B","col":3}]}"#,
         );
-        assert_eq!(lane_left_col(&m2, "event"), 1, "repeat marches left");
+        assert_eq!(lane_left_col(&m2, Lane::Event), 1, "repeat marches left");
     }
 
     // The tuple's third slot was the internal diff channel, reachable from an authored file: a

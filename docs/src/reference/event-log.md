@@ -33,7 +33,10 @@ difference between a typo and a schema you have not met yet:
 | an unknown `event` kind | **skipped**, silently |
 | a line with no `event` key, or a non-string one | **skipped**, silently — a typo'd key loses the fact |
 | a `BoardFormat` naming a format this build cannot project | **hard error** |
+| an `ElementAdded` whose `type` names no lane this build knows | **skipped**, silently — there is no lane to put it in |
+| any other record naming an unknown lane (an `ElementMoved`'s optional `type`) | the lane is **dropped**, the rest of the record applies |
 | records present, but **not one** of a recognised kind | **hard error** |
+| records present, none projectable, and at least one naming an unknown lane | **hard error** |
 
 The last two rows arrived with the [format tag](./board-formats.md), and they are the one place the
 skipping rule is suspended. Skipping unknown kinds is how an older faceto reads a newer log — and it
@@ -41,6 +44,27 @@ is also, pointed the other way, how a *different board format's* log reads as an
 event-storming board. Nothing in a line distinguishes the two. So the count decides: a log carrying
 some recognised events keeps the lenient reading, while a log carrying **none** has told the reader
 nothing it can project, and says so instead of drawing a blank board.
+
+Only *named* kinds count towards the foreign-format row. A line with no `event` key names no kind
+at all, so it stays a silent skip: a typo is a broken line, not evidence of another notation. An
+unknown **lane** does not count towards it either — the kinds there were ours, so the log is not
+from another notation, only from a faceto that knows a lane this one does not. That case gets its
+own error saying so.
+
+Only `ElementAdded` and `ElementMoved` read `type` as a lane. On any other kind it is a field this
+build does not know, and the rule above applies unchanged: unknown fields are ignored, never read as
+an off-grammar lane.
+
+### Skipping is safe to render, and not safe to fold
+
+A skipped record is missing from the projection but still present in the log, so rendering or
+serving a log with skips simply draws less than the file holds. A record read *minus* its lane
+counts the same way: an `ElementMoved` carrying both a `col` and a `type` this build cannot name
+still moves the sticky — the column is unambiguous and throwing it away lost a fact for nothing —
+but the lane change it also carried did not survive the read. [`faceto compact`](./cli/compact.md)
+is the exception: it rewrites the log *from* the projection, so a skipped record would be deleted
+from the append-only truth. It therefore **refuses to fold a log it could not fully read** and exits
+1, leaving the file untouched — compact with a build that reads the whole log.
 
 The third row is the one worth dwelling on. A malformed *known* event is a fact that exists in the
 append-only truth but would vanish from the projection, so it stops the read rather than quietly
@@ -91,7 +115,7 @@ Never write an id yourself into a live board. `serve` mints `<PREFIX><N>` under 
 past the highest suffix **ever** used under that prefix — so a removed id is never handed out again,
 and two concurrent adds cannot collide.
 
-| Lane | `actor` | `command` | `aggregate` | `event` | `policy` | `readmodel` | `external` | `hotspot` |
+| Lane | `actor` | `command` | `aggregate` | `event` | `policy` | `readmodel` | `system` | `hotspot` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Prefix | `X` | `C` | `A` | `E` | `P` | `R` | `G` | `H` |
 

@@ -14,21 +14,21 @@
 use crate::model::Model;
 
 use super::style::{colour, text_dark, LANES};
+use crate::model::{lane_to_str, Lane};
 
 /// The Mermaid `flowchart` shape delimiters for a lane `type` — one distinct shape per lane so the
 /// 8-lane grammar survives visually without polluting the label text. Kept in one place next to the
 /// lane list it mirrors.
-fn shape(kind: &str) -> (&'static str, &'static str) {
-    match kind {
-        "actor" => ("([", "])"),     // stadium
-        "command" => ("[", "]"),     // rectangle
-        "aggregate" => ("[[", "]]"), // subroutine
-        "event" => ("(", ")"),       // rounded
-        "policy" => ("{{", "}}"),    // hexagon
-        "readmodel" => ("[/", "/]"), // parallelogram
-        "external" => ("[(", ")]"),  // cylinder
-        "hotspot" => ("{", "}"),     // rhombus
-        _ => ("[", "]"),             // off-grammar types are filtered out before this; be safe
+fn shape(lane: Lane) -> (&'static str, &'static str) {
+    match lane {
+        Lane::Actor => ("([", "])"),     // stadium
+        Lane::Command => ("[", "]"),     // rectangle
+        Lane::Aggregate => ("[[", "]]"), // subroutine
+        Lane::Event => ("(", ")"),       // rounded
+        Lane::Policy => ("{{", "}}"),    // hexagon
+        Lane::ReadModel => ("[/", "/]"), // parallelogram
+        Lane::System => ("[(", ")]"),    // cylinder
+        Lane::Hotspot => ("{", "}"),     // rhombus
     }
 }
 
@@ -70,16 +70,11 @@ pub fn render_mermaid(model: &Model) -> String {
     out.push_str(DEGRADATION_HEADER);
     out.push('\n');
 
-    // Surviving elements = on-grammar types only (mirrors svg.rs's `retain`).
-    let live: Vec<&crate::model::Element> = model
-        .elements
-        .iter()
-        .filter(|e| LANES.contains(&e.kind.as_str()))
-        .collect();
+    let live: Vec<&crate::model::Element> = model.elements.iter().collect();
 
     // Nodes, in model order.
     for e in &live {
-        let (open, close) = shape(&e.kind);
+        let (open, close) = shape(e.kind);
         out.push_str(&format!(
             "  {}{}\"{}\"{}\n",
             e.id,
@@ -120,13 +115,14 @@ pub fn render_mermaid(model: &Model) -> String {
             wrote_class = true;
         }
         let text = if text_dark(kind) { "#000" } else { "#fff" };
+        let name = lane_to_str(kind);
         out.push_str(&format!(
             "  classDef {} fill:{},color:{}\n",
-            kind,
+            name,
             colour(kind),
             text
         ));
-        out.push_str(&format!("  class {} {}\n", ids.join(","), kind));
+        out.push_str(&format!("  class {} {}\n", ids.join(","), name));
     }
 
     out
