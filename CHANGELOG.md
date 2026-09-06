@@ -31,7 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it could not project, exits 1, and leaves the log untouched (no `.bak`, no rewrite): the log is
   not broken, this build is simply not the one that should be folding it. Relatedly, a log whose
   records all name an **unknown lane** no longer reports itself as coming from another board
-  format — the event kinds were recognised, only the lane was not, so it gets its own message.
+  format — the event kinds were recognised, only the lane was not, so it gets its own message. A
+  line naming no event kind at all blocks the fold too, under a second message: a typo'd key is a
+  broken line, and no future faceto will read it, so "compact with a build that does" would be
+  advice that never comes true. Repair or remove the line instead.
 
 - **A log faceto cannot project is now an error, not an empty board.** Skipping unrecognised event
   kinds is how an older faceto reads a newer log; pointed at a log from a *different* notation, the

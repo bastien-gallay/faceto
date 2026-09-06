@@ -27,7 +27,7 @@ pub fn read_log(path: &Path) -> Result<Vec<Event>, String> {
     Ok(read_log_full(path)?.events)
 }
 
-/// [`read_log`], keeping the skipped-record count — the read `compact` must use.
+/// [`read_log`], keeping the unprojected-record counts — the read `compact` must use.
 pub fn read_log_full(path: &Path) -> Result<LogRead, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {}", path.display(), e))?;
     parse_log_full(&text)
@@ -54,21 +54,30 @@ pub fn parse_log(text: &str) -> Result<Vec<Event>, String> {
     Ok(parse_log_full(text)?.events)
 }
 
-/// A log read, plus the number of records it could not project. `skipped` is the count `compact`
-/// needs: folding a log rewrites it from the projection, so a record the read dropped would be
-/// **deleted from append-only truth**. Every other caller only renders, and can ignore it.
+/// A log read, plus what it could not project. Folding a log rewrites it from the projection, so
+/// a dropped record would be **deleted from append-only truth** — the two counts are what `compact`
+/// refuses on. Every other caller only renders, and can ignore them.
+///
+/// They are separate because the remedies are opposite: `unread` waits for a build that knows the
+/// schema, `corrupt` waits for a human to repair the line.
 pub struct LogRead {
     pub events: Vec<Event>,
-    pub skipped: usize,
+    /// Records this build cannot project but a newer faceto could: an unknown kind, or a lane
+    /// outside this build's grammar.
+    pub unread: usize,
+    /// Records no build will ever project: a line naming no event kind.
+    pub corrupt: usize,
 }
 
-/// [`parse_log`], keeping the count of records it skipped.
+/// [`parse_log`], keeping the counts of what it could not project.
 pub fn parse_log_full(text: &str) -> Result<LogRead, String> {
     let mut events = Vec::new();
+    let mut records = 0usize;
     let mut foreign = 0usize;
     let mut unknown_lane = 0usize;
     let mut unnamed = 0usize;
     for (n, line) in jsonl_records(text) {
+        records += 1;
         let j = json::parse(line).map_err(|e| format!("event-log line {}: {}", n, e))?;
         match parse_event(&j) {
             Ok(ev) => {
@@ -103,20 +112,21 @@ pub fn parse_log_full(text: &str) -> Result<LogRead, String> {
             return Err(format!(
                 "event-log: {} record(s), none of a recognised event kind — this log is from \
                  another board format, or from a newer faceto",
-                foreign
+                records
             ));
         }
         if unknown_lane > 0 {
             return Err(format!(
-                "event-log: {} record(s), every one naming a lane this faceto does not know — \
-                 the log is from a newer faceto",
-                unknown_lane
+                "event-log: {} record(s) and no readable board — {} of them name a lane this \
+                 faceto does not know, so the log is from a newer faceto",
+                records, unknown_lane
             ));
         }
     }
     Ok(LogRead {
         events,
-        skipped: foreign + unknown_lane + unnamed,
+        unread: foreign + unknown_lane,
+        corrupt: unnamed,
     })
 }
 
@@ -145,7 +155,7 @@ mod tests {
         ));
         // Still not read in full, so `compact` must refuse it: the lane change is real data and
         // folding from the projection would delete it.
-        assert_eq!(read.skipped, 1);
+        assert_eq!(read.unread, 1);
     }
 
     #[test]
@@ -157,7 +167,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read.events.len(), 1);
-        assert_eq!(read.skipped, 1);
+        assert_eq!(read.unread, 1);
     }
 
     #[test]
@@ -223,7 +233,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read.events.len(), 1);
-        assert_eq!(read.skipped, 2, "one unknown lane + one unknown kind");
+        assert_eq!(read.unread, 2, "one unknown lane + one unknown kind");
     }
 
     #[test]
@@ -234,6 +244,46 @@ mod tests {
             .unwrap()
             .is_empty());
         assert!(parse_log("[1,2]").unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_unrelated_type_field_is_not_a_lane_this_build_cannot_read() {
+        // The log grammar ignores fields it does not know, so a `type` on a kind that carries no
+        // lane is legal data — reading it as an off-grammar lane made `compact` refuse a log it
+        // had in fact read in full.
+        let read = parse_log_full(
+            "{\"event\":\"BoardTitled\",\"title\":\"T\",\"type\":\"heading\"}\n\
+             {\"event\":\"ElementAdded\",\"id\":\"E1\",\"type\":\"event\",\"label\":\"A\"}\n",
+        )
+        .unwrap();
+        assert_eq!(read.events.len(), 2);
+        assert_eq!(read.unread, 0);
+    }
+
+    #[test]
+    fn a_corrupt_line_is_counted_apart_from_one_a_newer_faceto_would_read() {
+        // The two need opposite remedies — wait for a build that knows the schema, or repair the
+        // line by hand. One count can only offer one of them, and would offer the wrong one.
+        let read = parse_log_full(
+            "{\"event\":\"ElementAdded\",\"id\":\"E1\",\"type\":\"event\",\"label\":\"A\"}\n\
+             {\"evnet\":\"typo\",\"x\":1}\n\
+             {\"event\":\"FromTheFuture\",\"x\":1}\n",
+        )
+        .unwrap();
+        assert_eq!(read.unread, 1);
+        assert_eq!(read.corrupt, 1);
+    }
+
+    #[test]
+    fn the_nothing_readable_errors_count_every_record_they_read() {
+        // The count names the file, so it must be the file's: reporting only the records that hit
+        // one counter told the reader a two-line log had one line.
+        let err = parse_log(
+            "{\"event\":\"CanvasNamed\",\"name\":\"B\"}\n\
+             {\"evnet\":\"typo\",\"x\":1}\n",
+        )
+        .unwrap_err();
+        assert!(err.contains("2 record(s)"), "{}", err);
     }
 
     #[test]

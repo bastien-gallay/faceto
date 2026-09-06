@@ -36,7 +36,7 @@ difference between a typo and a schema you have not met yet:
 | an `ElementAdded` whose `type` names no lane this build knows | **skipped**, silently — there is no lane to put it in |
 | any other record naming an unknown lane (an `ElementMoved`'s optional `type`) | the lane is **dropped**, the rest of the record applies |
 | records present, but **not one** of a recognised kind | **hard error** |
-| records present, but **every one** naming an unknown lane | **hard error** |
+| records present, none projectable, and at least one naming an unknown lane | **hard error** |
 
 The last two rows arrived with the [format tag](./board-formats.md), and they are the one place the
 skipping rule is suspended. Skipping unknown kinds is how an older faceto reads a newer log — and it
@@ -50,6 +50,10 @@ at all, so it stays a silent skip: a typo is a broken line, not evidence of anot
 unknown **lane** does not count towards it either — the kinds there were ours, so the log is not
 from another notation, only from a faceto that knows a lane this one does not. That case gets its
 own error saying so.
+
+Only `ElementAdded` and `ElementMoved` read `type` as a lane. On any other kind it is a field this
+build does not know, and the rule above applies unchanged: unknown fields are ignored, never read as
+an off-grammar lane.
 
 ### Skipping is safe to render, and not safe to fold
 

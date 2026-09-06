@@ -116,17 +116,29 @@ pub(crate) fn parse_event(raw: &Json) -> Result<Event, Rejected> {
     build_event(event).ok_or(Rejected::Malformed)
 }
 
-/// Whether the record carries a `type` that is a string but no lane. An absent or non-string
-/// `type` is not this case — that is either a kind with no lane at all, or a malformed line.
+/// The two kinds whose `type` field is a lane. On every other kind `type` is a field this build
+/// does not know, which the log grammar promises to ignore rather than read as an off-grammar lane.
+fn carries_a_lane(kind: &str) -> bool {
+    matches!(kind, "ElementAdded" | "ElementMoved")
+}
+
+/// Whether the record names a lane outside this build's grammar. An absent or non-string `type`,
+/// or one on a kind that has no lane, is not this case.
 ///
 /// Two callers, for the two things this means. [`parse_event`] rejects the record where the lane
 /// is required. `parse_log_full` counts it either way: a record read *minus* its lane was still
 /// not read in full, and `compact` folds from the projection, so it must refuse that log too.
-pub(crate) fn names_an_unknown_lane(event: &Json) -> bool {
+pub(crate) fn names_an_unknown_lane(raw: &Json) -> bool {
+    let event = upcast(raw);
+    let event = event.as_ref();
     event
-        .get("type")
+        .get("event")
         .and_then(Json::as_str)
-        .is_some_and(|t| crate::model::lane_from_str(t).is_none())
+        .is_some_and(carries_a_lane)
+        && event
+            .get("type")
+            .and_then(Json::as_str)
+            .is_some_and(|t| crate::model::lane_from_str(t).is_none())
 }
 
 /// Build the event for an already-vetted current-schema record, or `None` if a required field is

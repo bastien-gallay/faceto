@@ -692,15 +692,23 @@ fn cmd_compact(log_path: &str) {
         }
     };
     // Folding rewrites the log from the projection, so anything the read could not project would
-    // be **deleted from append-only truth** — an element in a lane this build does not know, and
-    // silently, exit 0. Refuse instead: the log is fine, this build is the one that cannot read
-    // all of it, and a newer faceto will fold it losslessly.
-    if read.skipped > 0 {
+    // be **deleted from append-only truth**, silently, exit 0. Refuse instead — and name the
+    // remedy that actually applies, since no future faceto will ever read a mistyped line.
+    if read.unread > 0 {
         eprintln!(
             "error: {} refuses to compact — {} record(s) could not be projected by this build, \
              and folding would delete them from the log. Compact with a faceto that reads them.",
             path.display(),
-            read.skipped
+            read.unread
+        );
+        exit(1);
+    }
+    if read.corrupt > 0 {
+        eprintln!(
+            "error: {} refuses to compact — {} line(s) name no event kind, and folding would \
+             delete them from the log. Repair or remove those lines first.",
+            path.display(),
+            read.corrupt
         );
         exit(1);
     }

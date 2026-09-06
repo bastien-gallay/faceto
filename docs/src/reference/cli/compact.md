@@ -51,6 +51,15 @@ the lane will fold it losslessly. This is the one place the log's forgiving read
 enough on their own — everywhere else, skipping a record costs you a sticky on screen and nothing
 in the file.
 
+A line that names **no** `event` kind at all is refused too, and separately — no future faceto will
+ever read `{"evnet":…}`, so waiting for one is not the remedy:
+
+```console
+$ faceto compact board.event-log.jsonl
+error: board.event-log.jsonl refuses to compact — 1 line(s) name no event kind, and folding
+would delete them from the log. Repair or remove those lines first.
+```
+
 ## The backup is not optional
 
 Before the truth file is overwritten in place, the previous log is copied to `<log>.bak`. If you
