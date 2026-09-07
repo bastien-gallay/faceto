@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose `type` is not one of the eight lanes is **dropped when the file or log is read** rather
   than carried into the board and filtered out again at draw time (the drawn board is unchanged —
   it was never drawn), and `faceto extract --type` now **refuses a misspelled lane by name**
-  instead of cutting an empty board. The rendered SVG, HTML and context pack are byte-identical.
+  instead of cutting an empty board. The rendered board is otherwise unchanged — no id moves, no
+  sticky changes colour — with one exception the rename makes unavoidable: the lane label every
+  board draws now reads `system` where it read `external`.
 
 - **`faceto compact` refuses a log it cannot fully read**, instead of deleting the parts it could
   not project. Compaction rewrites the log from the replayed board, so a sticky whose `type` names
