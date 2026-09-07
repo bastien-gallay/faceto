@@ -587,7 +587,7 @@ mod tests {
                         dropped.insert(id.to_string());
                     }
                 }
-                log.extend(comment_to_events(v));
+                log.extend(posted(v));
             }
             let model = replay(&log);
             let present: std::collections::HashSet<&str> =

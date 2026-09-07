@@ -294,7 +294,7 @@ mod tests {
         ) {
             let (mut log, _ids) = genesis();
             for v in &comments {
-                log.extend(comment_to_events(v));
+                log.extend(posted(v));
             }
             prop_assert_eq!(replay(&compact(&log)), replay(&log));
         }
