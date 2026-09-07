@@ -42,8 +42,9 @@ leaves the log untouched** — no `.bak`, no rewrite:
 
 ```console
 $ faceto compact board.event-log.jsonl
-error: board.event-log.jsonl refuses to compact — 1 record(s) could not be projected by this
-build, and folding would delete them from the log. Compact with a faceto that reads them.
+error: board.event-log.jsonl refuses to compact — folding would delete from the log what this
+read could not project.
+  1 record(s) could not be projected by this build. Compact with a faceto that reads them.
 ```
 
 The log is not broken; this build is the one that cannot read all of it. A newer faceto that knows
@@ -51,13 +52,16 @@ the lane will fold it losslessly. This is the one place the log's forgiving read
 enough on their own — everywhere else, skipping a record costs you a sticky on screen and nothing
 in the file.
 
-A line that names **no** `event` kind at all is refused too, and separately — no future faceto will
-ever read `{"evnet":…}`, so waiting for one is not the remedy:
+A line that names **no** `event` kind at all is refused too, and it is a different problem: no
+future faceto will ever read `{"evnet":…}`, so waiting for one is not the remedy. A log carrying
+both is told both at once, repair first, because that is the half you can act on today:
 
 ```console
 $ faceto compact board.event-log.jsonl
-error: board.event-log.jsonl refuses to compact — 1 line(s) name no event kind, and folding
-would delete them from the log. Repair or remove those lines first.
+error: board.event-log.jsonl refuses to compact — folding would delete from the log what this
+read could not project.
+  1 line(s) name no event kind. Repair or remove those lines first — no faceto will ever read them.
+  1 record(s) could not be projected by this build. Compact with a faceto that reads them.
 ```
 
 ## The backup is not optional

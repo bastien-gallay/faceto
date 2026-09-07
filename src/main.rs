@@ -692,24 +692,30 @@ fn cmd_compact(log_path: &str) {
         }
     };
     // Folding rewrites the log from the projection, so anything the read could not project would
-    // be **deleted from append-only truth**, silently, exit 0. Refuse instead — and name the
-    // remedy that actually applies, since no future faceto will ever read a mistyped line.
-    if read.unread > 0 {
+    // be **deleted from append-only truth**, silently, exit 0. Refuse instead, and say both halves
+    // in one pass: reported one at a time, a log carrying both showed the wait the user cannot act
+    // on and hid the repair they can behind a second run. The repair goes first for the same
+    // reason.
+    if read.corrupt > 0 || read.unread > 0 {
         eprintln!(
-            "error: {} refuses to compact — {} record(s) could not be projected by this build, \
-             and folding would delete them from the log. Compact with a faceto that reads them.",
-            path.display(),
-            read.unread
+            "error: {} refuses to compact — folding would delete from the log what this read \
+             could not project.",
+            path.display()
         );
-        exit(1);
-    }
-    if read.corrupt > 0 {
-        eprintln!(
-            "error: {} refuses to compact — {} line(s) name no event kind, and folding would \
-             delete them from the log. Repair or remove those lines first.",
-            path.display(),
-            read.corrupt
-        );
+        if read.corrupt > 0 {
+            eprintln!(
+                "  {} line(s) name no event kind. Repair or remove those lines first — no faceto \
+                 will ever read them.",
+                read.corrupt
+            );
+        }
+        if read.unread > 0 {
+            eprintln!(
+                "  {} record(s) could not be projected by this build. Compact with a faceto that \
+                 reads them.",
+                read.unread
+            );
+        }
         exit(1);
     }
     let original = read.events;
