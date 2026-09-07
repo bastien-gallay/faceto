@@ -64,7 +64,7 @@ recorded in the rows that renamed them: `src/events/comments.rs` → `src/events
 `src/serve/comment.rs` → `src/serve/mint.rs`.
 
 ```text
-faceto is on main at 679a7d1, plus this wrap's reconciliation. just ci is green end to end;
+faceto is on main at 34bddc8, the wrap of 2026-09-07 (PR #158). just ci is green end to end;
 the Rust suite alone is 251 tests, and just ci also runs the client-logic checks in node.
 Read ROADMAP.md "Where this stands" first, then the F-lane-enum and F-typed-command rows.
 Next action: answer the #115 question above, then pick from the ranked list — the three Now
