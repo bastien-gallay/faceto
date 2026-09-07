@@ -25,12 +25,35 @@ pub fn lane_prefix(lane: Lane) -> char {
 
 /// A lane's vertical rank in the fixed 8-lane grammar (`actor` = 0 … `hotspot` = 7). Used as the
 /// y-band when ordering a crowded cell's members by their edge neighbours (F-edge-routing Lever A).
-pub(crate) fn lane_index(lane: Lane) -> usize {
-    LANES
-        .iter()
-        .position(|&l| l == lane)
-        .expect("LANES is total")
+///
+/// Exhaustive, not a `LANES` lookup: the lookup could not answer for a lane missing from the array,
+/// and the `expect` that covered it turned that into a panic on the first board that drew one — the
+/// failure class the `Lane` enum exists to remove, moved rather than closed. A ninth lane now stops
+/// the build here instead. What it still cannot stop is that lane being given a rank and left out
+/// of `LANES`, which draws no band for it; the two are checked against each other below, but only
+/// over the ranks `LANES` already holds.
+pub(crate) const fn lane_index(lane: Lane) -> usize {
+    match lane {
+        Lane::Actor => 0,
+        Lane::Command => 1,
+        Lane::Aggregate => 2,
+        Lane::Event => 3,
+        Lane::Policy => 4,
+        Lane::ReadModel => 5,
+        Lane::System => 6,
+        Lane::Hotspot => 7,
+    }
 }
+
+/// `LANES` and [`lane_index`] state one order twice. This fails the build if they ever say
+/// different things — a reordered array, a duplicated entry, a rank that skips a band.
+const _: () = {
+    let mut i = 0;
+    while i < LANES.len() {
+        assert!(lane_index(LANES[i]) == i);
+        i += 1;
+    }
+};
 
 /// `command` and `hotspot` sit deeper than their classic event-storming swatches so white label
 /// text clears WCAG 4.5:1 — restoring the lighter originals fails contrast.
