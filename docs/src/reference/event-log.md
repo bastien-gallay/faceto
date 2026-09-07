@@ -22,8 +22,8 @@ A JSON Schema for one line ships at `docs/schema/event-log-line.schema.json`.
 {"event":"ElementAnnotated","id":"E1","text":"is this the pivotal one?"}
 ```
 
-File order **is** causal order. Reading applies five rules, and the difference between them is the
-difference between a typo and a schema you have not met yet:
+File order **is** causal order. Reading applies the rules in this table, and the difference between
+them is the difference between a typo and a schema you have not met yet:
 
 | Line | Outcome |
 | --- | --- |
@@ -36,12 +36,13 @@ difference between a typo and a schema you have not met yet:
 | an `ElementAdded` whose `type` names no lane this build knows | **skipped**, silently — there is no lane to put it in |
 | any other record naming an unknown lane (an `ElementMoved`'s optional `type`) | the lane is **dropped**, the rest of the record applies |
 | records present, but **not one** of a recognised kind | **hard error** |
-| records present, none projectable, and at least one naming an unknown lane | **hard error** |
+| records present, but **none projectable**, and at least one naming an unknown lane | **hard error** |
 
-The last two rows arrived with the [format tag](./board-formats.md), and they are the one place the
-skipping rule is suspended. Skipping unknown kinds is how an older faceto reads a newer log — and it
-is also, pointed the other way, how a *different board format's* log reads as an empty
-event-storming board. Nothing in a line distinguishes the two. So the count decides: a log carrying
+The two **records present, but…** rows arrived with the [format tag](./board-formats.md) and the
+lane grammar, and they are the one place the skipping rule is suspended. Skipping unknown kinds is
+how an older faceto reads a newer log — and it is also, pointed the other way, how a *different
+board format's* log reads as an empty event-storming board. Nothing in a line distinguishes the
+two. So the count decides: a log carrying
 some recognised events keeps the lenient reading, while a log carrying **none** has told the reader
 nothing it can project, and says so instead of drawing a blank board.
 
