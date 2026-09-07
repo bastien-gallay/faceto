@@ -36,13 +36,11 @@ const LANE_HEADINGS: [&str; LANES.len()] = [
     "Hotspots",
 ];
 
-/// The plural heading for a lane `type`. `LANES` is the single source of truth for the order;
-/// `"Other"` is unreachable in practice (callers only pass on-grammar kinds) but keeps this total.
+/// The plural heading for a lane. Indexed by [`lane_index`], which is exhaustive, so this is total
+/// without a fallback — and `LANE_HEADINGS` is sized from `LANES`, so the two cannot fall out of
+/// step without failing the build.
 fn lane_heading(lane: Lane) -> &'static str {
-    LANE_HEADINGS[LANES
-        .iter()
-        .position(|&l| l == lane)
-        .expect("LANES is total")]
+    LANE_HEADINGS[super::style::lane_index(lane)]
 }
 
 /// Escape the markdown-active characters that would otherwise break inline prose or bullet text.

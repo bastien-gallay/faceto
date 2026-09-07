@@ -62,9 +62,9 @@ pub const DEGRADATION_NOTICE: &str =
 /// order) → edges (model order) → per-type `classDef` + `class` assignment (in `LANES` order, only
 /// for types actually present). Left→right mirrors the board's time axis.
 ///
-/// Parity with `render_svg`: elements whose `kind` is off the 8-lane grammar are dropped, and edges
-/// touching a dropped or undefined endpoint are skipped — so the two renderers always draw the same
-/// board.
+/// Parity with `render_svg`: an edge touching an undefined endpoint is skipped, so the two
+/// renderers always draw the same board. Neither drops elements any more — an off-grammar `kind`
+/// stopped being representable when `type` became `Lane`.
 pub fn render_mermaid(model: &Model) -> String {
     let mut out = String::from("flowchart LR\n");
     out.push_str(DEGRADATION_HEADER);
