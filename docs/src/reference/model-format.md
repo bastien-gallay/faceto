@@ -50,14 +50,15 @@ Every top-level field is optional. `{}` is a valid — empty — board.
 `level` is parsed leniently — anything that is not `"design"` reads as big-picture — but author only
 the two documented values. `format` is the exception to that leniency: a value faceto does not
 recognise is **refused at load**, because a board it cannot project would otherwise render as an
-empty event-storming one. See [board formats](./board-formats.md).
+empty event-storming one. A `format` that is present but not a string (`null`, a number, an array)
+is refused for the same reason, rather than read as an absent tag. See [board formats](./board-formats.md).
 
 ## `elements`
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `id` | string | **yes** | Stable identity: the comment join key *and* the diff key. Never derived from text or position. |
-| `type` | string | **yes** | One of the eight lanes — `actor`, `command`, `aggregate`, `event`, `policy`, `readmodel`, `external`, `hotspot`. Selects the lane *and* the colour. |
+| `type` | string | **yes** | One of the eight lanes — `actor`, `command`, `aggregate`, `event`, `policy`, `readmodel`, `system`, `hotspot`. Selects the lane *and* the colour. `external` is read as a legacy spelling of `system`. |
 | `label` | string | **yes** | The sticky's headline text. |
 | `col` | integer | no | Global timeline coordinate. Omit to auto-assign in file order. |
 | `detail` | string | no | A smaller second line under the label. With no `detail`, a trailing `(parenthetical)` in the label becomes one — an explicit `detail` wins. |
@@ -71,8 +72,14 @@ Three rules govern these fields and nothing overrides them:
   renumbering silently reassigns every comment and every diff verdict attached to that sticky.
 - **`col` is a global timeline coordinate**, shared across all lanes (left→right = time), *not* a
   per-lane index. Order within a lane is just sort-by-`col`.
-- **`type` selects the lane and the colour** from the fixed eight-lane grammar. An off-grammar value
-  does not crash the renderer, but it has no lane, so it is not drawn.
+- **`type` selects the lane and the colour** from the fixed eight-lane grammar. A value outside it
+  names no lane, so the element is **dropped on read** — the file still loads, and the rest of the
+  board is unaffected. Reading a model file **warns** on the count it dropped (an unreadable entry
+  is also one missing an `id` or a `label`), because the drop is otherwise invisible and
+  [`genesis`](./cli/genesis.md) writes only the survivors into the log while keeping the edges that
+  pointed at them. The same rule applies to a log: an `ElementAdded` naming a lane this faceto
+  does not know is skipped, the way an unknown event kind is, so a board written by a faceto with
+  more lanes still reads here minus the stickies there is nowhere to put.
 
 `y` is an ordering key more than a coordinate: it is clamped into `[0, 1]` on read, and an absent
 `y` means exactly the same thing as the neutral `0.5`.

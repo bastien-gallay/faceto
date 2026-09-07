@@ -10,6 +10,7 @@
 //! This stage is pure and depends on nothing downstream: `Model -> Vec<Finding>`, no IO, no
 //! clocks. The CLI (`main.rs`) owns loading the board and printing the findings.
 
+use crate::model::Lane;
 use crate::model::{Level, Model};
 use std::collections::HashSet;
 
@@ -61,8 +62,8 @@ pub fn lint(m: &Model) -> Vec<Finding> {
         let id = e.id.as_str();
         let inbound = has_inbound.contains(id);
         let outbound = has_outbound.contains(id);
-        match e.kind.as_str() {
-            "event" => {
+        match e.kind {
+            Lane::Event => {
                 if !inbound {
                     findings.push(Finding {
                         rule: "event-no-producer",
@@ -78,7 +79,7 @@ pub fn lint(m: &Model) -> Vec<Finding> {
                     });
                 }
             }
-            "policy" => {
+            Lane::Policy => {
                 if !inbound {
                     findings.push(Finding {
                         rule: "policy-no-input",
@@ -98,7 +99,7 @@ pub fn lint(m: &Model) -> Vec<Finding> {
             // sketched before its event is legitimate incompleteness, so the rule is gated to a
             // filled-in `design` board — the same producer/consumer obligation the event/policy
             // rules enforce, applied to a command's outbound side.
-            "command" if m.level == Level::Design && !outbound => {
+            Lane::Command if m.level == Level::Design && !outbound => {
                 findings.push(Finding {
                     rule: "command-no-output",
                     element_id: e.id.clone(),

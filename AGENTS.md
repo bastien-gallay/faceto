@@ -183,9 +183,12 @@ come from violating them:
   rule lived inside `board_scene` until F-extract, so `extract --region` judged membership on the
   raw field and silently cut away stickies the board was visibly drawing inside that band (#142).
   The same shape will recur for any future pass that reasons about placement.
-- **`type` selects the lane and colour** from the fixed 8-lane grammar: `actor`, `command`,
-  `aggregate`, `event`, `policy`, `readmodel`, `external`, `hotspot`. Keep `LANES` (`src/render/`) and
-  this set in sync.
+- **`type` is a `model::Lane`**, not a string — the closed 8-lane grammar, whose set *and*
+  top-to-bottom order are the single `model::LANES` array (`render::style` re-exports it, so the
+  two can no longer drift). `colour` / `lane_index` / `lane_prefix` are total; an off-grammar value
+  is dropped at every read boundary rather than carried into the model. The lanes, in order:
+  `actor`, `command`, `aggregate`, `event`, `policy`, `readmodel`, `system`, `hotspot` (`external`
+  is read as the pre-ADR-1 spelling of `system`, and never written).
 
 `render::diff_boards` joins old vs new on `id` and returns **two** values: the union board (a
 plain `Model` — the new side's layout plus the old side's ghosts) and an `Overlay` judging each
@@ -193,6 +196,13 @@ element `added` / `removed` / `changed` (label differs) / `moved` (col, type, or
 differs — compared through `model::y_key`, so "no y" and the neutral `0.5` are one state) /
 `unchanged`. Layout follows the new side. The overlay is a *render* argument, passed beside the
 board exactly like the `View` lens — never a field on it, never in the log.
+
+It has a **precondition the signature does not carry**: both sides must be one `format`. The join
+key is `id`, which names a different thing in each grammar, so a cross-format overlay would judge
+unrelated stickies `moved` and tag the union board with whichever side happened to be newer.
+`render::comparable(base, new)` is that check, and it lives at the CLI boundary — `render --base`
+before rendering, `serve --base` at startup — because `--base` accepts a `model.json` *or* a log on
+either side, so the two files only meet there. `diff_boards` itself stays infallible.
 
 ### Event-sourced spine (do not break these)
 

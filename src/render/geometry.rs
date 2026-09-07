@@ -1,5 +1,6 @@
 //! Edge geometry and within-cell ordering — pure layout math, no SVG strings.
 use super::style::*;
+use crate::model::Lane;
 use crate::model::{Edge, Element};
 use std::collections::HashMap;
 
@@ -51,8 +52,8 @@ pub(crate) fn cell_sub_order(
     elements: &[Element],
     edges: &[Edge],
     idx_of: &HashMap<&str, usize>,
-) -> (Vec<i64>, HashMap<(String, i64), i64>) {
-    let band = |j: usize| lane_index(&elements[j].kind) as f64;
+) -> (Vec<i64>, HashMap<(Lane, i64), i64>) {
+    let band = |j: usize| lane_index(elements[j].kind) as f64;
     // Running barycenter: a sum of neighbour bands and a count per node — no per-node Vec allocated.
     let mut bsum = vec![0.0_f64; elements.len()];
     let mut bcnt = vec![0u32; elements.len()];
@@ -72,10 +73,10 @@ pub(crate) fn cell_sub_order(
         }
     };
 
-    let mut cell_members: HashMap<(String, i64), Vec<usize>> = HashMap::new();
+    let mut cell_members: HashMap<(Lane, i64), Vec<usize>> = HashMap::new();
     for (i, e) in elements.iter().enumerate() {
         cell_members
-            .entry((e.kind.clone(), e.col.unwrap()))
+            .entry((e.kind, e.col.unwrap()))
             .or_default()
             .push(i);
     }
@@ -99,7 +100,7 @@ pub(crate) fn cell_sub_order(
         }
     }
     // `cell_total` is just each cell's count — derive it by consuming `cell_members` (no key clones).
-    let cell_total = cell_members
+    let cell_total: HashMap<(Lane, i64), i64> = cell_members
         .into_iter()
         .map(|(k, v)| (k, v.len() as i64))
         .collect();

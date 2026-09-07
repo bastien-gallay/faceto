@@ -9,7 +9,7 @@
 use self::hash::fnv12;
 use self::http::handle;
 use self::ids::{mint_id, mint_region_id};
-use crate::model::Model;
+use crate::model::{Lane, Model};
 use crate::{events, model};
 use std::collections::{HashMap, VecDeque};
 use std::fs::OpenOptions;
@@ -169,7 +169,7 @@ impl Ctx {
     /// prepend into a non-empty lane marches left — so concurrent adds can't race the min.
     pub(crate) fn append_add(
         &self,
-        kind: &str,
+        kind: Lane,
         label: String,
         col: Option<i64>,
         detail: Option<String>,
@@ -183,7 +183,7 @@ impl Ctx {
             };
             Ok(events::Event::ElementAdded {
                 id: mint_id(kind, log),
-                kind: kind.to_string(),
+                kind,
                 label,
                 col,
                 detail,
@@ -258,6 +258,9 @@ pub fn serve(
 
     // Validate the log up front so a typo fails loudly, not per-request.
     let (_v, model) = ctx.current()?;
+    if let Some((base, _)) = &ctx.baseline {
+        crate::render::comparable(base, &model)?;
+    }
     let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| e.to_string())?;
     println!(
         "faceto board live → http://127.0.0.1:{}  (Ctrl-C to stop)",
@@ -415,15 +418,15 @@ mod tests {
         // back into a real element, and a second add under the same lane increments.
         let path = std::env::temp_dir().join(format!("faceto-h6-{}.jsonl", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        std::fs::write(&path, events::line(&added("E1", "event")) + "\n").unwrap();
+        std::fs::write(&path, events::line(&added("E1", Lane::Event)) + "\n").unwrap();
         let ctx = Ctx::new(path.clone());
 
         let ev = ctx
-            .append_add("event", "DayStarted".into(), Some(2), None, false)
+            .append_add(Lane::Event, "DayStarted".into(), Some(2), None, false)
             .unwrap();
         assert!(matches!(&ev, events::Event::ElementAdded { id, .. } if id == "E2"));
         let ev2 = ctx
-            .append_add("command", "start".into(), None, None, false)
+            .append_add(Lane::Command, "start".into(), None, None, false)
             .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
@@ -442,7 +445,7 @@ mod tests {
             std::env::temp_dir().join(format!("faceto-corrupt-{}.jsonl", std::process::id()));
         std::fs::write(&path, "{ this is not json\n").unwrap();
         let ctx = Ctx::new(path.clone());
-        let r = ctx.append_add("event", "X".into(), None, None, false);
+        let r = ctx.append_add(Lane::Event, "X".into(), None, None, false);
         let _ = std::fs::remove_file(&path);
         assert!(r.is_err());
     }

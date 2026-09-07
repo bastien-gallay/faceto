@@ -28,7 +28,7 @@ cannot re-derive a different one.
 ## `type` selects the lane and the colour
 
 From the fixed eight-type grammar — `actor`, `command`, `aggregate`, `event`, `policy`,
-`readmodel`, `external`, `hotspot`. The lane list in the renderer and this set are the same set;
+`readmodel`, `system`, `hotspot`. The lane list in the renderer and this set are the same set;
 adding a type means adding a lane, a colour and an id prefix together, never one of the three
 alone.
 

@@ -17,13 +17,19 @@ pub(crate) fn ev(line: &str) -> Event {
 /// the comment property tests fold their generated comment sequences onto.
 pub(crate) fn genesis() -> (Vec<Event>, Vec<&'static str>) {
     let ids = vec!["E1", "E2", "C1", "A1", "H1"];
-    let kinds = ["event", "event", "command", "aggregate", "hotspot"];
+    let kinds = [
+        Lane::Event,
+        Lane::Event,
+        Lane::Command,
+        Lane::Aggregate,
+        Lane::Hotspot,
+    ];
     let evs = ids
         .iter()
         .zip(kinds)
         .map(|(id, k)| Event::ElementAdded {
             id: (*id).to_string(),
-            kind: k.to_string(),
+            kind: k,
             label: format!("seed-{id}"),
             col: Some(0),
             detail: None,

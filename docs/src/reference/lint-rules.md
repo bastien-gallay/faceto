@@ -19,7 +19,7 @@ an element to itself, are not counted by any rule.
 > no producer: nothing emits this event (no incoming edge)
 
 Fires on an `event` with no incoming edge. Something must cause a domain event — a command, a
-policy, an external system. An event nobody emits is either a stub you have not wired up, or a
+policy, a system. An event nobody emits is either a stub you have not wired up, or a
 sign that the producer is missing from the board entirely.
 
 **Legitimately ignorable when** the board is deliberately partial and this event is an entry point

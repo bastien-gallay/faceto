@@ -13,7 +13,7 @@ mod svg;
 mod text;
 
 pub use context::render_context;
-pub use diff::{diff_boards, Overlay, Tone};
+pub use diff::{comparable, diff_boards, Overlay, Tone};
 pub use html::render_html;
 pub use mermaid::{render_mermaid, DEGRADATION_NOTICE};
 pub use style::lane_prefix;

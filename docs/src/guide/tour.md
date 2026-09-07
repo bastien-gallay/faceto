@@ -15,7 +15,7 @@ A live board is one command away, below.
 ## What you are looking at
 
 **Eight lanes, top to bottom.** Actors, commands, aggregates, events, policies, read models,
-external systems, hotspots. The colour is the type; the type is the lane. Nothing is themed —
+systems, hotspots. The colour is the type; the type is the lane. Nothing is themed —
 [the colour grammar](../board/lanes.md) is fixed so a board reads like the paper workshop it came
 from.
 

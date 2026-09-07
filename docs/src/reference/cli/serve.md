@@ -69,6 +69,10 @@ diff — building a variant while watching how it departs from the original.
 The baseline is never genesis'd and never mutated. The page is marked read-only, exactly as with
 [`render --base`](./render.md).
 
+A baseline of a **different format** from the live board is refused before the port opens — the
+same rule as `render --base`, checked up front so the session never starts on a diff it cannot
+mean. See [board formats](../board-formats.md#two-formats-never-diff).
+
 ## The diff ring
 
 The server keeps the last **12** rendered models in memory, keyed by content hash. `?base=<hash>`

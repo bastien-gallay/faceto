@@ -64,10 +64,10 @@
     { "id": "R5", "type": "readmodel", "label": "comments sidebar (annotations + lint findings)", "col": 7, "y": 0.55 },
     { "id": "R6", "type": "readmodel", "label": "element history (its own events)", "col": 7, "y": 0.82 },
 
-    { "id": "G1", "type": "external", "label": "event-log.jsonl (durable, git-tracked)", "col": 3, "y": 0.5 },
-    { "id": "G4", "type": "external", "label": "std TcpListener + threads (no framework)", "col": 6, "y": 0.5 },
-    { "id": "G3", "type": "external", "label": "browser client", "col": 7, "y": 0.1 },
-    { "id": "G2", "type": "external", "label": "model.json (derived / bootstrap, gitignored)", "col": 9, "y": 0.6 },
+    { "id": "G1", "type": "system", "label": "event-log.jsonl (durable, git-tracked)", "col": 3, "y": 0.5 },
+    { "id": "G4", "type": "system", "label": "std TcpListener + threads (no framework)", "col": 6, "y": 0.5 },
+    { "id": "G3", "type": "system", "label": "browser client", "col": 7, "y": 0.1 },
+    { "id": "G2", "type": "system", "label": "model.json (derived / bootstrap, gitignored)", "col": 9, "y": 0.6 },
 
     { "id": "H6", "type": "hotspot", "label": "Who mints ids for added elements & regions?", "col": 1, "y": 0.88, "resolved": true, "detail": "Ids are minted server-side, never by the client: <PREFIX><N>, one past the highest suffix ever added under that lane's prefix in the log (removed-but-not-compacted ids stay reserved), computed under the appends lock so concurrent adds can't collide. Regions share the rule via resolve_region_id (K<n>).", "resolution": "Server-side, monotonic per prefix. mint_id in serve.rs and resolve_region_id in the replay both take 'one past the highest ever seen'; a freed suffix is never reused." },
     { "id": "H3", "type": "hotspot", "label": "Event schema versioning / migration over time", "col": 2, "y": 0.5, "resolved": true, "detail": "Schema grows by additive change (new optional fields ignored, new event kinds skipped on read = forward compat); a renamed event *kind* is migrated forward at events::upcast, the single read-path seam (backward compat), shape-detected so no version counter and no log-format change. Fields evolve additively only. Seeded with CommentAdded/Comment → ElementAnnotated.", "resolution": "Additive-first + an upcast seam. Unknown kinds/fields tolerated on read; a renamed kind is repaired in one place before parse_event; semantics never change in place." },

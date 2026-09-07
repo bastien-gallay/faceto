@@ -34,7 +34,7 @@ pin down is the part that actually matters for a valid file:
 - **required fields** per shape (an element needs `id` / `type` / `label`; a phase needs
   `label` / `fromCol` / `toCol`; …),
 - the **8-lane `type` enum** (`actor` · `command` · `aggregate` · `event` · `policy` ·
-  `readmodel` · `external` · `hotspot`),
+  `readmodel` · `system` · `hotspot`; `external` is read as a legacy spelling of `system`),
 - ranges and tuple shapes (`y` ∈ `[0, 1]`; an edge tuple is 2–3 strings).
 
 `event-log-line.schema.json` enumerates the **current** event kinds. A future additive kind is

@@ -9,7 +9,7 @@ colors:
   lane-event: "#FF9F1C"
   lane-policy: "#C39BD3"
   lane-readmodel: "#6FCF97"
-  lane-external: "#F2A0C9"
+  lane-system: "#F2A0C9"
   lane-hotspot: "#C0392B"
   # Chrome — instrument greys, the table the specimen sits on.
   bench-bg: "#fbfbfd"
@@ -188,7 +188,7 @@ The eight lane colours are not a palette choice; they are the typed vocabulary o
 - **Event Orange** (`#FF9F1C`): domain events — the spine of the board. Dark text.
 - **Policy Lilac** (`#C39BD3`): policies / reactions. Dark text.
 - **Read-Model Green** (`#6FCF97`): read models / views. Dark text.
-- **External Pink** (`#F2A0C9`): external systems. Dark text.
+- **System Pink** (`#F2A0C9`): software systems this board does not decompose. Dark text.
 - **Hotspot Deep-Red** (`#C0392B`): open questions / pain. White text, and the *only* squared
   sticky (2px corners) — a non-colour tell that this one is loud on purpose.
 

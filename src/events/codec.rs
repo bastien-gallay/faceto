@@ -74,16 +74,89 @@ pub(crate) fn is_known_kind(kind: &str) -> bool {
     KNOWN_KINDS.contains(&kind)
 }
 
-/// One JSON object → an `Event`, or `None` for an unknown/ill-shaped event kind. The object is
-/// first run through [`upcast`], so a legacy on-disk shape is migrated to the current schema (H3)
-/// before any field is read.
-pub fn parse_event(raw: &Json) -> Option<Event> {
+/// Why a raw record did not become an `Event`. The caller needs the reason: three of these four
+/// are the ordinary way a schema evolves, and one is a corrupt log.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Rejected {
+    /// Not an object, or an absent/non-string `event`. Skipped like an unknown kind but told
+    /// apart from one: a typo'd key is a broken line, not evidence of another board format.
+    Unnamed,
+    /// A kind this build does not know: a future faceto's, or another tool's. Skipped.
+    UnknownKind,
+    /// A record whose lane is *required* and outside the grammar — an `ElementAdded` with no
+    /// lane to put the sticky in. Skipped: values evolve additively too, so a log naming a lane a
+    /// later faceto adds still reads, minus the stickies it cannot place. Where the lane is
+    /// optional the record is not rejected; see [`names_an_unknown_lane`].
+    UnknownLane,
+    /// A known kind missing a required field or mis-typing one. The fact is in the append-only
+    /// truth but would vanish from the projection, so the caller stops rather than shrink.
+    Malformed,
+}
+
+/// One JSON object → an `Event`, or the reason it was rejected. The object is first run through
+/// [`upcast`], so a legacy on-disk shape is migrated to the current schema (H3) before any field
+/// is read.
+pub(crate) fn parse_event(raw: &Json) -> Result<Event, Rejected> {
     let event = upcast(raw);
     let event = event.as_ref();
+    match event.get("event").and_then(Json::as_str) {
+        None => return Err(Rejected::Unnamed),
+        Some(kind) if !is_known_kind(kind) => return Err(Rejected::UnknownKind),
+        Some(_) => {}
+    }
+    // Checked before building so an unknown lane is told apart from a *missing* one: both make
+    // `build_event` return `None`, but only the second is a malformed line. Only fatal where the
+    // lane is load-bearing — an `ElementAdded` has nowhere to put the sticky, while an
+    // `ElementMoved`'s `type` is optional and its col/y half is well-formed either way.
+    if names_an_unknown_lane(event)
+        && event.get("event").and_then(Json::as_str) == Some("ElementAdded")
+    {
+        return Err(Rejected::UnknownLane);
+    }
+    build_event(event).ok_or(Rejected::Malformed)
+}
+
+/// The two kinds whose `type` field is a lane. On every other kind `type` is a field this build
+/// does not know, which the log grammar promises to ignore rather than read as an off-grammar lane.
+fn carries_a_lane(kind: &str) -> bool {
+    matches!(kind, "ElementAdded" | "ElementMoved")
+}
+
+/// Whether the record names a lane outside this build's grammar. An absent or non-string `type`,
+/// or one on a kind that has no lane, is not this case.
+///
+/// Two callers, for the two things this means. [`parse_event`] rejects the record where the lane
+/// is required. `parse_log_full` counts it either way: a record read *minus* its lane was still
+/// not read in full, and `compact` folds from the projection, so it must refuse that log too.
+pub(crate) fn names_an_unknown_lane(raw: &Json) -> bool {
+    let event = upcast(raw);
+    let event = event.as_ref();
+    event
+        .get("event")
+        .and_then(Json::as_str)
+        .is_some_and(carries_a_lane)
+        && event
+            .get("type")
+            .and_then(Json::as_str)
+            .is_some_and(|t| crate::model::lane_from_str(t).is_none())
+}
+
+/// Build the event for an already-vetted current-schema record, or `None` if a required field is
+/// missing or mis-typed.
+fn build_event(event: &Json) -> Option<Event> {
     // Typed field accessors over the (upcast) event object: absent or mis-typed → `None`.
     let str_field = |key: &str| event.get(key).and_then(Json::as_str).map(String::from);
     let int_field = |key: &str| event.get(key).and_then(Json::as_f64).map(|n| n as i64);
     let num_field = |key: &str| event.get(key).and_then(Json::as_f64);
+    // A `None` here is an absent, non-string *or* off-grammar lane. The last is possible only
+    // where the lane is optional — `parse_event` has already rejected the records that need it —
+    // and there it means the same thing: no lane change to apply.
+    let lane_field = |key: &str| {
+        event
+            .get(key)
+            .and_then(Json::as_str)
+            .and_then(crate::model::lane_from_str)
+    };
     Some(match event.get("event")?.as_str()? {
         "BoardTitled" => Event::BoardTitled {
             title: str_field("title")?,
@@ -125,7 +198,7 @@ pub fn parse_event(raw: &Json) -> Option<Event> {
         },
         "ElementAdded" => Event::ElementAdded {
             id: str_field("id")?,
-            kind: str_field("type")?,
+            kind: lane_field("type")?,
             label: str_field("label")?,
             col: int_field("col"),
             detail: str_field("detail"),
@@ -139,7 +212,7 @@ pub fn parse_event(raw: &Json) -> Option<Event> {
         "ElementMoved" => Event::ElementMoved {
             id: str_field("id")?,
             col: int_field("col"),
-            kind: str_field("type"),
+            kind: lane_field("type"),
             y: num_field("y"),
         },
         "ElementAnnotated" => Event::ElementAnnotated {
@@ -245,7 +318,7 @@ pub fn to_json(ev: &Event) -> Json {
             let mut p = vec![
                 ("event", s("ElementAdded")),
                 ("id", s(id)),
-                ("type", s(kind)),
+                ("type", s(crate::model::lane_to_str(*kind))),
                 ("label", s(label)),
             ];
             if let Some(c) = col {
@@ -273,7 +346,7 @@ pub fn to_json(ev: &Event) -> Json {
                 p.push(("col", n(*c)));
             }
             if let Some(k) = kind {
-                p.push(("type", s(k)));
+                p.push(("type", s(crate::model::lane_to_str(*k))));
             }
             if let Some(y) = y {
                 p.push(("y", Json::Num(*y)));
@@ -331,16 +404,15 @@ mod tests {
     use crate::events::*;
     use crate::json::{self, Json};
 
-    #[test]
-    fn is_known_kind_recognizes_every_current_event_variant() {
-        // Guards the hand-maintained `KNOWN_KINDS` list against drift with `parse_event`'s match:
-        // every kind `to_json` can emit must be recognized as *known*, so a malformed instance of
-        // it is a hard error (not silently skipped as a future/unknown kind — the exact data-loss
-        // bug the strict `parse_log` branch exists to prevent). One sample per variant; add one
-        // when you add a variant. (Full compile-time enforcement needs a variant-enumeration crate,
-        // which the zero-dep rule forbids — this guard plus the `KNOWN_KINDS` doc are the coupling.)
-        let samples = vec![
+    /// One instance of every `Event` variant. Add one when you add a variant: the two tests below
+    /// are the only coupling between `Event`, `to_json` and `KNOWN_KINDS` (compile-time
+    /// enumeration would need a crate, which pillar 0 forbids).
+    fn one_of_every_variant() -> Vec<Event> {
+        vec![
             Event::BoardTitled { title: "t".into() },
+            Event::BoardFormat {
+                format: "event-storming".into(),
+            },
             Event::BoardLeveled {
                 level: "design".into(),
             },
@@ -373,7 +445,7 @@ mod tests {
             },
             Event::ElementAdded {
                 id: "E1".into(),
-                kind: "event".into(),
+                kind: Lane::Event,
                 label: "a".into(),
                 col: None,
                 detail: None,
@@ -409,28 +481,40 @@ mod tests {
                 dst: "E2".into(),
             },
             Event::LogCompacted { folded: 3 },
-        ];
-        for ev in &samples {
-            let kind = to_json(ev)
-                .get("event")
-                .and_then(Json::as_str)
-                .expect("to_json emits an `event` kind")
-                .to_string();
-            assert!(
-                is_known_kind(&kind),
-                "`to_json` emits {kind:?} but `is_known_kind` rejects it — a malformed {kind} \
-                 would be silently skipped instead of erroring; add it to `KNOWN_KINDS`."
-            );
-            // And the round-trip must rebuild it (no phantom / mis-typed sample).
-            assert!(
-                parse_event(&to_json(ev)).is_some(),
-                "{kind} does not round-trip"
+        ]
+    }
+
+    fn emitted_kind(ev: &Event) -> String {
+        to_json(ev)
+            .get("event")
+            .and_then(Json::as_str)
+            .expect("to_json emits an `event` kind")
+            .to_string()
+    }
+
+    #[test]
+    fn every_kind_to_json_emits_is_known() {
+        // A kind outside `KNOWN_KINDS` is skipped rather than erroring, so a malformed instance of
+        // it would be lost silently — the data-loss `parse_log`'s strict branch exists to prevent.
+        for ev in &one_of_every_variant() {
+            let kind = emitted_kind(ev);
+            assert!(is_known_kind(&kind), "add {kind:?} to `KNOWN_KINDS`");
+        }
+        for legacy in ["CommentAdded", "Comment"] {
+            assert!(is_known_kind(legacy));
+        }
+    }
+
+    #[test]
+    fn every_variant_is_a_serialize_parse_fixed_point() {
+        for ev in &one_of_every_variant() {
+            assert_eq!(
+                parse_event(&to_json(ev)).as_ref(),
+                Ok(ev),
+                "{} does not round-trip",
+                emitted_kind(ev)
             );
         }
-        // The legacy aliases `upcast` rewrites forward are known too (they are not `Event`
-        // variants, so they can't appear in `samples`).
-        assert!(is_known_kind("CommentAdded"));
-        assert!(is_known_kind("Comment"));
     }
 
     #[test]
@@ -518,15 +602,5 @@ mod tests {
             if id == "E1" && *y == 0.35)
         );
         assert_eq!(line(&e), r#"{"event":"ElementMoved","id":"E1","y":0.35}"#);
-    }
-
-    #[test]
-    fn board_leveled_is_a_serialize_parse_fixed_point() {
-        let e = ev(r#"{"event":"BoardLeveled","level":"design"}"#);
-        assert!(matches!(&e, Event::BoardLeveled { level } if level == "design"));
-        assert_eq!(
-            json::to_string(&to_json(&ev(&line(&e)))),
-            json::to_string(&to_json(&e))
-        );
     }
 }
