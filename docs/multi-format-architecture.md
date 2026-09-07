@@ -5,21 +5,29 @@ tool (event storming) into a **kernel + pluggable diagram/workshop formats** (e.
 Mapping, BPMN — the roadmap's parked `F-new-diagrams`). It is the shared reasoning so the seams are
 chosen deliberately, not discovered late.
 
-**One section is now code.** The data-Scene decision shipped 2026-07-26 as `src/scene.rs`
-(`F-scene-ir` #116, PR #136). Everything else here is still exploration. Where a section describes
+**Four sections are now code.** The data-Scene decision shipped 2026-07-26 as `src/scene.rs`
+(`F-scene-ir` #116, PR #136); the board/overlay split a day later (#119, PR #138); the format tag
+and the `Lane` enum on 2026-09-05 and 09-07 (#121 in PR #148, #117 in PR #149); the typed command
+boundary on 2026-09-07 (#120, PR #152). The rest is still exploration. Where a section describes
 the Scene IR in the future tense, read it as the design it was built from — and see the *as built*
 notes, which record the three places reality diverged.
 
 **Ethos guardrails (unchanged):** zero external dependencies, pure std, hand-written JSON, calm
 instrument. These *constrain* the design (no serde, no autolayout crate) rather than relax it.
 
-## Where this stands — 2026-07-27
+## Where this stands — updated 2026-09-07
 
 **Settled.** Two decisions are built. The data-Scene decision: `src/scene.rs` holds the geometric
 primitives and the one `render_scene` serializer, and `render::board_scene` turns a board into a
 `Scene` (`F-scene-ir` #116, PR #136). And the board/overlay split, one day later: `render::diff.rs`
 holds `diff_boards -> (Model, Overlay)` and the closed verdict enums, so a `Model` is now always a
-board (`F-board-vs-diff` #119, PR #138). Nothing else in this note is code.
+board (`F-board-vs-diff` #119, PR #138).
+
+Since 2026-09-07, three more are: the **format tag** (#121, PR #148) — a board this build cannot
+project is refused at four boundaries instead of drawing an empty one; **`enum Lane`** (#117,
+PR #149) — `type` is a closed set and the `_ =>` fallbacks are gone; and the **typed command
+boundary** (#120, PR #152) — `POST /comment` parses into a `Command` once, and an unrecognised
+`kind` is a `400` rather than a note nobody wrote. Nothing else in this note is code.
 
 **One line of the type-discipline section is now stale by success** — the third bullet ("Separate
 `Board` from a diff/overlay type") describes work that is done. It is left standing because the
@@ -27,8 +35,10 @@ board (`F-board-vs-diff` #119, PR #138). Nothing else in this note is code.
 
 **Open, ranked.** Each item is tracked or explicitly is not:
 
-1. **#121 `F-format-tag`** — the correctness precondition the canvas spike found: a foreign-format
-   log currently replays as an empty board, silently.
+1. ~~**#121 `F-format-tag`** — the correctness precondition the canvas spike found: a
+   foreign-format log currently replays as an empty board, silently.~~ **Done 2026-09-07 (#121,
+   PR #148):** refused at four boundaries, not one. `#122 F-formats-move` inherits the top of this
+   list — the sealed `Format` exists, its dispatch `match` does not.
 2. **#115 `F-spike-wardley`** — still worth running, but its job changed: it can no longer
    constrain `Shape`'s introduction, only a revision of it.
 3. **Compose the overlay out of two Scenes** — what #119's row promised and did not deliver. The
@@ -64,8 +74,8 @@ Read docs/multi-format-architecture.md (this section), then the F-scene-ir and F
 rows in ROADMAP.md for what shipped versus what the rows promised. The Scene IR is
 src/scene.rs; the ES scene builder is render::board_scene; the diff overlay is
 src/render/diff.rs (diff_boards -> (Model, Overlay), passed to render_svg beside the board).
-Next action: issue #121 (F-format-tag) — a foreign-format log still replays as an empty board,
-silently.
+Next action: issue #122 (F-formats-move) — #121 shipped the sealed `Format`, and the dispatch
+`match` it exists for is still unwritten.
 ```
 
 ## Read this first — triage of 2026-07-26
@@ -288,10 +298,15 @@ coordinates, not an autolayout engine) and the singular-board assumption.
 is type discipline at the *edges*. Apply, as the modelling posture of the redesign — not a
 separate refactor:
 
-- **`enum Lane`** replaces `kind: String`. The off-grammar-element panic class (currently
+- ~~**`enum Lane`** replaces `kind: String`. The off-grammar-element panic class (currently
   patched by *filtering* unknown kinds, with `_ =>` fallbacks in `colour`/`lane_index`) becomes
-  **unrepresentable**; the fallbacks vanish; `colour`/`lane_prefix`/`LANES` become total.
-  Highest-leverage, lowest-cost win.
+  **unrepresentable**; the fallbacks vanish; `colour`/`lane_prefix`/`LANES` become total.~~
+  **Done 2026-09-07 (#117, PR #149):** the fallbacks are gone and an off-grammar value is dropped
+  at every read boundary. `lane_index` did not simply become total — it became an exhaustive
+  `match`, because the `LANES` lookup it used instead answered `None` for a lane missing from the
+  array and an `expect` turned that into the same panic one layer down. A const block cross-checks
+  the array against the ranks. What is still open: a variant given a rank and left out of `LANES`
+  compiles, and draws no band.
 - **`UnitFraction(f64)`** (smart constructor, `[0,1]`) replaces `y: Option<f64>` clamped in
   *two* places (`clamp_y` on write, `y_key` on read) precisely because the type admits illegal
   values. One boundary clamp, none downstream — parse, don't validate.
@@ -304,7 +319,7 @@ separate refactor:
   fact — which is why the bullet stays.
 - ~~**Parse, don't validate, at the command boundary.** `serve`'s `v.get_str("kind")` matched
   against string literals (the double-dispatch + silent-drop review findings) → parse the
-  request into a typed `Command` enum once, then match exhaustively.~~ **Done 2026-09-05 (#120):**
+  request into a typed `Command` enum once, then match exhaustively.~~ **Done 2026-09-07 (#120, PR #152):**
   `events::parse_command` reads one body into a `Command` — `Mint` for the three the server
   assigns an id to, `Fold` for the rest — and every guard runs there, so `fold_to_events` is
   total. The silent drop is closed: the `kind` set is closed and an unrecognised one is a `400`.
@@ -337,6 +352,11 @@ rule lives at the parse boundary), not as a standalone string swap. **Keep the p
 `G`** (ids `G1…` stay valid) even though `S` is free — changing it would force an id migration
 for no functional gain.
 
+**Executed 2026-09-07 (#117, PR #149)** exactly as written: `lane_from_str` reads `external` as
+`Lane::System` and `lane_to_str` never writes it back, the prefix stayed `G`, and no id moved —
+so no comment and no diff verdict moved either. The migration cost nothing at rest: no log on
+disk was rewritten.
+
 ## Staged path — isolate first, abstract on the second example
 
 The way to get ready for C4 is **not** to build the abstraction now (that bakes ES assumptions
@@ -347,9 +367,12 @@ thin seam."
    as `src/scene.rs` rather than `kernel/scene.rs` (the `kernel/` tree is step 2's to create), with
    `render::board_scene` producing the `Scene`. **The riders did not come with it**: the `Lane` enum
    (#117) and `UnitFraction` (#118) are both still open, so step 1 shipped as its head only.
+   *(Updated 2026-09-07: #117 shipped in PR #149. `UnitFraction` #118 is the one rider still open —
+   `y` is still clamped in two places, `clamp_y` on write and `y_key` on read.)*
 2. **Next:** move ES into `formats/event_storming/`; leave `json` / `log` / `scene` /
    serve-transport as `kernel/`; introduce `enum Board` with **one** variant + the format tag.
-   No C4 yet — just the boundary.
+   No C4 yet — just the boundary. *(Updated 2026-09-07: the format tag half shipped in PR #148, so
+   what remains of this step is the move and the `enum Board` — tracked as #122.)*
 
    > **Superseded 2026-07-26 by the canvas spike (#114) — steps 1 and 2 re-order.** The **format
    > tag (#121)** leaves step 2 and becomes the first thing built: it is a correctness
