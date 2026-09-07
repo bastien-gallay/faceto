@@ -521,5 +521,11 @@ When reviewing a change, ask:
    maintainer understand *why*, not just *what*?
 7. Does any comment paraphrase the line below it, or restate a rule already
    stated somewhere the reader passes first (§4)?
+8. If the change removes a defect *pattern*, was the pattern grepped for
+   before the fix was called done? Naming a defect is what makes its other
+   copies findable, and the moment you have named it is the moment you stop
+   looking. `lane_index`'s `LANES` lookup plus `.expect` was replaced by an
+   exhaustive match; the identical lookup-plus-`expect` sat in `lane_heading`
+   one file over, and a reviewer found it after the fix had shipped.
 
 Kindness over pedantry. The goal is a better codebase, not a perfect one.

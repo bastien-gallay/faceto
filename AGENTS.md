@@ -287,7 +287,19 @@ titled *"correct three claims the code does not support"* introduced a fourth of
 rewrote a stale "what's next" paragraph and listed two features as upcoming that had shipped weeks
 earlier — two commits after correcting exactly that defect elsewhere in the same PR. Rewriting a
 stale claim puts you in the mindset of the claim; the fix is to verify the new sentence from
-scratch, the way you verified that the old one was wrong. Document what is shipped; when a feature is mid-reformulation, say so
+scratch, the way you verified that the old one was wrong. **And keep going past the first
+occurrence** — a fix that stops there is the defect this repo produces most: three in one day on
+2026-09-07, by two different sessions. `LANE_PREFIXES` was corrected in a doc comment whose next
+sentence carried the same stale symbol; `lane_index` shed a `LANES` lookup plus `.expect` while the
+identical pattern sat in `lane_heading` one file over; and a sentence naming both `external` and
+`serve::id_prefix` was half-corrected, the other half left standing in the same line. Naming a
+defect is what makes its copies findable, and it is also the moment you stop looking — so grep for
+the pattern you just named before calling the fix done. **And in a half-stale sentence, read the
+clause you are *not* correcting.** *"Complete and green on `feat/F-lane-enum`, in review as
+PR #148"* had two false clauses and one true one; the true one was the PR number, and it was
+rewritten to #149 as collateral of fixing "in review" — putting a wrong number into `ROADMAP.md` under a
+commit titled *"three rows send the reader to a merged PR"*. They already did, correctly. This is
+the mirror of the rule above: there you verify the replacement, here you verify what you replace. Document what is shipped; when a feature is mid-reformulation, say so
 on the page and link the issue rather than describing an interface about to move. Internal
 artefacts (`docs/notes/`, `docs/F-*-plan.md`, `.personal/**`) stay out of `docs/src`: the book
 publishes decisions, not deliberations.
