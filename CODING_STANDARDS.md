@@ -9,8 +9,8 @@ apply them — on top of one hard constraint that frames all of them:
 1. **Tidy First** — separate behaviour changes from clean-ups.
 2. **CUPID & YAGNI** — properties to aim for in design and refactoring.
 3. **TDD (Red → Green → Refactor → Reflect)** — the loop that keeps the above
-   honest, run inside a fixed order of work (tidy → red → green → review →
-   reflect outward).
+   honest, run inside a fixed order of work (tidy → red → green → review and
+   refactor → reflect outward).
 4. **Clean Code** — local taste rules that survive automation.
 
 Repo-specific rules take precedence when they collide. The authoritative
@@ -247,6 +247,24 @@ design.
        (next test)
 ```
 
+Reflect rules:
+
+- **Reflect is short.** A minute, sometimes thirty seconds. If it becomes a
+  meeting, do it asynchronously between cycles.
+- **Reflect updates the plan, not the code.** If reflection reveals code that
+  should change, that's the *next* RED test, not an edit smuggled into the
+  current cycle.
+- **Reflect after Green-but-no-Refactor cycles too.** "There was nothing to
+  clean" is itself a signal.
+- **Always surface findings to the user with a recommendation.** Every
+  reflection that produces a finding gets a one-line decision prompt: *"apply
+  now / add to today / add to the changelog or docs / forget it"*. Recommend the
+  best move per the principles and say *why* in one short clause. Default leans
+  toward *apply now* when the finding is small and directly tied to the cycle
+  that surfaced it (Tidy First: keep the diff coherent); lean toward
+  *docs/later* when it is larger than the cycle it interrupted (CUPID-Composable:
+  don't bundle unrelated work).
+
 ### The order of a piece of work
 
 The loop above is what happens inside one step. This is the order of the steps.
@@ -288,25 +306,7 @@ Feed it three inputs, not one: what you built, **the problems you hit building
 it**, and what you found on the way. The awkward test, the seam that resisted,
 the third place you had to change — those are evidence about the design, not
 noise you got past. Surface each finding to the user with a recommendation, per
-the rules below.
-
-Reflect rules:
-
-- **Reflect is short.** A minute, sometimes thirty seconds. If it becomes a
-  meeting, do it asynchronously between cycles.
-- **Reflect updates the plan, not the code.** If reflection reveals code that
-  should change, that's the *next* RED test, not an edit smuggled into the
-  current cycle.
-- **Reflect after Green-but-no-Refactor cycles too.** "There was nothing to
-  clean" is itself a signal.
-- **Always surface findings to the user with a recommendation.** Every
-  reflection that produces a finding gets a one-line decision prompt: *"apply
-  now / add to today / add to the changelog or docs / forget it"*. Recommend the
-  best move per the principles and say *why* in one short clause. Default leans
-  toward *apply now* when the finding is small and directly tied to the cycle
-  that surfaced it (Tidy First: keep the diff coherent); lean toward
-  *docs/later* when it is larger than the cycle it interrupted (CUPID-Composable:
-  don't bundle unrelated work).
+the reflect rules above.
 
 ### Testing in faceto
 
@@ -363,8 +363,9 @@ a doc comment is not a licence for prose.
 
 - **Never paraphrase the code.** A comment restating the line below it is noise
   that then rots on its own schedule. Delete it, don't update it. This is the
-  most common defect in this repo: F-format-tag shipped five comment lines
-  explaining an `if m.format != Format::default()`.
+  most common defect in this repo: F-format-tag shipped a four-line comment
+  explaining an `if m.format != Format::default()`, and a five-line one on the
+  `m.level != Level::default()` guard beside it — both saying what the line said.
 - **Reach for a refactor before reaching for a comment.** If a block needs
   explaining, the first move is to *name* it — extract the function, name the
   intermediate, let the type carry the rule. A `header()` helper beats the
