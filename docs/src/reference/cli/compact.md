@@ -37,8 +37,9 @@ survive the fold. A sticky whose `type` names a lane this build does not know is
 [skipped on read](../event-log.md) — harmless when rendering, fatal here: folding would delete it
 from the append-only truth, silently and with exit 0.
 
-So `compact` checks first. If any record was skipped it writes the count to stderr, **exits 1, and
-leaves the log untouched** — no `.bak`, no rewrite:
+So `compact` checks first. If any record was skipped it names what it could not project on
+stderr — one line per kind of problem, and only for the kinds actually present — then **exits 1
+and leaves the log untouched**: no `.bak`, no rewrite:
 
 ```console
 $ faceto compact board.event-log.jsonl

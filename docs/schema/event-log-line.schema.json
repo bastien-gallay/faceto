@@ -213,7 +213,7 @@
   "$defs": {
     "elementType": {
       "type": "string",
-      "description": "The 8-lane event-storming grammar (lane + colour). An off-grammar value does not crash but has no lane.",
+      "description": "Selects the lane AND the colour from the fixed 8-lane event-storming grammar. An off-grammar value is skipped when the log is read, so the sticky simply does not appear — and `compact` refuses to fold a log holding one, since folding from the projection would delete it from append-only truth. `external` is the pre-ADR-1 spelling of `system`: still read, never written.",
       "enum": [
         "actor",
         "command",
