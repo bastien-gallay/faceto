@@ -237,7 +237,7 @@ mod tests {
     }
 
     // These rules are event/policy-only: an unconnected actor, command, aggregate, read-model,
-    // external, or hotspot is not a grammar defect (a lone actor or a bare hotspot is normal).
+    // system, or hotspot is not a grammar defect (a lone actor or a bare hotspot is normal).
     #[test]
     fn other_lanes_are_never_flagged_by_these_rules() {
         let m = model_of(

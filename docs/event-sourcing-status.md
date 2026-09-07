@@ -82,8 +82,9 @@ migrated forward at the `upcast` seam (backward compatibility). See **H3** below
 A `POST /comment {kind:"add", type:<lane>, text:<label>, col?, detail?}` appends an
 `ElementAdded`. The server mints the id — **not** a client uuid — to preserve the board's
 human-readable, type-prefixed grammar (`actor`→`X`, `command`→`C`, `aggregate`→`A`,
-`event`→`E`, `policy`→`P`, `readmodel`→`R`, `external`→`G`, `hotspot`→`H`; the prefixes live in
-`render::lane_prefix` next to `LANES`, and `serve::id_prefix`/`mint_id` read them). The new id is
+`event`→`E`, `policy`→`P`, `readmodel`→`R`, `system`→`G` (`external` is its pre-ADR-1
+spelling, and the prefix did not move), `hotspot`→`H`; the prefixes live in
+`render::lane_prefix` next to `LANES`, and `serve::ids::mint_id` reads them). The new id is
 `<PREFIX><N>` where `N` is **one past the highest suffix ever added under that prefix in the log**
 — scanning every `ElementAdded`, including ids since removed but not yet compacted (so a removed
 id is never re-minted while leftover events still reference it). Ids are never renumbered, and
