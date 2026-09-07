@@ -60,16 +60,18 @@ Response: `{"ok":true}` or `{"ok":false}` with 400/500.
 | `add` | `type` (one of the 8 lanes), `text` (label, non-blank) | `col`, `prepend:true`, `detail` | `ElementAdded`, **server-minted id** |
 | `move` | `elemId`, `col` | `swapId` + `swapCol` | `ElementMoved` (two lines on swap) |
 | `rename` | `elemId`, `text` (non-blank) | — | `ElementRenamed` |
-| `resolve` | `elemId`, `text` (resolution) | — | `HotspotResolved` |
+| `resolve` | `elemId` | `text` (resolution) | `HotspotResolved` |
 | `drop` | `elemId` | — | `ElementRemoved` |
-| *(other)* | `elemId`, `text` | — | `ElementAnnotated` |
+| `comment` \| `question` \| `split` | `elemId` | `text` | `ElementAnnotated` |
 | `region-add` | `text` (non-blank), `fromCol`, `toCol` | — | `PhaseAdded`, server-minted id |
 | `region-resize` | `regionId`, `fromCol`, `toCol` (valid span) | — | `PhaseResized` |
 | `region-rename` | `regionId`, `text` (non-blank) | — | `PhaseRenamed` |
 | `region-remove` | `regionId` | — | `PhaseRemoved` |
 
-Source of truth: `events::comment_to_events`, `serve.rs::add_from_comment` /
-`add_region_from_comment`. If this table and the code diverge, the code wins.
+Source of truth: `events::parse_command` + `events::fold_to_events` (`src/events/command.rs`)
+and `serve::mint::append_mint` (`src/serve/mint.rs`). If this table and the code diverge, the code
+wins. The `kind` set is **closed** since #120: a word this table does not list is a `400`, not an
+annotation — the catch-all row this table used to carry is gone.
 
 ## Hard rules (the skill's guardrails)
 

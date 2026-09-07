@@ -2,6 +2,12 @@
 
 # F-container — build plan
 
+> **Superseded where it names the write seam (2026-09-07).** `comment_to_events` no longer exists:
+> #120 (PR #152) split that seam into `events::parse_command` + `events::fold_to_events`
+> (`src/events/command.rs`). The name is left standing below because this document records what was
+> built at the time, not what to build next — read it as the old spelling of the seam, not as a
+> symbol to call.
+
 Status: **all seven stages done — F-container ships on branch `feat/F-container-client-gestures`
 (PR #11), flipping the feature to ✅ in `ROADMAP.md`** · Companion:
 [`F-container-scope.md`](./F-container-scope.md)

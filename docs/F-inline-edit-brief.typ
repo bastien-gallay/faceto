@@ -2,6 +2,11 @@
 // Compile: typst compile docs/F-inline-edit-brief.typ
 // Purpose: hold the intent so the next reader (or the next session) starts with
 // the root cause and the test contract already in hand — not re-derived.
+// Superseded where it names the write seam (2026-09-07): comment_to_events and
+// add_from_comment no longer exist. #120 (PR #152) split that seam into
+// events::parse_command + events::fold_to_events (src/events/command.rs) and
+// serve::mint::append_mint (src/serve/mint.rs). The names below are the old
+// spelling, kept because this brief records the intent of its own moment.
 
 #set page(width: 21cm, height: auto, margin: 2cm)
 #set text(font: ("Iowan Old Style", "Palatino", "Georgia"), size: 10.5pt)
@@ -17,6 +22,14 @@
 
 #chip[branch `feat/F-inline-edit`] #chip[issue: ROADMAP.md] #chip[status: tests red]
 #chip[2026-06-20]
+
+#block(fill: rgb("#fff8e1"), inset: 8pt, radius: 3pt, width: 100%)[
+  *Superseded where it names the write seam (2026-09-07).* `comment_to_events` and
+  `add_from_comment` no longer exist: #120 (PR #152) split that seam into
+  `events::parse_command` + `events::fold_to_events` (`src/events/command.rs`) and
+  `serve::mint::append_mint` (`src/serve/mint.rs`). The names below are the old spelling,
+  kept because this brief records the intent of its own moment.
+]
 
 == 1 · Assignment
 

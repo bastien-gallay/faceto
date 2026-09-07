@@ -9,7 +9,7 @@
 //
 // Directed and faithful to the file: the edge is drag-source→drop-target (keyboard: armed-source→
 // target), the same ordered pair model.json authors — no auto-orientation. Persisted as a
-// kind:"connect"/"disconnect" comment folding to EdgeAdded/EdgeRemoved (events/comments.rs). No id
+// kind:"connect"/"disconnect" command folding to EdgeAdded/EdgeRemoved (events/command.rs). No id
 // is minted, so it rides the plain append path; the board re-renders on the round-trip like any
 // other own edit.
 const connectDot = $("#connect-dot");

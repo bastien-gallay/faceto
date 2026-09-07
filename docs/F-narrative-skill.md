@@ -26,8 +26,9 @@ The write seam an MCP server would expose already exists twice:
   multi-line appends. Regions and phase-splits are covered too.
 
 So the skill reads the file directly and writes over HTTP. See the skill's own **write
-contract** table for the wire format; the source of truth is `events::comment_to_events`,
-`serve::add_from_comment` / `add_region_from_comment` / `split_region_from_comment`.
+contract** table for the wire format; the source of truth is `events::parse_command` +
+`events::fold_to_events` (`src/events/command.rs`) and `serve::mint::append_mint`
+(`src/serve/mint.rs`).
 
 ## How to use
 
@@ -47,7 +48,7 @@ bypass minting and the guards).
 This is the skill exercised end-to-end against `examples/sample.model.json` — the daily-ops
 board (Operator → *start the day* → DayPlan / DayStarted → *add an item* → ItemAdded → the
 "project forward" policy → UnfinishedWorkProjectedForward → Today view). **Re-run it after any
-event-schema change** and confirm the wire lines below still match `comment_to_events`.
+event-schema change** and confirm the wire lines below still match `fold_to_events`.
 
 ### Setup
 
@@ -127,5 +128,5 @@ untouched:
   narrate → approve one add, one hotspot, one resolve) with the appended lines checked on the
   wire and the board diff observed.
 - **This worked example is the regression baseline.** Re-run it after any event-schema change;
-  if the appended lines drift from what `comment_to_events` now produces, update the skill's
+  if the appended lines drift from what `fold_to_events` now produces, update the skill's
   write-contract table (the code wins) and this document together.
